@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Equipe Comercial — Controle de Vendas</title>
+  <meta name="theme-color" content="#111827">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="apple-touch-icon" href="/icons/icon.svg">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="logo">E</div>
+      <div>
+        <div class="brand-name">Equipe Comercial</div>
+        <div class="brand-sub">Controle de desempenho</div>
+      </div>
+      <div class="spacer"></div>
+      <span id="userBadge" class="muted" style="font-size:13px"></span>
+      <button id="logoutBtn" class="btn btn-ghost" style="display:none">Sair</button>
+    </div>
+  </header>
+
+  <div id="alertBox" class="container" style="padding-bottom:0"></div>
+  <main id="app" class="container"></main>
+
+  <nav id="bottomNav" class="bottomnav" style="display:none"></nav>
+  <div id="modalRoot"></div>
+
+  <script src="/js/app.js" defer></script>
+</body>
+</html>
