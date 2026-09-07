@@ -139,13 +139,20 @@ function viewLogin(app) {
           <label>E-mail</label>
           <input id="email" type="email" autocomplete="username" placeholder="voce@equipe.com" required>
           <label>Senha</label>
-          <input id="pass" type="password" autocomplete="current-password" placeholder="••••••" required>
+          <div style="position:relative">
+            <input id="pass" type="password" autocomplete="current-password" placeholder="••••••" required style="padding-right:52px">
+            <button type="button" id="showPass" title="Mostrar senha" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:transparent;font-size:18px;cursor:pointer">👁️</button>
+          </div>
           <div style="height:14px"></div>
           <button class="btn btn-primary btn-big" type="submit">Entrar</button>
         </form>
         <p class="muted" style="font-size:12px;margin-top:14px">Acesso demo — admin: <b>admin@equipe.com / admin123</b><br>Vendedora: <b>ana@equipe.com / ana123</b></p>
       </div>
     </div>`;
+  $('#showPass').onclick = () => {
+    const p = $('#pass');
+    p.type = p.type === 'password' ? 'text' : 'password';
+  };
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
     try {
