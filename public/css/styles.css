@@ -68,16 +68,12 @@ a{color:inherit}
 label{font-size:13px;font-weight:700;color:#374151;display:block;margin:12px 0 6px}
 /* ---------- bottom nav estilo app ---------- */
 .bottomnav{position:fixed;left:12px;right:12px;bottom:12px;z-index:20;background:var(--brand);border-radius:24px;display:flex;align-items:center;padding:8px 6px;box-shadow:0 10px 30px rgba(11,59,44,.35)}
+@media(min-width:900px){.bottomnav{left:50%;right:auto;transform:translateX(-50%);width:min(620px,calc(100% - 24px))}}
 .bottomnav a{flex:1;text-align:center;padding:8px 2px;font-size:11px;font-weight:700;text-decoration:none;color:#a9c9b8}
 .bottomnav a.active{color:var(--lime)}
 .bottomnav .ico{font-size:20px;display:block}
 .fab{flex:none;width:58px;height:58px;border-radius:50%;border:none;background:var(--lime);color:var(--lime-ink);font-size:30px;font-weight:800;line-height:1;cursor:pointer;margin:-26px 4px 0;box-shadow:0 6px 16px rgba(0,0,0,.3)}
 .fab:active{transform:scale(.96)}
-.desknav{display:none;gap:4px;align-items:center}
-@media(min-width:900px){.desknav{display:flex}}
-.desknav a{padding:9px 13px;border-radius:10px;text-decoration:none;font-weight:700;color:#cfe3d6;font-size:14px;white-space:nowrap}
-.desknav a.active{background:rgba(255,255,255,.14);color:#fff}
-@media(min-width:900px){.bottomnav{display:none}}
 .sidebar{display:none}
 @media(min-width:900px){
   .layout{display:grid;grid-template-columns:220px 1fr;gap:20px;max-width:var(--max);margin:0 auto;padding:0 16px}

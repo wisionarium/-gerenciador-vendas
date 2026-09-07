@@ -71,16 +71,12 @@ function toast(msg, type = 'ok') {
 function setNav() {
   const u = store.user;
   const nav = $('#bottomNav');
-  const desk = $('#deskNav');
   const badge = $('#userBadge');
   const logout = $('#logoutBtn');
-  if (!u) { nav.style.display = 'none'; if (desk) desk.innerHTML = ''; badge.textContent = ''; logout.style.display = 'none'; return; }
+  if (!u) { nav.style.display = 'none'; badge.textContent = ''; logout.style.display = 'none'; return; }
   badge.textContent = `${u.name} • ${u.role === 'admin' ? 'Admin' : 'Vendedora'}`;
   logout.style.display = '';
   nav.style.display = '';
-  const links = u.role === 'admin'
-    ? [['#/admin', '🏠 Início'], ['#/admin/vendas', '🧾 Vendas'], ['#/admin/relatorio', '📊 Relatório'], ['#/admin/vendedoras', '👥 Equipe']]
-    : [['#/vendedora', '🏠 Início'], ['#/vendedora/vendas', '🧾 Vendas']];
   const fab = `<button class="fab" id="fabSale" aria-label="Nova venda">+</button>`;
   if (u.role === 'admin') {
     nav.innerHTML = `
@@ -102,14 +98,13 @@ function setNav() {
       modalSale(sellers);
     } catch (e) { toast(e.message, 'err'); }
   };
-  if (desk) desk.innerHTML = links.map(([href, label]) => `<a href="${href}">${label}</a>`).join('');
   const h = location.hash;
   const mark = (sel) => $$(sel).forEach((a) => {
     const href = a.getAttribute('href');
+    if (!href) return;
     a.classList.toggle('active', href === '#/admin' || href === '#/vendedora' ? h === href : h.startsWith(href));
   });
   mark('#bottomNav a');
-  if (desk) mark('#deskNav a');
 }
 $('#logoutBtn').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
 
