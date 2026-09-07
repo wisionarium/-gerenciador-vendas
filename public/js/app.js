@@ -180,7 +180,7 @@ function kpiCardsSeller(s) {
 }
 
 function periodPills(currentKey, onPick) {
-  const keys = [['hoje', 'Hoje'], ['ontem', 'Ontem'], ['semana', 'Semana'], ['mes', 'Mês'], ['mespassado', 'Mês passado'], ['custom', 'Personalizado']];
+  const keys = [['hoje', 'Hoje'], ['ontem', 'Ontem'], ['semana', 'Semana'], ['mes', 'Mês'], ['custom', 'Personalizado']];
   return `<div class="pill-filter" id="periodPills">${keys.map(([k, l]) => `<button data-k="${k}" class="${currentKey === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 }
 
@@ -513,9 +513,10 @@ async function viewReport(app) {
 }
 
 async function viewTeam(app) {
-  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Adicionar</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div>`;
+  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova vendedora</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div>`;
   const load = async () => {
-    const { users } = await api('/api/users');
+    try {
+      const { users } = await api('/api/users');
     const sellers = users.filter((u) => u.role === 'seller');
     $('#teamBody').innerHTML = sellers.length ? `<div class="card" style="padding:0;overflow:hidden"><table>
       <thead><tr><th>Nome</th><th>Status</th><th>Ações</th></tr></thead><tbody>
@@ -530,6 +531,10 @@ async function viewTeam(app) {
       toast('Status atualizado!'); load();
     }));
     $$('#teamBody [data-edit]').forEach((b) => (b.onclick = () => modalUser(users.find((u) => String(u.id) === String(b.dataset.edit)), load)));
+    } catch (e) {
+      $('#teamBody').innerHTML = `<div class="card"><p><b>Não foi possível carregar a equipe.</b></p><p class="muted">${esc(e.message)}</p><button class="btn btn-primary" id="retry">Tentar novamente</button></div>`;
+      $('#retry').onclick = load;
+    }
   };
   $('#add').onclick = () => modalUser(null, load);
   await load();
