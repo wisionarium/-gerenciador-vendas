@@ -27,7 +27,8 @@ a{color:inherit}
 .btn-ghost{background:transparent;box-shadow:none}
 .btn-big{width:100%;padding:16px;font-size:16px}
 .btn:disabled{opacity:.5}
-.container{max-width:var(--max);margin:0 auto;padding:16px 16px 120px}
+.container{max-width:var(--max);margin:0 auto;padding:16px 16px 170px}
+@media(min-width:900px){.container{padding-bottom:190px}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}
 /* ---------- hero estilo wallet ---------- */
 .hero{background:linear-gradient(160deg,var(--brand-2),var(--brand));border-radius:26px;padding:22px 20px;color:#fff;box-shadow:var(--shadow)}
@@ -80,7 +81,6 @@ label{font-size:13px;font-weight:700;color:#374151;display:block;margin:12px 0 6
   .sidebar{display:block;position:sticky;top:70px;align-self:start}
   .sidebar a{display:block;padding:12px;border-radius:10px;text-decoration:none;font-weight:700;color:#374151}
   .sidebar a.active{background:#fff;border:1px solid var(--line)}
-  .container{padding-bottom:40px}
 }
 /* ---------- resto ---------- */
 table{width:100%;border-collapse:collapse;font-size:14px}
