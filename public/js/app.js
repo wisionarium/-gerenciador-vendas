@@ -92,12 +92,7 @@ function setNav() {
       <a href="#/vendedora/vendas" data-r="minhas">🧾<span></span>Vendas</a>`;
   }
   const fabBtn = $('#fabSale');
-  if (fabBtn) fabBtn.onclick = async () => {
-    try {
-      const { sellers } = await api('/api/sellers');
-      modalSale(sellers);
-    } catch (e) { toast(e.message, 'err'); }
-  };
+  if (fabBtn) fabBtn.onclick = () => modalEscolhaRegistro();
   const h = location.hash;
   const mark = (sel) => $$(sel).forEach((a) => {
     const href = a.getAttribute('href');
@@ -436,11 +431,6 @@ async function viewAdmin(app) {
     body.innerHTML = `
       <p class="muted" style="margin:12px 0">${esc(adminPeriod.label || '')} • ${from ? fmtDateBR(from) : '…'} a ${to ? fmtDateBR(to) : '…'}</p>
       ${kpiCards(summary)}
-      <div class="row" style="margin-top:12px">
-        <button class="btn btn-primary" id="btnACalls">+ Chamadas</button>
-        <button class="btn btn-accent" id="btnASale">+ Venda</button>
-        <a class="btn" href="#/admin/relatorio">📊 Relatório do dia</a>
-      </div>
       <h3 class="section-title">Ranking</h3>
       ${withChannel.length ? `
       <div class="card" style="padding:0;overflow:hidden">
@@ -452,9 +442,32 @@ async function viewAdmin(app) {
         </tr>`).join('')}</tbody></table>
       </div>` : '<div class="card empty">Não há dados neste período.</div>'}
     `;
-    $('#btnACalls').onclick = () => modalCallsAdmin();
-    $('#btnASale').onclick = async () => { const s = await api('/api/sellers'); modalSale(s.sellers); };
   }
+}
+
+// menu do botão central: escolher o que registrar
+function modalEscolhaRegistro() {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">O que deseja registrar?</h3>
+    <p class="muted" style="font-size:13px">Escolha uma opção abaixo.</p>
+    <button class="btn btn-accent btn-big" id="chSale">🛵 Registrar venda</button>
+    <div style="height:10px"></div>
+    <button class="btn btn-primary btn-big" id="chCalls">📞 Registrar chamadas</button>
+    <button class="btn btn-ghost btn-big" id="cancel">Cancelar</button>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#chSale').onclick = async () => {
+    try {
+      const { sellers } = await api('/api/sellers');
+      modalSale(sellers);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  $('#chCalls').onclick = () => {
+    if (store.user.role === 'admin') modalCallsAdmin();
+    else modalCalls();
+  };
 }
 
 function modalCallsAdmin() {
