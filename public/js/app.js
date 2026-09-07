@@ -71,12 +71,16 @@ function toast(msg, type = 'ok') {
 function setNav() {
   const u = store.user;
   const nav = $('#bottomNav');
+  const desk = $('#deskNav');
   const badge = $('#userBadge');
   const logout = $('#logoutBtn');
-  if (!u) { nav.style.display = 'none'; badge.textContent = ''; logout.style.display = 'none'; return; }
+  if (!u) { nav.style.display = 'none'; if (desk) desk.innerHTML = ''; badge.textContent = ''; logout.style.display = 'none'; return; }
   badge.textContent = `${u.name} • ${u.role === 'admin' ? 'Admin' : 'Vendedora'}`;
   logout.style.display = '';
   nav.style.display = '';
+  const links = u.role === 'admin'
+    ? [['#/admin', '🏠 Início'], ['#/admin/vendas', '🧾 Vendas'], ['#/admin/relatorio', '📊 Relatório'], ['#/admin/vendedoras', '👥 Equipe']]
+    : [['#/vendedora', '🏠 Início'], ['#/vendedora/vendas', '🧾 Vendas']];
   if (u.role === 'admin') {
     nav.innerHTML = `
       <a href="#/admin" data-r="admin">🏠<span class="ico"></span>Início</a>
@@ -88,11 +92,14 @@ function setNav() {
       <a href="#/vendedora" data-r="home">🏠<span></span>Início</a>
       <a href="#/vendedora/vendas" data-r="minhas">🧾<span></span>Vendas</a>`;
   }
+  if (desk) desk.innerHTML = links.map(([href, label]) => `<a href="${href}">${label}</a>`).join('');
   const h = location.hash;
-  $$('#bottomNav a').forEach((a) => {
+  const mark = (sel) => $$(sel).forEach((a) => {
     const href = a.getAttribute('href');
-    a.classList.toggle('active', h.startsWith(href));
+    a.classList.toggle('active', href === '#/admin' || href === '#/vendedora' ? h === href : h.startsWith(href));
   });
+  mark('#bottomNav a');
+  if (desk) mark('#deskNav a');
 }
 $('#logoutBtn').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
 
