@@ -81,17 +81,27 @@ function setNav() {
   const links = u.role === 'admin'
     ? [['#/admin', '🏠 Início'], ['#/admin/vendas', '🧾 Vendas'], ['#/admin/relatorio', '📊 Relatório'], ['#/admin/vendedoras', '👥 Equipe']]
     : [['#/vendedora', '🏠 Início'], ['#/vendedora/vendas', '🧾 Vendas']];
+  const fab = `<button class="fab" id="fabSale" aria-label="Nova venda">+</button>`;
   if (u.role === 'admin') {
     nav.innerHTML = `
       <a href="#/admin" data-r="admin">🏠<span class="ico"></span>Início</a>
       <a href="#/admin/vendas" data-r="vendas">🧾<span></span>Vendas</a>
+      ${fab}
       <a href="#/admin/relatorio" data-r="relatorio">📊<span></span>Relatório</a>
       <a href="#/admin/vendedoras" data-r="vendedoras">👥<span></span>Equipe</a>`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" data-r="home">🏠<span></span>Início</a>
+      ${fab}
       <a href="#/vendedora/vendas" data-r="minhas">🧾<span></span>Vendas</a>`;
   }
+  const fabBtn = $('#fabSale');
+  if (fabBtn) fabBtn.onclick = async () => {
+    try {
+      const { sellers } = await api('/api/sellers');
+      modalSale(sellers);
+    } catch (e) { toast(e.message, 'err'); }
+  };
   if (desk) desk.innerHTML = links.map(([href, label]) => `<a href="${href}">${label}</a>`).join('');
   const h = location.hash;
   const mark = (sel) => $$(sel).forEach((a) => {
@@ -220,10 +230,23 @@ function saleCard(s) {
   </div>`;
 }
 
+// linha estilo "transação" p/ últimas vendas da vendedora
+function txRow(s, meId) {
+  const mine = (s.participants || []).filter((p) => p.seller_id === meId).reduce((a, p) => a + Number(p.credit), 0);
+  const ch = s.channel === 'WhatsApp' ? 'wa' : 'crm';
+  return `
+  <div class="tx">
+    <div class="tx-ico ${ch}">${s.channel === 'WhatsApp' ? '💬' : '🖥️'}</div>
+    <div class="tx-mid"><b>${esc(s.customer_name)}</b><span>${esc(s.product)} • ${esc(s.color)} • ${fmtDateBR(s.sale_date)}</span></div>
+    <div class="tx-amt">+${fmtV(mine)}<small>${esc(s.channel)}</small></div>
+  </div>`;
+}
+
 // ---------- SELLER ----------
 async function viewSeller(app) {
   const t = todayISO();
   const m = monthRange(0), pm = monthRange(-1);
+  const me = store.user;
   app.innerHTML = `<div class="card"><p class="muted">Carregando…</p></div>`;
   const [day, month, prev, sellersRes, lastSales] = await Promise.all([
     api(`/api/stats/summary?from=${t}&to=${t}`),
@@ -234,12 +257,19 @@ async function viewSeller(app) {
   ]);
   const delta = prev.salesCredit > 0 ? ((month.salesCredit - prev.salesCredit) / prev.salesCredit) * 100 : null;
   app.innerHTML = `
-    <h2 style="margin:4px 0">Meu desempenho</h2>
-    <p class="muted" style="margin:0 0 12px">Hoje • ${fmtDateBR(t)}</p>
-    ${kpiCardsSeller(day)}
-    <div class="row" style="margin-top:14px">
-      <button class="btn btn-primary btn-big" id="btnCalls" style="flex:1">+ Registrar chamadas</button>
-      <button class="btn btn-accent btn-big" id="btnSale" style="flex:1">+ Registrar venda</button>
+    <div class="hero">
+      <div class="hero-hi">Olá, ${esc(me.name)} 👋</div>
+      <div class="hero-label" id="heroLabel">Minhas vendas hoje</div>
+      <div class="hero-value mono" id="heroValue">${fmtV(day.salesCredit)}</div>
+      <div class="hero-sub" id="heroSub">${fmtInt(day.calls)} chamadas • Conversão ${fmtPct(day.conversion)}</div>
+      <div class="hero-actions">
+        <button class="btn-lime" id="btnCalls">📞 Chamadas</button>
+        <button class="btn-lime" id="btnSale">+ Venda</button>
+      </div>
+      <div class="hero-tabs" id="heroTabs">
+        <button data-p="hoje" class="on">Hoje</button>
+        <button data-p="mes">Este mês</button>
+      </div>
     </div>
     <h3 class="section-title">Mês atual x mês anterior</h3>
     <div class="card">
@@ -248,9 +278,21 @@ async function viewSeller(app) {
         <div style="text-align:right"><div class="muted" style="font-size:12px">MÊS PASSADO</div><b class="mono" style="font-size:22px">${fmtV(prev.salesCredit)}</b><div class="${delta != null && delta >= 0 ? 'delta-up' : 'delta-down'}">${delta == null ? '—' : (delta >= 0 ? '↑ ' : '↓ ') + fmtPct(Math.abs(delta)).replace('%', '') + '%'}</div></div>
       </div>
     </div>
-    <h3 class="section-title">Últimas vendas</h3>
-    <div id="lastSales">${lastSales.sales.length ? lastSales.sales.slice(0, 8).map(saleCard).join('') : '<div class="card empty">Nenhuma venda registrada neste mês.</div>'}</div>
+    <div class="section-head"><h3 class="section-title">Últimas vendas</h3><a class="link-more" href="#/vendedora/vendas">Ver tudo</a></div>
+    <div id="lastSales">${lastSales.sales.length ? lastSales.sales.slice(0, 6).map((s) => txRow(s, me.id)).join('') : '<div class="card empty">Nenhuma venda registrada neste mês.</div>'}</div>
   `;
+  const heroData = {
+    hoje: { label: 'Minhas vendas hoje', v: day.salesCredit, sub: `${fmtInt(day.calls)} chamadas • Conversão ${fmtPct(day.conversion)}` },
+    mes: { label: 'Minhas vendas no mês', v: month.salesCredit, sub: `${fmtInt(month.calls)} chamadas • Conversão ${fmtPct(month.conversion)}` },
+  };
+  $('#heroTabs').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    $$('#heroTabs button').forEach((x) => x.classList.toggle('on', x === b));
+    const d = heroData[b.dataset.p];
+    $('#heroLabel').textContent = d.label;
+    $('#heroValue').textContent = fmtV(d.v);
+    $('#heroSub').textContent = d.sub;
+  };
   $('#btnCalls').onclick = () => modalCalls();
   $('#btnSale').onclick = () => modalSale(sellersRes.sellers);
 }
