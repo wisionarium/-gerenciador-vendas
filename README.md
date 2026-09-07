@@ -7,12 +7,22 @@ PWA simples para controle de chamadas, vendas e desempenho de equipe de vendedor
 - Frontend: SPA vanilla (HTML/CSS/JS), mobile-first, sem build
 - PWA: manifest + service worker + ícones + instalável
 
-## Rodar
+## Rodar local (PC)
 ```bash
 npm install
 npm start
 # abra http://localhost:3000
 ```
+Sem variáveis de ambiente, usa `./data.db` (SQLite local).
+
+## Deploy na Vercel + Turso
+1. Crie o banco no [Turso](https://turso.tech) e anote `TURSO_URL` + `TURSO_AUTH_TOKEN`
+2. Suba o repo no GitHub e importe na Vercel
+3. Na Vercel, em Settings → Environment Variables, adicione:
+   - `TURSO_URL` (ex.: `libsql://...turso.io`)
+   - `TURSO_AUTH_TOKEN`
+   - `JWT_SECRET` (uma frase longa aleatória)
+4. Deploy — com as variáveis presentes, o app usa o Turso automaticamente.
 
 ## Acessos iniciais (seed)
 - Admin: `admin@equipe.com` / `admin123`

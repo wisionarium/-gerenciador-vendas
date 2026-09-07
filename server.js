@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { db, creditForParticipants } = require('./db');
+const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,6 +11,9 @@ const JWT_EXPIRES = '7d';
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// embrulha handlers async p/ o Express 4 encaminhar erros ao middleware
+const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // ---------- helpers ----------
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -21,13 +24,13 @@ function signToken(user) {
   return jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Não autenticado.' });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.id);
+    const user = await db.get('SELECT * FROM users WHERE id = ?', payload.id);
     if (!user || !user.active) return res.status(401).json({ error: 'Usuário inválido ou desativado.' });
     req.user = user;
     next();
@@ -41,91 +44,86 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-function activeSellerIds() {
-  return db.prepare("SELECT id FROM users WHERE role='seller' AND active=1").all().map(r => r.id);
-}
-
 // ---------- AUTH ----------
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', ah(async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Informe e-mail e senha.' });
-  const user = db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(String(email).trim());
+  const user = await db.get('SELECT * FROM users WHERE lower(email) = lower(?)', String(email).trim());
   if (!user) return res.status(401).json({ error: 'Credenciais inválidas.' });
   if (!user.active) return res.status(403).json({ error: 'Usuária desativada. Fale com o administrador.' });
   const ok = bcrypt.compareSync(String(password), user.password_hash);
   if (!ok) return res.status(401).json({ error: 'Credenciais inválidas.' });
   return res.json({ token: signToken(user), user: toPublicUser(user) });
-});
+}));
 
-app.get('/api/me', requireAuth, (req, res) => {
+app.get('/api/me', requireAuth, ah(async (req, res) => {
   res.json({ user: toPublicUser(req.user) });
-});
+}));
 
 // ---------- SELLERS / USERS ----------
-app.get('/api/sellers', requireAuth, (req, res) => {
-  // vendedora vê lista ativa p/ montar participantes; admin vê todas
+app.get('/api/sellers', requireAuth, ah(async (req, res) => {
   if (req.user.role === 'admin') {
-    const rows = db.prepare("SELECT * FROM users WHERE role='seller' ORDER BY name").all();
+    const rows = await db.all("SELECT * FROM users WHERE role='seller' ORDER BY name");
     return res.json({ sellers: rows.map(toPublicUser) });
   }
-  const rows = db.prepare("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name").all();
+  const rows = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
   return res.json({ sellers: rows.map(toPublicUser) });
-});
+}));
 
-app.get('/api/users', requireAuth, requireAdmin, (req, res) => {
-  const rows = db.prepare('SELECT * FROM users ORDER BY role DESC, name').all();
+app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
+  const rows = await db.all('SELECT * FROM users ORDER BY role DESC, name');
   res.json({ users: rows.map(toPublicUser) });
-});
+}));
 
-app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   const { name, email, password, role } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
   if (!['admin', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
   try {
-    const r = db.prepare('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)')
-      .run(name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role);
-    const u = db.prepare('SELECT * FROM users WHERE id=?').get(r.lastInsertRowid);
+    const r = await db.run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
+      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role);
+    const u = await db.get('SELECT * FROM users WHERE id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'E-mail já cadastrado.' });
-    res.status(500).json({ error: 'Erro ao cadastrar.' });
+    throw e;
   }
-});
+}));
 
-app.put('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
+app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const { name, email, password, role } = req.body || {};
-  const target = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
+  const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
   if (role && !['admin', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   try {
-    db.prepare('UPDATE users SET name=?, email=?, role=? WHERE id=?')
-      .run(name.trim(), email.trim().toLowerCase(), role || target.role, target.id);
+    await db.run('UPDATE users SET name=?, email=?, role=? WHERE id=?',
+      name.trim(), email.trim().toLowerCase(), role || target.role, target.id);
     if (password) {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
-      db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(bcrypt.hashSync(String(password), 10), target.id);
+      await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
     }
-    const u = db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
+    const u = await db.get('SELECT * FROM users WHERE id=?', target.id);
     res.json({ user: toPublicUser(u) });
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'E-mail já cadastrado.' });
-    res.status(500).json({ error: 'Erro ao atualizar.' });
+    throw e;
   }
-});
+}));
 
-app.patch('/api/users/:id/status', requireAuth, requireAdmin, (req, res) => {
-  const target = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
+app.patch('/api/users/:id/status', requireAuth, requireAdmin, ah(async (req, res) => {
+  const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'Você não pode desativar a si mesma.' });
   const { active } = req.body || {};
-  db.prepare('UPDATE users SET active=? WHERE id=?').run(active ? 1 : 0, target.id);
-  const u = db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
+  await db.run('UPDATE users SET active=? WHERE id=?', active ? 1 : 0, target.id);
+  const u = await db.get('SELECT * FROM users WHERE id=?', target.id);
   res.json({ user: toPublicUser(u) });
-});
+}));
 
 // ---------- CALLS ----------
-app.get('/api/calls', requireAuth, (req, res) => {
+app.get('/api/calls', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id } = req.query;
   let where = '1=1';
   const params = [];
@@ -138,13 +136,14 @@ app.get('/api/calls', requireAuth, (req, res) => {
   }
   if (from && isValidDate(from)) { where += ' AND c.date >= ?'; params.push(from); }
   if (to && isValidDate(to)) { where += ' AND c.date <= ?'; params.push(to); }
-  const rows = db.prepare(
-    `SELECT c.*, u.name AS seller_name FROM call_records c JOIN users u ON u.id=c.seller_id WHERE ${where} ORDER BY c.date DESC, c.id DESC LIMIT 500`
-  ).all(...params);
+  const rows = await db.all(
+    `SELECT c.*, u.name AS seller_name FROM call_records c JOIN users u ON u.id=c.seller_id WHERE ${where} ORDER BY c.date DESC, c.id DESC LIMIT 500`,
+    ...params
+  );
   res.json({ calls: rows });
-});
+}));
 
-app.post('/api/calls', requireAuth, (req, res) => {
+app.post('/api/calls', requireAuth, ah(async (req, res) => {
   let { date, quantity, seller_id } = req.body || {};
   date = date || todayISO();
   quantity = Number(quantity);
@@ -152,11 +151,10 @@ app.post('/api/calls', requireAuth, (req, res) => {
   if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 2000)
     return res.status(400).json({ error: 'Quantidade deve ser entre 1 e 2000.' });
 
-  // vendedora só registra para si; admin pode registrar para qualquer vendedora ativa
   let sellerId = req.user.id;
   if (req.user.role === 'admin') {
     if (seller_id) {
-      const s = db.prepare("SELECT * FROM users WHERE id=? AND role='seller' AND active=1").get(seller_id);
+      const s = await db.get("SELECT * FROM users WHERE id=? AND role='seller' AND active=1", seller_id);
       if (!s) return res.status(400).json({ error: 'Vendedora inválida.' });
       sellerId = s.id;
     } else {
@@ -166,29 +164,30 @@ app.post('/api/calls', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'Sem permissão.' });
   }
 
-  const r = db.prepare("INSERT INTO call_records (seller_id, date, quantity) VALUES (?,?,?)").run(sellerId, date, quantity);
-  const row = db.prepare('SELECT * FROM call_records WHERE id=?').get(r.lastInsertRowid);
+  const r = await db.run('INSERT INTO call_records (seller_id, date, quantity) VALUES (?,?,?)', sellerId, date, quantity);
+  const row = await db.get('SELECT * FROM call_records WHERE id=?', r.lastInsertRowid);
   res.status(201).json({ call: row });
-});
+}));
 
-app.delete('/api/calls/:id', requireAuth, (req, res) => {
-  const row = db.prepare('SELECT * FROM call_records WHERE id=?').get(req.params.id);
+app.delete('/api/calls/:id', requireAuth, ah(async (req, res) => {
+  const row = await db.get('SELECT * FROM call_records WHERE id=?', req.params.id);
   if (!row) return res.status(404).json({ error: 'Registro não encontrado.' });
   if (req.user.role !== 'admin' && row.seller_id !== req.user.id)
     return res.status(403).json({ error: 'Você só pode excluir seus próprios registros.' });
-  db.prepare('DELETE FROM call_records WHERE id=?').run(row.id);
+  await db.run('DELETE FROM call_records WHERE id=?', row.id);
   res.json({ ok: true });
-});
+}));
 
 // ---------- SALES ----------
-function saleWithParticipants(sale) {
-  const parts = db.prepare(
-    'SELECT sp.*, u.name AS seller_name FROM sale_participants sp JOIN users u ON u.id=sp.seller_id WHERE sp.sale_id=?'
-  ).all(sale.id);
+async function saleWithParticipants(sale) {
+  const parts = await db.all(
+    'SELECT sp.*, u.name AS seller_name FROM sale_participants sp JOIN users u ON u.id=sp.seller_id WHERE sp.sale_id=?',
+    sale.id
+  );
   return { ...sale, participants: parts };
 }
 
-app.get('/api/sales', requireAuth, (req, res) => {
+app.get('/api/sales', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, channel, product, q } = req.query;
   const conds = [];
   const params = [];
@@ -207,13 +206,14 @@ app.get('/api/sales', requireAuth, (req, res) => {
     params.unshift(req.user.id);
   }
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
-  const rows = db.prepare(
-    `SELECT s.*, cu.name AS creator_name FROM sales s LEFT JOIN users cu ON cu.id=s.created_by ${joinParticipant} ${where} ORDER BY s.sale_date DESC, s.id DESC LIMIT 500`
-  ).all(...params);
-  res.json({ sales: rows.map(saleWithParticipants) });
-});
+  const rows = await db.all(
+    `SELECT s.*, cu.name AS creator_name FROM sales s LEFT JOIN users cu ON cu.id=s.created_by ${joinParticipant} ${where} ORDER BY s.sale_date DESC, s.id DESC LIMIT 500`,
+    ...params
+  );
+  res.json({ sales: await Promise.all(rows.map(saleWithParticipants)) });
+}));
 
-app.post('/api/sales', requireAuth, (req, res) => {
+app.post('/api/sales', requireAuth, ah(async (req, res) => {
   const { customer_name, product, color, channel, sale_date, participant_ids } = req.body || {};
   const date = sale_date || todayISO();
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
@@ -225,118 +225,123 @@ app.post('/api/sales', requireAuth, (req, res) => {
   if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
   if (pids.length > 3) return res.status(400).json({ error: 'Máximo de 3 participantes.' });
 
-  // valida participantes ativas
   const placeholders = pids.map(() => '?').join(',');
-  const sellers = db.prepare(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`).all(...pids);
+  const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
 
-  // vendedora só pode criar venda onde ela participa
   if (req.user.role !== 'admin' && !pids.includes(req.user.id))
     return res.status(403).json({ error: 'Você precisa estar entre as participantes.' });
 
   let credit;
-  try { credit = creditForParticipants(pids.length); }
+  try { credit = db.creditForParticipants(pids.length); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
-  const r = db.prepare(
-    'INSERT INTO sales (customer_name, product, color, channel, created_by, sale_date) VALUES (?,?,?,?,?,?)'
-  ).run(customer_name.trim(), product.trim(), color.trim(), channel, req.user.id, date);
+  const r = await db.run(
+    'INSERT INTO sales (customer_name, product, color, channel, created_by, sale_date) VALUES (?,?,?,?,?,?)',
+    customer_name.trim(), product.trim(), color.trim(), channel, req.user.id, date
+  );
   const saleId = r.lastInsertRowid;
-  const insP = db.prepare('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)');
-  for (const sid of pids) insP.run(saleId, sid, credit);
-  const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(saleId);
-  res.status(201).json({ sale: saleWithParticipants(sale) });
-});
+  for (const sid of pids) await db.run('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)', saleId, sid, credit);
+  const sale = await db.get('SELECT * FROM sales WHERE id=?', saleId);
+  res.status(201).json({ sale: await saleWithParticipants(sale) });
+}));
 
-app.delete('/api/sales/:id', requireAuth, (req, res) => {
-  const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(req.params.id);
+app.delete('/api/sales/:id', requireAuth, ah(async (req, res) => {
+  const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   if (req.user.role !== 'admin' && sale.created_by !== req.user.id)
     return res.status(403).json({ error: 'Você só pode excluir vendas criadas por você.' });
-  db.prepare('DELETE FROM sales WHERE id=?').run(sale.id);
+  await db.run('DELETE FROM sales WHERE id=?', sale.id);
   res.json({ ok: true });
-});
+}));
 
 // ---------- STATS ----------
-function summarize(from, to, sellerId) {
+async function summarize(from, to, sellerId) {
   const p = [];
   let callWhere = '1=1';
   if (from) { callWhere += ' AND date >= ?'; p.push(from); }
   if (to) { callWhere += ' AND date <= ?'; p.push(to); }
   let calls = 0;
   if (sellerId) {
-    const r = db.prepare(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE seller_id=? AND ${callWhere}`).get(sellerId, ...p);
-    calls = r.t;
+    const r = await db.get(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE seller_id=? AND ${callWhere}`, sellerId, ...p);
+    calls = Number(r.t);
   } else {
-    const r = db.prepare(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE ${callWhere}`).get(...p);
-    calls = r.t;
+    const r = await db.get(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE ${callWhere}`, ...p);
+    calls = Number(r.t);
   }
 
-  // vendas: soma de créditos
   const sp = [];
   let saleWhere = '1=1';
   if (from) { saleWhere += ' AND s.sale_date >= ?'; sp.push(from); }
   if (to) { saleWhere += ' AND s.sale_date <= ?'; sp.push(to); }
-  let creditSel = 'SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE ' + saleWhere;
-  let creditParams = [...sp];
-  if (sellerId) { creditSel += ' AND sp.seller_id=?'; creditParams.push(sellerId); }
-  const credit = db.prepare(creditSel).get(...creditParams).t;
+  const creditSel = 'SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE ' + saleWhere;
+  const creditParams = [...sp];
+  if (sellerId) { creditParams.push(sellerId); }
+  const withSeller = (sel) => sellerId ? sel + ' AND sp.seller_id=?' : sel;
 
-  const waSel = creditSel.replace('sp.credit', "CASE WHEN s.channel='WhatsApp' THEN sp.credit ELSE 0 END");
-  const crmSel = creditSel.replace('sp.credit', "CASE WHEN s.channel='CRM' THEN sp.credit ELSE 0 END");
-  const wa = db.prepare(waSel).get(...creditParams).t;
-  const crm = db.prepare(crmSel).get(...creditParams).t;
+  const credit = Number((await db.get(withSeller(creditSel), ...creditParams)).t);
+  const waSel = withSeller(creditSel.replace('sp.credit', "CASE WHEN s.channel='WhatsApp' THEN sp.credit ELSE 0 END"));
+  const crmSel = withSeller(creditSel.replace('sp.credit', "CASE WHEN s.channel='CRM' THEN sp.credit ELSE 0 END"));
+  const wa = Number((await db.get(waSel, ...creditParams)).t);
+  const crm = Number((await db.get(crmSel, ...creditParams)).t);
 
-  // nº de registros únicos de venda (para relatório)
-  let countSel = 'SELECT COUNT(DISTINCT s.id) AS t FROM sales s ' + (sellerId ? 'JOIN sale_participants sp ON sp.sale_id=s.id AND sp.seller_id=? WHERE ' + saleWhere : 'WHERE ' + saleWhere);
-  const countParams = sellerId ? [sellerId, ...sp] : [...sp];
-  const records = db.prepare(countSel).get(...countParams).t;
+  let countSel;
+  let countParams;
+  if (sellerId) {
+    countSel = 'SELECT COUNT(DISTINCT s.id) AS t FROM sales s JOIN sale_participants sp ON sp.sale_id=s.id AND sp.seller_id=? WHERE ' + saleWhere;
+    countParams = [sellerId, ...sp];
+  } else {
+    countSel = 'SELECT COUNT(DISTINCT s.id) AS t FROM sales s WHERE ' + saleWhere;
+    countParams = [...sp];
+  }
+  const records = Number((await db.get(countSel, ...countParams)).t);
 
   const conversion = calls > 0 ? (credit / calls) * 100 : null;
   return { calls, salesCredit: credit, whatsapp: wa, crm: crm, records, conversion };
 }
 
-app.get('/api/stats/summary', requireAuth, (req, res) => {
+app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id } = req.query;
   const sid = req.user.role === 'admin' ? (seller_id ? Number(seller_id) : null) : req.user.id;
-  res.json(summarize(from || null, to || null, sid));
-});
+  res.json(await summarize(from || null, to || null, sid));
+}));
 
-app.get('/api/stats/ranking', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => {
   const { from, to } = req.query;
-  const sellers = db.prepare("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name").all();
-  const rows = sellers.map(s => {
-    const st = summarize(from || null, to || null, s.id);
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const rows = await Promise.all(sellers.map(async (s) => {
+    const st = await summarize(from || null, to || null, s.id);
     return { seller_id: s.id, name: s.name, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, conversion: st.conversion };
-  }).sort((a, b) => b.sales - a.sales || b.calls - a.calls);
+  }));
+  rows.sort((a, b) => b.sales - a.sales || b.calls - a.calls);
   res.json({ ranking: rows });
-});
+}));
 
-app.get('/api/stats/seller/:id', requireAuth, (req, res) => {
+app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   const targetId = Number(req.params.id);
   if (req.user.role !== 'admin' && targetId !== req.user.id) return res.status(403).json({ error: 'Sem permissão.' });
   const { from, to, cfrom, cto } = req.query;
-  const current = summarize(from || null, to || null, targetId);
-  const compare = (cfrom || cto) ? summarize(cfrom || null, cto || null, targetId) : null;
+  const current = await summarize(from || null, to || null, targetId);
+  const compare = (cfrom || cto) ? await summarize(cfrom || null, cto || null, targetId) : null;
   const pct = (cur, prev) => {
     if (prev == null || prev === 0) return null;
     if (cur == null) return null;
     return ((cur - prev) / Math.abs(prev)) * 100;
   };
-  // evolução diária
   const p = [targetId];
   let dw = 'sp.seller_id=?';
   if (from) { dw += ' AND s.sale_date >= ?'; p.push(from); }
   if (to) { dw += ' AND s.sale_date <= ?'; p.push(to); }
-  const daily = db.prepare(
-    `SELECT s.sale_date AS date, SUM(sp.credit) AS sales, COUNT(DISTINCT s.id) AS records FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE ${dw} GROUP BY s.sale_date ORDER BY s.sale_date`
-  ).all(...p);
+  const daily = await db.all(
+    `SELECT s.sale_date AS date, SUM(sp.credit) AS sales, COUNT(DISTINCT s.id) AS records FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE ${dw} GROUP BY s.sale_date ORDER BY s.sale_date`,
+    ...p
+  );
   const p2 = [targetId];
   let cw = 'seller_id=?';
   if (from) { cw += ' AND date >= ?'; p2.push(from); }
   if (to) { cw += ' AND date <= ?'; p2.push(to); }
-  const dailyCalls = db.prepare(`SELECT date, SUM(quantity) AS calls FROM call_records WHERE ${cw} GROUP BY date ORDER BY date`).all(...p2);
-  const seller = db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
+  const dailyCalls = await db.all(`SELECT date, SUM(quantity) AS calls FROM call_records WHERE ${cw} GROUP BY date ORDER BY date`, ...p2);
+  const seller = await db.get('SELECT * FROM users WHERE id=?', targetId);
   if (!seller) return res.status(404).json({ error: 'Vendedora não encontrada.' });
   res.json({
     seller: toPublicUser(seller),
@@ -351,19 +356,20 @@ app.get('/api/stats/seller/:id', requireAuth, (req, res) => {
     } : null,
     daily, dailyCalls,
   });
-});
+}));
 
-app.get('/api/report/daily', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
   const date = req.query.date || todayISO();
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
-  const summary = summarize(date, date, null);
-  const sellers = db.prepare("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name").all();
-  const ranking = sellers.map(s => {
-    const st = summarize(date, date, s.id);
+  const summary = await summarize(date, date, null);
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const allRows = await Promise.all(sellers.map(async (s) => {
+    const st = await summarize(date, date, s.id);
     return { seller_id: s.id, name: s.name, calls: st.calls, sales: st.salesCredit };
-  }).filter(r => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
+  }));
+  const ranking = allRows.filter((r) => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
   res.json({ date, summary, ranking });
-});
+}));
 
 // SPA fallback
 app.get('*', (req, res) => {
@@ -371,7 +377,24 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`[app] Rodando em http://localhost:${PORT}`);
-  console.log(`[app] Login admin: admin@equipe.com / admin123`);
+// erro global -> sempre JSON
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('[api]', err);
+  res.status(500).json({ error: 'Erro interno. Tente novamente.' });
 });
+
+module.exports = app;
+
+// só escuta quando executado diretamente (node server.js). Na Vercel, o api/index.js importa o app.
+if (require.main === module) {
+  db.ready.then(() => {
+    app.listen(PORT, () => {
+      console.log(`[app] Rodando em http://localhost:${PORT}`);
+      console.log('[app] Login admin: admin@equipe.com / admin123');
+    });
+  }).catch((e) => {
+    console.error('[db] Falha ao inicializar:', e);
+    process.exit(1);
+  });
+}
