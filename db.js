@@ -107,13 +107,14 @@ const ready = (async () => {
   if (Number(row.c) === 0) {
     console.log('[db] Seed inicial...');
     const mk = (pw) => bcrypt.hashSync(pw, 10);
-    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
+    // ON CONFLICT: dois cold starts simultâneos na Vercel não geram erro 500
+    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1) ON CONFLICT(email) DO NOTHING',
       'Administrador', 'admin@equipe.com', mk('admin123'), 'admin');
-    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
+    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1) ON CONFLICT(email) DO NOTHING',
       'Ana', 'ana@equipe.com', mk('ana123'), 'seller');
-    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
+    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1) ON CONFLICT(email) DO NOTHING',
       'Brenda', 'brenda@equipe.com', mk('brenda123'), 'seller');
-    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
+    await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1) ON CONFLICT(email) DO NOTHING',
       'Carla', 'carla@equipe.com', mk('carla123'), 'seller');
     console.log('[db] Seed concluído.');
   }
