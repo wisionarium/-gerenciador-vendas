@@ -68,7 +68,9 @@ a{color:inherit}
 .tx-amt small{display:block;font-size:11px;color:var(--muted);font-weight:600}
 /* ---------- login ---------- */
 .login-wrap{max-width:420px;margin:6vh auto;padding:0 16px}
-.input,select,input[type=date],input[type=number],input[type=text],input[type=email],input[type=password],input[type=tel]{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:14px;font-size:15px;background:#fff;color:var(--ink)}
+.input,select,input[type=date],input[type=number],input[type=text],input[type=email],input[type=password],input[type=tel],input:not([type]){width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:14px;font-size:15px;background:#fff;color:var(--ink)}
+.sale-foot{display:flex;justify-content:flex-end;margin-top:8px}
+.btn-del{color:var(--red);font-size:12px;padding:6px 10px}
 label{font-size:13px;font-weight:700;color:#374151;display:block;margin:12px 0 6px}
 /* ---------- bottom nav estilo app ---------- */
 .bottomnav{position:fixed;left:12px;right:12px;bottom:12px;z-index:20;background:var(--brand);border-radius:999px;display:flex;align-items:center;padding:10px 14px;box-shadow:0 10px 30px rgba(11,59,44,.35)}

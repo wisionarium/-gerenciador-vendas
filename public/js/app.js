@@ -189,8 +189,8 @@ function viewLogin(app) {
 function kpiCards(s, prefix = '') {
   return `
   <div class="grid-kpi">
-    <div class="card kpi"><div class="label">📞 Chamadas ${prefix}</div><div class="value mono">${fmtInt(s.calls)}</div></div>
     <div class="card kpi"><div class="label">🛵 Vendas ${prefix}</div><div class="value mono">${fmtV(s.salesCredit)}</div><div class="sub">${fmtInt(s.records)} registro(s)</div></div>
+    <div class="card kpi"><div class="label">📞 Chamadas ${prefix}</div><div class="value mono">${fmtInt(s.calls)}</div></div>
     <div class="card kpi"><div class="label">💬 WhatsApp</div><div class="value mono">${fmtV(s.whatsapp)}</div></div>
     <div class="card kpi"><div class="label">🖥️ CRM</div><div class="value mono">${fmtV(s.crm)}</div><div class="sub">Conversão: ${fmtPct(s.conversion)}</div></div>
   </div>`;
@@ -219,7 +219,7 @@ function bindPeriodPills(cb) {
   });
 }
 
-function saleCard(s) {
+function saleCard(s, delBtn = '') {
   const parts = (s.participants || []).map((p) => `${esc(p.seller_name)} → ${fmtV(p.credit)}`).join(' · ');
   return `
   <div class="sale-card">
@@ -229,6 +229,7 @@ function saleCard(s) {
     </div>
     <div class="muted" style="font-size:13px;margin-top:4px">${esc(s.product)} • ${esc(s.color)} • ${fmtDateBR(s.sale_date)}</div>
     <div style="font-size:13px;margin-top:6px">👥 ${parts}</div>
+    ${delBtn ? `<div class="sale-foot">${delBtn}</div>` : ''}
   </div>`;
 }
 
@@ -811,8 +812,8 @@ async function viewAllSales(app) {
   const { from, to } = adminPeriod;
   app.innerHTML = `<h2 style="margin:4px 0">Vendas</h2>
     <div class="card"><label>Buscar</label><input id="q" placeholder="Cliente, produto, cor…">
-    <div class="row" style="margin-top:8px">
-      <select id="ch" style="flex:1"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
+    <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
+      <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
       <button class="btn btn-primary" id="go">Filtrar</button>
     </div></div>
     <div id="list" style="margin-top:12px"><div class="card"><p class="muted">Carregando…</p></div></div>`;
@@ -820,7 +821,7 @@ async function viewAllSales(app) {
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(adminSeller ? { seller_id: adminSeller } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
     $('#list').innerHTML = sales.length
-      ? sales.map((s) => saleCard(s) + (store.user.role === 'admin' ? `<button class="btn btn-ghost" data-del="${s.id}" style="font-size:12px">Excluir #${s.id}</button>` : '')).join('')
+      ? sales.map((s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn btn-ghost btn-del" data-del="${s.id}">Excluir</button>` : '')).join('')
       : '<div class="card empty">Não há vendas registradas neste período.</div>';
     $$('#list [data-del]').forEach((b) => (b.onclick = async () => {
       if (!confirm('Excluir esta venda?')) return;
@@ -864,8 +865,8 @@ async function viewReport(app) {
     const { summary, details } = await api(`/api/report/daily?date=${date}`);
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
     const msg =
-      `*RELATÓRIO COMERCIAL - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}\nConversão: ${fmtPct(summary.conversion)}` +
-      details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - ${fmtV(d.credit)} vendas - ${fmtInt(d.calls)} chamadas*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
+      `*RELATÓRIO COMERCIAL - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}` +
+      details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)} - Chamadas ${fmtInt(d.calls)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
       <div class="card">
@@ -881,14 +882,14 @@ async function viewReport(app) {
             ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : 'ch-crm'}">${esc(s.channel)}</b></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
           </div>`).join('')}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
-        <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999">
+        <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
         <div style="height:10px"></div>
         <a class="btn btn-green btn-big" id="waBtn" href="${waLink('')}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">Enviar relatório no WhatsApp</a>
         <button class="btn btn-big" id="copyBtn" style="margin-top:8px">Copiar mensagem</button>
         <button class="btn btn-ghost btn-big" id="prevBtn" style="margin-top:8px">Ver mensagem antes de enviar</button>
         <pre id="msgPrev" style="display:none;white-space:pre-wrap;font-size:13px;background:#f6f7f9;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:8px;font-family:inherit"></pre>
       </div>`;
-    $('#waPhone').oninput = (e) => { $('#waBtn').href = waLink(e.target.value); };
+    $('#waPhone').oninput = (e) => { localStorage.setItem('ec_wa_phone', e.target.value); $('#waBtn').href = waLink(e.target.value); };
     $('#copyBtn').onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Mensagem copiada!'); };
     $('#prevBtn').onclick = () => {
       const p = $('#msgPrev');
