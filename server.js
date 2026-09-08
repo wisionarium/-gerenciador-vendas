@@ -484,7 +484,7 @@ app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => 
   const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
   const rows = await Promise.all(sellers.map(async (s) => {
     const st = await summarize(from || null, to || null, s.id);
-    return { seller_id: s.id, name: s.name, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, conversion: st.conversion };
+    return { seller_id: s.id, name: s.name, avatar_url: s.avatar_url || null, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, conversion: st.conversion };
   }));
   rows.sort((a, b) => b.sales - a.sales || b.calls - a.calls);
   res.json({ ranking: rows });

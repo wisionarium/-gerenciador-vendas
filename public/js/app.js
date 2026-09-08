@@ -750,7 +750,7 @@ async function viewAdmin(app) {
         <table><thead><tr><th>#</th><th>Vendedora</th><th>Chamadas</th><th>Vendas</th><th>Conv.</th></tr></thead>
         <tbody>${withChannel.map((r, i) => `<tr>
           <td>${i + 1}</td>
-          <td><a href="#/admin/vendedora/${r.seller_id}"><b>${esc(r.name)}</b></a></td>
+          <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><b>${esc(r.name)}</b></span></a></td>
           <td class="mono">${fmtInt(r.calls)}</td><td class="mono"><b>${fmtV(r.sales)}</b></td><td class="mono">${fmtPct(r.conversion)}</td>
         </tr>`).join('')}</tbody></table>
       </div>` : '<div class="card empty">Não há dados neste período.</div>'}
