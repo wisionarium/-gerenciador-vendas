@@ -1088,11 +1088,11 @@ function modalUser(u, reload) {
   const exit = () => {
     if (reduce) { el.remove(); return; }
     el.classList.add('leaving');
-    setTimeout(() => el.classList.add('expand'), 150);
-    setTimeout(() => el.classList.add('done'), 600);
-    setTimeout(() => el.remove(), 900);
+    setTimeout(() => el.classList.add('expand'), 280);
+    setTimeout(() => el.classList.add('done'), 950);
+    setTimeout(() => el.remove(), 1400);
   };
-  setTimeout(exit, 1600);
+  setTimeout(exit, 3000);
 })();
 
 // ---------- PWA ----------
