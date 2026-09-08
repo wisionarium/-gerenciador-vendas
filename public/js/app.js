@@ -68,6 +68,13 @@ function toast(msg, type = 'ok') {
 }
 
 // ---------- shell / nav ----------
+const ICONS = {
+  home: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5 2 11h3v9h5v-6h4v6h5v-9h3z"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6v20h12V8l-4-6zm0 6V3.5L18.5 8H14z"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21V10h4v11zm7 0V3h4v18zm7 0v-7h4v7z"/></svg>',
+  team: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/></svg>',
+};
 function setNav() {
   const u = store.user;
   const nav = $('#bottomNav');
@@ -80,16 +87,16 @@ function setNav() {
   const fab = `<button class="fab" id="fabSale" aria-label="Nova venda">+</button>`;
   if (u.role === 'admin') {
     nav.innerHTML = `
-      <a href="#/admin" data-r="admin">🏠</a>
-      <a href="#/admin/vendas" data-r="vendas">🧾</a>
+      <a href="#/admin" title="Início">${ICONS.home}</a>
+      <a href="#/admin/vendas" title="Vendas">${ICONS.tag}</a>
       ${fab}
-      <a href="#/admin/relatorio" data-r="relatorio">📊</a>
-      <a href="#/admin/vendedoras" data-r="vendedoras">👥</a>`;
+      <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
+      <a href="#/admin/vendedoras" title="Equipe">${ICONS.team}</a>`;
   } else {
     nav.innerHTML = `
-      <a href="#/vendedora" data-r="home">🏠</a>
+      <a href="#/vendedora" title="Início">${ICONS.home}</a>
       ${fab}
-      <a href="#/vendedora/historico" data-r="historico">📄</a>`;
+      <a href="#/vendedora/historico" title="Histórico">${ICONS.doc}</a>`;
   }
   const fabBtn = $('#fabSale');
   if (fabBtn) fabBtn.onclick = () => modalEscolhaRegistro();
@@ -320,7 +327,6 @@ async function viewSeller(app) {
         <button class="goal-right" id="goalEdit" title="Definir minha meta">
           <div class="goal-lab">Meta</div>
           <div class="goal-num mono">${target == null ? '—' : fmtV(target)}</div>
-          <div class="goal-hint">toque para definir ✎</div>
         </button>
       </div>
     </div>

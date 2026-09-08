@@ -73,7 +73,8 @@ label{font-size:13px;font-weight:700;color:#374151;display:block;margin:12px 0 6
 /* ---------- bottom nav estilo app ---------- */
 .bottomnav{position:fixed;left:12px;right:12px;bottom:12px;z-index:20;background:var(--brand);border-radius:999px;display:flex;align-items:center;padding:10px 14px;box-shadow:0 10px 30px rgba(11,59,44,.35)}
 @media(min-width:900px){.bottomnav{left:50%;right:auto;transform:translateX(-50%);width:min(620px,calc(100% - 24px))}}
-.bottomnav a{flex:1;text-align:center;font-size:27px;line-height:1;padding:8px 2px;text-decoration:none;color:#8fb3a1}
+.bottomnav a{flex:1;text-align:center;padding:8px 2px;text-decoration:none;color:#8fb3a1}
+.bottomnav a svg{width:29px;height:29px;display:block;margin:0 auto}
 .bottomnav a.active{color:var(--lime)}
 .fab{flex:none;width:58px;height:58px;border-radius:50%;border:none;background:var(--lime);color:var(--lime-ink);font-size:30px;font-weight:800;line-height:1;cursor:pointer;margin:-26px 4px 0;box-shadow:0 6px 16px rgba(0,0,0,.3)}
 .fab:active{transform:scale(.96)}
@@ -130,9 +131,8 @@ body.seller-home #app{padding-top:0}
 .goal-left{flex:1.5;padding:12px 8px;text-align:center}
 .goal-div{width:1px;background:var(--line);margin:12px 0}
 .goal-right{flex:1;padding:12px 8px;text-align:center;border:none;background:transparent;cursor:pointer;color:var(--ink);font-family:inherit}
-.goal-lab{font-size:12px;font-weight:700;color:#3c4a43}
-.goal-num{font-size:24px;font-weight:800}
-.goal-hint{font-size:10px;color:var(--muted)}
+.goal-lab{font-size:13px;font-weight:700;color:#3c4a43}
+.goal-num{font-size:30px;font-weight:800}
 .phrase{margin:32px 6px 8px;text-align:center}
 .phrase-title{font-size:12px;color:var(--muted)}
 .phrase-text{font-style:italic;font-size:15px;line-height:1.5;margin-top:4px}
