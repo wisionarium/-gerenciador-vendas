@@ -862,7 +862,7 @@ async function viewReport(app) {
   const load = async () => {
     const date = $('#rDate').value || t;
     const { summary, details } = await api(`/api/report/daily?date=${date}`);
-    const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''} (${s.channel})`;
+    const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
     const msg =
       `*RELATÓRIO COMERCIAL - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}\nConversão: ${fmtPct(summary.conversion)}` +
       details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - ${fmtV(d.credit)} vendas - ${fmtInt(d.calls)} chamadas*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
@@ -878,7 +878,7 @@ async function viewReport(app) {
               <b>${esc(d.name)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</b>
               <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
             </div>
-            ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <span class="chip ${s.channel === 'WhatsApp' ? 'wa' : 'crm'}">${esc(s.channel)}</span></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
+            ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : 'ch-crm'}">${esc(s.channel)}</b></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
           </div>`).join('')}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999">
