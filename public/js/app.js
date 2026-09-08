@@ -560,10 +560,10 @@ async function viewHistory(app) {
     <h2 style="margin:4px 0">Meu histórico</h2>
     <div class="hist-filters">
       <div class="mini-pills" id="hPills">
-        <button data-k="hoje" class="on">Hoje</button>
-        <button data-k="ontem">Ontem</button>
+        <button data-k="mes" class="on">Mês</button>
         <button data-k="semana">Semana</button>
-        <button data-k="mes">Mês</button>
+        <button data-k="ontem">Ontem</button>
+        <button data-k="hoje">Hoje</button>
       </div>
       <div class="search-row">
         <select id="hChannel"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
@@ -573,7 +573,7 @@ async function viewHistory(app) {
     <div id="hList"><div class="card empty">Carregando…</div></div>
     <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
-  let key = 'hoje';
+  let key = 'mes';
   const load = async () => {
     const r = key === 'mes' ? { ...monthRange(0), label: 'Mês' } : rangeFor(key);
     const qs = new URLSearchParams({ from: r.from, to: r.to });
