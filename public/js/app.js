@@ -56,7 +56,7 @@ const PERIODS = {
   mespassado: () => ({ ...monthRange(-1), label: 'Mês passado' }),
 };
 
-let adminPeriod = { key: 'hoje', ...PERIODS.hoje() };
+let adminPeriod = { key: 'mes', ...PERIODS.mes() };
 let adminChannel = '';
 let adminSeller = '';
 
@@ -206,7 +206,7 @@ function kpiCardsSeller(s) {
 }
 
 function periodPills(currentKey, onPick) {
-  const keys = [['hoje', 'Hoje'], ['ontem', 'Ontem'], ['semana', 'Semana'], ['mes', 'Mês'], ['custom', 'Personalizado']];
+  const keys = [['mes', 'Mês'], ['semana', 'Semana'], ['ontem', 'Ontem'], ['hoje', 'Hoje'], ['custom', 'Personalizado']];
   return `<div class="pill-filter" id="periodPills">${keys.map(([k, l]) => `<button data-k="${k}" class="${currentKey === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 }
 
