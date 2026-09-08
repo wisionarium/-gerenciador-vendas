@@ -444,6 +444,37 @@ app.post('/api/sales', requireAuth, ah(async (req, res) => {
   res.status(201).json({ sale: await saleWithParticipants(sale) });
 }));
 
+app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
+  if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
+  const { customer_name, product, color, channel, sale_date, participant_ids } = req.body || {};
+  const date = sale_date || sale.sale_date;
+  if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
+  if (!product?.trim()) return res.status(400).json({ error: 'Produto é obrigatório.' });
+  if (!color?.trim()) return res.status(400).json({ error: 'Cor é obrigatória.' });
+  if (!['WhatsApp', 'CRM'].includes(channel)) return res.status(400).json({ error: 'Canal deve ser WhatsApp ou CRM.' });
+  if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+  const pids = [...new Set((participant_ids || []).map(Number).filter(Boolean))];
+  if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
+  if (pids.length > 3) return res.status(400).json({ error: 'Máximo de 3 participantes.' });
+  const placeholders = pids.map(() => '?').join(',');
+  const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
+  if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
+
+  let credit;
+  try { credit = db.creditForParticipants(pids.length); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+
+  await db.run(
+    'UPDATE sales SET customer_name=?, product=?, color=?, channel=?, sale_date=?, updated_at=datetime(\'now\') WHERE id=?',
+    customer_name.trim(), product.trim(), color.trim(), channel, date, sale.id
+  );
+  await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
+  for (const sid of pids) await db.run('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)', sale.id, sid, credit);
+  const updated = await db.get('SELECT * FROM sales WHERE id=?', sale.id);
+  res.json({ sale: await saleWithParticipants(updated) });
+}));
+
 app.delete('/api/sales/:id', requireAuth, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });

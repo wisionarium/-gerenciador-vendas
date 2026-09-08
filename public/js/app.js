@@ -698,6 +698,56 @@ function modalSale(sellers) {
   };
 }
 
+function modalEditSale(sale, sellers, onSaved) {
+  const selIds = (sale.participants || []).map((p) => Number(p.seller_id));
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">Editar venda #${sale.id}</h3>
+    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–3) = 0,5 cada.</p>
+    <form id="fEditSale">
+      <label>Cliente *</label><input id="eClient" required value="${esc(sale.customer_name)}">
+      <label>Produto *</label><input id="eProduct" required value="${esc(sale.product)}">
+      <label>Cor *</label><input id="eColor" required value="${esc(sale.color)}">
+      <label>Canal *</label>
+      <select id="eChannel"><option ${sale.channel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${sale.channel === 'CRM' ? 'selected' : ''}>CRM</option></select>
+      <label>Data</label><input type="date" id="eDate" value="${esc(sale.sale_date)}" max="${todayISO()}">
+      <label>Participantes (1 a 3) *</label>
+      <div class="check-list" id="eplist">
+        ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}">${esc(s.name)}</div>`).join('')}
+      </div>
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Salvar alterações</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#eplist').onclick = (e) => {
+    const c = e.target.closest('.check'); if (!c) return;
+    c.classList.toggle('on');
+    if ($$('#eplist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
+  };
+  $('#fEditSale').onsubmit = async (e) => {
+    e.preventDefault();
+    const pids = $$('#eplist .check.on').map((c) => Number(c.dataset.id));
+    if (!pids.length) return toast('Selecione ao menos 1 participante.', 'err');
+    try {
+      await api(`/api/sales/${sale.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          customer_name: $('#eClient').value.trim(),
+          product: $('#eProduct').value.trim(),
+          color: $('#eColor').value.trim(),
+          channel: $('#eChannel').value,
+          sale_date: $('#eDate').value || sale.sale_date,
+          participant_ids: pids,
+        }),
+      });
+      closeModal(); toast('Venda atualizada!'); if (onSaved) onSaved();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
 // ---------- ADMIN ----------
 async function viewAdmin(app) {
   app.innerHTML = `
@@ -821,12 +871,20 @@ async function viewAllSales(app) {
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(adminSeller ? { seller_id: adminSeller } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
     $('#list').innerHTML = sales.length
-      ? sales.map((s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn btn-ghost btn-del" data-del="${s.id}">Excluir</button>` : '')).join('')
+      ? sales.map((s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" data-del="${s.id}">Excluir</button>` : '')).join('')
       : '<div class="card empty">Não há vendas registradas neste período.</div>';
     $$('#list [data-del]').forEach((b) => (b.onclick = async () => {
       if (!confirm('Excluir esta venda?')) return;
       await api(`/api/sales/${b.dataset.del}`, { method: 'DELETE' });
       toast('Venda excluída.'); load();
+    }));
+    $$('#list [data-edit]').forEach((b) => (b.onclick = async () => {
+      const sale = sales.find((x) => String(x.id) === String(b.dataset.edit));
+      if (!sale) return;
+      try {
+        const { sellers } = await api('/api/sellers');
+        modalEditSale(sale, sellers, load);
+      } catch (e) { toast(e.message, 'err'); }
     }));
   };
   $('#go').onclick = load;
@@ -1030,11 +1088,11 @@ function modalUser(u, reload) {
   const exit = () => {
     if (reduce) { el.remove(); return; }
     el.classList.add('leaving');
-    setTimeout(() => el.classList.add('expand'), 280);
-    setTimeout(() => el.classList.add('done'), 950);
-    setTimeout(() => el.remove(), 1400);
+    setTimeout(() => el.classList.add('expand'), 150);
+    setTimeout(() => el.classList.add('done'), 600);
+    setTimeout(() => el.remove(), 900);
   };
-  setTimeout(exit, 3000);
+  setTimeout(exit, 1600);
 })();
 
 // ---------- PWA ----------
