@@ -973,13 +973,30 @@ function modalUser(u, reload) {
 (function splash() {
   const el = document.getElementById('splash');
   if (!el) return;
+  // quebra o logo em letras p/ efeito de queda
+  try {
+    const logo = document.getElementById('splashLogo');
+    let i = 0;
+    logo.querySelectorAll('.s-sell, .s-day').forEach((part) => {
+      const cls = part.className;
+      const frag = document.createDocumentFragment();
+      [...part.textContent].forEach((ch) => {
+        const s = document.createElement('span');
+        s.className = 'lt ' + cls;
+        s.style.setProperty('--d', (i++ * 0.06).toFixed(2) + 's');
+        s.textContent = ch;
+        frag.appendChild(s);
+      });
+      part.replaceWith(frag);
+    });
+  } catch { /* mantém logo estático */ }
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const exit = () => {
     if (reduce) { el.remove(); return; }
     el.classList.add('leaving');
-    setTimeout(() => el.classList.add('expand'), 320);
-    setTimeout(() => el.classList.add('done'), 1150);
-    setTimeout(() => el.remove(), 1600);
+    setTimeout(() => el.classList.add('expand'), 280);
+    setTimeout(() => el.classList.add('done'), 950);
+    setTimeout(() => el.remove(), 1400);
   };
   setTimeout(exit, 3000);
 })();

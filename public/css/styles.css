@@ -161,9 +161,13 @@ body.seller-home #app{padding-top:0}
 .s-sell{font-family:Allura,cursive;color:#fff}
 .s-day{font-family:'Yeseva One',serif;color:var(--lime)}
 .splash-tag{font-family:'Open Sans',sans-serif;font-style:italic;color:#fff;font-size:15px;margin-top:14px}
+.splash-tag .tg{display:inline-block;opacity:0;animation:tagUp .55s cubic-bezier(.2,.7,.3,1) forwards;animation-delay:var(--d,.5s)}
+@keyframes tagUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+.splash-logo .lt{display:inline-block;opacity:0;animation:letterFall .5s cubic-bezier(.3,.9,.3,1.2) forwards;animation-delay:var(--d,0s)}
+@keyframes letterFall{0%{opacity:0;transform:translateY(-64px)}60%{opacity:1;transform:translateY(7px)}100%{opacity:1;transform:none}}
 .splash-circle{position:absolute;left:50%;top:50%;width:220vmax;height:220vmax;border-radius:50%;background:var(--lime);transform:translate(-50%,-50%) scale(0)}
 #splash.leaving .splash-inner{opacity:0}
-#splash.expand .splash-circle{transform:translate(-50%,-50%) scale(1);transition:transform .75s cubic-bezier(.3,.7,.3,1)}
+#splash.expand .splash-circle{transform:translate(-50%,-50%) scale(1);transition:transform .6s cubic-bezier(.3,.7,.3,1)}
 #splash.done{opacity:0;transition:opacity .4s ease;pointer-events:none}
 /* ---------- animações (só home da vendedora) ---------- */
 @keyframes riseIn{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
