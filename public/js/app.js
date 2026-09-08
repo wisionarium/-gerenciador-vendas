@@ -653,7 +653,7 @@ function modalSale(sellers) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Nova venda</h3>
-    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–3) = 0,5 cada.</p>
+    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–3) = 0,5 cada.<br>⚠️ Cadastre <b>1 vez só</b> com todas as participantes — ela já aparece no histórico de cada uma.</p>
     <form id="fSale">
       <label>Cliente *</label><input id="sClient" required placeholder="Nome do cliente">
       <label>Produto *</label><input id="sProduct" required placeholder="Ex: Scooter X">

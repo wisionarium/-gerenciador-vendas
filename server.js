@@ -405,6 +405,31 @@ app.post('/api/sales', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'admin' && !pids.includes(req.user.id))
     return res.status(403).json({ error: 'Você precisa estar entre as participantes.' });
 
+  // trava anti-duplicada: mesma data + mesmo cliente/produto/cor + mesmas participantes
+  // 1 cadastro com 2 participantes já aparece no histórico das duas (0,5 cada / 1 no geral),
+  // então o 2º cadastro da mesma venda deve ser bloqueado.
+  const norm = (s) => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+  const nCustomer = norm(customer_name);
+  const nProduct = norm(product);
+  const nColor = norm(color);
+  const sortedPids = [...pids].sort((a, b) => a - b).join(',');
+  const candidates = await db.all(
+    'SELECT s.*, cu.name AS creator_name FROM sales s LEFT JOIN users cu ON cu.id=s.created_by WHERE s.sale_date=? LIMIT 500',
+    date
+  );
+  for (const c of candidates) {
+    if (norm(c.customer_name) !== nCustomer) continue;
+    if (norm(c.product) !== nProduct) continue;
+    if (norm(c.color) !== nColor) continue;
+    const cParts = await db.all('SELECT seller_id FROM sale_participants WHERE sale_id=?', c.id);
+    const cSorted = cParts.map((p) => Number(p.seller_id)).sort((a, b) => a - b).join(',');
+    if (cSorted !== sortedPids) continue;
+    const who = c.creator_name || 'alguém da equipe';
+    const isAdmin = c.created_by !== null && !(await db.get("SELECT id FROM users WHERE id=? AND role='seller'", c.created_by));
+    const origem = isAdmin ? 'o admin' : 'sua colega de venda';
+    return res.status(409).json({ error: `Essa venda já foi cadastrada por ${who} (${origem}). Não cadastre novamente — ela já aparece no seu histórico.` });
+  }
+
   let credit;
   try { credit = db.creditForParticipants(pids.length); }
   catch (e) { return res.status(400).json({ error: e.message }); }
