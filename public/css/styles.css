@@ -154,6 +154,17 @@ body.seller-home #app{padding-top:0}
 .hist-filters .mini-pills{justify-content:flex-start}
 .search-row{display:flex;gap:8px;margin:10px 0}
 .search-row select{flex:1}
+/* ---------- splash SellDay (só na abertura) ---------- */
+#splash{position:fixed;inset:0;z-index:100;background:var(--brand);display:grid;place-items:center;overflow:hidden}
+.splash-inner{text-align:center;padding:0 24px;transition:opacity .3s ease}
+.splash-logo{font-size:64px;line-height:1;letter-spacing:.01em}
+.s-sell{font-family:Allura,cursive;color:#fff}
+.s-day{font-family:'Yeseva One',serif;color:var(--lime)}
+.splash-tag{font-family:'Open Sans',sans-serif;font-style:italic;color:#fff;font-size:15px;margin-top:14px}
+.splash-circle{position:absolute;left:50%;top:50%;width:220vmax;height:220vmax;border-radius:50%;background:var(--lime);transform:translate(-50%,-50%) scale(0)}
+#splash.leaving .splash-inner{opacity:0}
+#splash.expand .splash-circle{transform:translate(-50%,-50%) scale(1);transition:transform .75s cubic-bezier(.3,.7,.3,1)}
+#splash.done{opacity:0;transition:opacity .4s ease;pointer-events:none}
 /* ---------- animações (só home da vendedora) ---------- */
 @keyframes riseIn{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
 #homeList .sli{animation:riseIn .5s cubic-bezier(.2,.7,.3,1) both}

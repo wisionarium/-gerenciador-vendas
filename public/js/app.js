@@ -969,6 +969,21 @@ function modalUser(u, reload) {
   };
 }
 
+// ---------- SPLASH (só na abertura do app) ----------
+(function splash() {
+  const el = document.getElementById('splash');
+  if (!el) return;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const exit = () => {
+    if (reduce) { el.remove(); return; }
+    el.classList.add('leaving');
+    setTimeout(() => el.classList.add('expand'), 320);
+    setTimeout(() => el.classList.add('done'), 1150);
+    setTimeout(() => el.remove(), 1600);
+  };
+  setTimeout(exit, 3000);
+})();
+
 // ---------- PWA ----------
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
