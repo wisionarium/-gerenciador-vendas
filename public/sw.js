@@ -1,4 +1,4 @@
-const CACHE = 'equipe-comercial-v12';
+const CACHE = 'equipe-comercial-v13';
 const CORE = ['/', '/index.html', '/css/styles.css', '/js/app.js', '/manifest.webmanifest', '/icons/icon.svg'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
