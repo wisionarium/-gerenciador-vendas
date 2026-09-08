@@ -861,28 +861,42 @@ async function viewReport(app) {
   app.innerHTML = `<h2 style="margin:4px 0">Relatório do dia</h2><div class="card"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}"><div style="height:10px"></div><button class="btn btn-primary" id="rGo">Gerar</button></div><div id="rBody" style="margin-top:12px"></div>`;
   const load = async () => {
     const date = $('#rDate').value || t;
-    const { summary, ranking } = await api(`/api/report/daily?date=${date}`);
-    const medals = ['🥇', '🥈', '🥉'];
+    const { summary, details } = await api(`/api/report/daily?date=${date}`);
+    const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''} (${s.channel})`;
     const msg =
-      `📊 *RELATÓRIO COMERCIAL — ${fmtDateBR(date)}*\n\n📞 Chamadas: ${fmtInt(summary.calls)}\n🛵 Vendas: ${fmtV(summary.salesCredit)}\n\n💬 WhatsApp: ${fmtV(summary.whatsapp)}\n🖥️ CRM: ${fmtV(summary.crm)}\n\n🏆 *DESTAQUES DO DIA*\n\n` +
-      (ranking.slice(0, 5).map((r, i) => `${medals[i] || '•'} ${r.name} — ${fmtV(r.sales)} vendas`).join('\n') || 'Sem vendas no dia.') +
-      `\n\n📈 Conversão: ${fmtPct(summary.conversion)}\n\nExcelente trabalho, equipe! 🚀`;
+      `*RELATÓRIO COMERCIAL - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}\nConversão: ${fmtPct(summary.conversion)}` +
+      details.map((d) => `\n\n*${d.name.toUpperCase()} - ${fmtV(d.credit)} vendas - ${fmtInt(d.calls)} chamadas*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
       <div class="card">
-        <h3 style="margin:0">📊 RELATÓRIO COMERCIAL</h3>
-        <p class="muted">Data: ${fmtDateBR(date)}</p>
+        <h3 style="margin:0">Relatório comercial</h3>
+        <p class="muted">Data: ${fmtDateBR(date)} • ordem alfabética</p>
         ${kpiCards(summary)}
-        <h4>🏆 Ranking do dia</h4>
-        ${ranking.length ? ranking.map((r, i) => `<div>${medals[i] || '•'} <b>${esc(r.name)}</b> — ${fmtV(r.sales)} vendas <span class="muted">(${fmtInt(r.calls)} chamadas)</span></div>`).join('') : '<div class="empty">Sem vendas neste dia.</div>'}
+        ${details.map((d) => `
+          <div class="sale-card">
+            <div class="row" style="justify-content:space-between;align-items:center">
+              <b>${esc(d.name)}</b>
+              <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
+            </div>
+            ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <span class="chip ${s.channel === 'WhatsApp' ? 'wa' : 'crm'}">${esc(s.channel)}</span></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
+          </div>`).join('')}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999">
         <div style="height:10px"></div>
-        <a class="btn btn-green btn-big" id="waBtn" href="${waLink('')}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">📲 Enviar relatório no WhatsApp</a>
+        <a class="btn btn-green btn-big" id="waBtn" href="${waLink('')}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">Enviar relatório no WhatsApp</a>
         <button class="btn btn-big" id="copyBtn" style="margin-top:8px">Copiar mensagem</button>
+        <button class="btn btn-ghost btn-big" id="prevBtn" style="margin-top:8px">Ver mensagem antes de enviar</button>
+        <pre id="msgPrev" style="display:none;white-space:pre-wrap;font-size:13px;background:#f6f7f9;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:8px;font-family:inherit"></pre>
       </div>`;
     $('#waPhone').oninput = (e) => { $('#waBtn').href = waLink(e.target.value); };
     $('#copyBtn').onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Mensagem copiada!'); };
+    $('#prevBtn').onclick = () => {
+      const p = $('#msgPrev');
+      const show = p.style.display === 'none';
+      p.style.display = show ? 'block' : 'none';
+      if (show) p.textContent = msg;
+      $('#prevBtn').textContent = show ? 'Ocultar mensagem' : 'Ver mensagem antes de enviar';
+    };
   };
   $('#rGo').onclick = load;
   await load();

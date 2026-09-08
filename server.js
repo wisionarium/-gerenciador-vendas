@@ -541,7 +541,22 @@ app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
     return { seller_id: s.id, name: s.name, calls: st.calls, sales: st.salesCredit };
   }));
   const ranking = allRows.filter((r) => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
-  res.json({ date, summary, ranking });
+  // detalhamento alfabético por vendedora (relatório WhatsApp)
+  const details = await Promise.all(sellers.map(async (s) => {
+    const st = await summarize(date, date, s.id);
+    const rows = await db.all(
+      'SELECT s.* FROM sales s JOIN sale_participants spf ON spf.sale_id=s.id AND spf.seller_id=? WHERE s.sale_date=? ORDER BY s.id',
+      s.id, date
+    );
+    const sales = await Promise.all(rows.map(async (sale) => {
+      const full = await saleWithParticipants(sale);
+      const me = full.participants.find((p) => p.seller_id === s.id);
+      const partners = full.participants.filter((p) => p.seller_id !== s.id).map((p) => p.seller_name);
+      return { product: sale.product, channel: sale.channel, credit: Number(me ? me.credit : 0), partners };
+    }));
+    return { seller_id: s.id, name: s.name, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
+  }));
+  res.json({ date, summary, ranking, details });
 }));
 
 // SPA fallback
