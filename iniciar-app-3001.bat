@@ -3,7 +3,7 @@ TITLE Gerenciador de Vendas - SERVIDOR (NAO FECHAR ESTA JANELA)
 cd /d "%~dp0"
 set PORT=3001
 echo ============================================
-echo  Gerenciador de Vendas - Equipe Comercial
+echo  SellDay - Controle de Vendas
 echo ============================================
 where node >nul 2>&1
 if errorlevel 1 (

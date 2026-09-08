@@ -1,6 +1,6 @@
 {
-  "name": "Equipe Comercial — Controle de Vendas",
-  "short_name": "Equipe Comercial",
+  "name": "SellDay — Controle de Vendas",
+  "short_name": "SellDay",
   "description": "Controle de chamadas, vendas e desempenho da equipe.",
   "start_url": "/",
   "scope": "/",

@@ -1,4 +1,4 @@
-/* Equipe Comercial PWA — SPA vanilla */
+/* SellDay PWA — SPA vanilla */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 

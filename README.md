@@ -1,4 +1,4 @@
-# Equipe Comercial — PWA Controle de Vendas
+# SellDay — PWA Controle de Vendas
 
 PWA simples para controle de chamadas, vendas e desempenho de equipe de vendedoras.
 
