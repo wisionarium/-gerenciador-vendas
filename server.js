@@ -18,7 +18,7 @@ const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 // ---------- helpers ----------
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !isNaN(Date.parse(s));
-const toPublicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, active: !!u.active, created_at: u.created_at });
+const toPublicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null });
 
 function signToken(user) {
   return jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
@@ -58,6 +58,22 @@ app.post('/api/auth/login', ah(async (req, res) => {
 
 app.get('/api/me', requireAuth, ah(async (req, res) => {
   res.json({ user: toPublicUser(req.user) });
+}));
+
+// foto de perfil (data URL pequena, redimensionada no app)
+app.put('/api/me/avatar', requireAuth, ah(async (req, res) => {
+  const { avatar, seller_id } = req.body || {};
+  let sid = req.user.id;
+  if (seller_id && req.user.role === 'admin') sid = Number(seller_id);
+  else if (req.user.role !== 'seller') return res.status(403).json({ error: 'Sem permissão.' });
+  if (avatar) {
+    if (typeof avatar !== 'string' || !avatar.startsWith('data:image/') || avatar.length > 200000)
+      return res.status(400).json({ error: 'Imagem inválida. Use uma foto JPG/PNG comum.' });
+  }
+  await db.run('UPDATE users SET avatar_url=? WHERE id=?', avatar || null, sid);
+  const u = await db.get('SELECT * FROM users WHERE id=?', sid);
+  if (!u) return res.status(404).json({ error: 'Usuária não encontrada.' });
+  res.json({ user: toPublicUser(u) });
 }));
 
 // ---------- SELLERS / USERS ----------

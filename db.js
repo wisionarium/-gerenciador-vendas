@@ -118,6 +118,8 @@ const bcrypt = require('bcryptjs');
 
 const ready = (async () => {
   for (const sql of SCHEMA) await run(sql);
+  // migração leve: foto de perfil (ignora se a coluna já existir)
+  try { await run('ALTER TABLE users ADD COLUMN avatar_url TEXT'); } catch {}
   const row = await get('SELECT COUNT(*) AS c FROM users');
   if (Number(row.c) === 0) {
     console.log('[db] Seed inicial...');

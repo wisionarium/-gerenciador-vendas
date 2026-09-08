@@ -108,6 +108,7 @@ window.addEventListener('hashchange', route);
 async function route() {
   setNav();
   const h = location.hash || '#/login';
+  document.body.classList.toggle('seller-home', h === '#/vendedora');
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { location.hash = '#/login'; return; }
@@ -304,8 +305,13 @@ async function viewSeller(app) {
   app.innerHTML = `
     <div class="seller-head">
       <div class="seller-top">
-        <div class="ava">${esc((me.name || '?')[0].toUpperCase())}</div>
-        <div class="seller-hi">Olá, ${esc(me.name.split(' ')[0])}</div>
+        <div class="ava-wrap">
+          <div class="ava">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</div>
+          <button class="ava-cam" id="avaCam" title="Trocar foto">📷</button>
+          <input type="file" id="avaInput" accept="image/*" style="display:none">
+        </div>
+        <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
+        <button class="seller-logout" id="headLogout">Sair</button>
       </div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
       <div class="goal-pill">
@@ -328,6 +334,8 @@ async function viewSeller(app) {
     <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
+  $('#headLogout').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
+  bindAvatar();
   const loadList = async (k) => {
     const r = rangeFor(k);
     try {
@@ -345,6 +353,36 @@ async function viewSeller(app) {
     loadList(b.dataset.k);
   };
   loadList('hoje');
+}
+
+// upload da foto de perfil (redimensiona no celular antes de enviar)
+function bindAvatar() {
+  const inp = $('#avaInput');
+  if (!inp) return;
+  $('#avaCam').onclick = () => inp.click();
+  inp.onchange = () => {
+    const f = inp.files[0]; if (!f) return;
+    if (!f.type.startsWith('image/')) return toast('Escolha um arquivo de imagem.', 'err');
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const S = 160, c = document.createElement('canvas');
+        c.width = c.height = S;
+        const ctx = c.getContext('2d');
+        const sc = Math.max(S / img.width, S / img.height);
+        const w = img.width * sc, hh = img.height * sc;
+        ctx.fillStyle = '#0b3b2c'; ctx.fillRect(0, 0, S, S);
+        ctx.drawImage(img, (S - w) / 2, (S - hh) / 2, w, hh);
+        const url = c.toDataURL('image/jpeg', 0.82);
+        URL.revokeObjectURL(img.src);
+        api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) })
+          .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
+          .catch((e) => toast(e.message, 'err'));
+      } catch { toast('Não foi possível ler a imagem.', 'err'); }
+    };
+    img.onerror = () => toast('Não foi possível ler a imagem.', 'err');
+    img.src = URL.createObjectURL(f);
+  };
 }
 
 // ---------- HISTÓRICO da vendedora (ícone papel) ----------
@@ -691,7 +729,7 @@ async function viewTeam(app) {
     const sellers = users.filter((u) => u.role === 'seller');
     $('#teamBody').innerHTML = sellers.length ? `<div class="card" style="padding:0;overflow:hidden"><table>
       <thead><tr><th>Nome</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-      ${sellers.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></td>
+      ${sellers.map((s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
       <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button></td></tr>`).join('')}
       </tbody></table></div>` : '<div class="card empty">Nenhuma vendedora cadastrada.</div>';
