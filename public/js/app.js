@@ -80,16 +80,16 @@ function setNav() {
   const fab = `<button class="fab" id="fabSale" aria-label="Nova venda">+</button>`;
   if (u.role === 'admin') {
     nav.innerHTML = `
-      <a href="#/admin" data-r="admin">🏠<span class="ico"></span>Início</a>
-      <a href="#/admin/vendas" data-r="vendas">🧾<span></span>Vendas</a>
+      <a href="#/admin" data-r="admin">🏠</a>
+      <a href="#/admin/vendas" data-r="vendas">🧾</a>
       ${fab}
-      <a href="#/admin/relatorio" data-r="relatorio">📊<span></span>Relatório</a>
-      <a href="#/admin/vendedoras" data-r="vendedoras">👥<span></span>Equipe</a>`;
+      <a href="#/admin/relatorio" data-r="relatorio">📊</a>
+      <a href="#/admin/vendedoras" data-r="vendedoras">👥</a>`;
   } else {
     nav.innerHTML = `
-      <a href="#/vendedora" data-r="home">🏠<span></span>Início</a>
+      <a href="#/vendedora" data-r="home">🏠</a>
       ${fab}
-      <a href="#/vendedora/historico" data-r="historico">📄<span></span>Histórico</a>`;
+      <a href="#/vendedora/historico" data-r="historico">📄</a>`;
   }
   const fabBtn = $('#fabSale');
   if (fabBtn) fabBtn.onclick = () => modalEscolhaRegistro();
