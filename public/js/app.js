@@ -125,6 +125,10 @@ async function route() {
     if (h === '#/login' || h === '') return viewLogin(app);
     if (h.startsWith('#/vendedora')) {
       if (u.role !== 'seller' && u.role !== 'admin') throw new Error('Sem permissão.');
+      if (h === '#/vendedora/config') {
+        if (u.role !== 'seller') { location.hash = '#/admin'; return; }
+        return viewConfig(app);
+      }
       if (h === '#/vendedora/historico' || h === '#/vendedora/vendas') return viewHistory(app);
       return viewSeller(app);
     }
@@ -333,7 +337,7 @@ async function viewSeller(app) {
           <input type="file" id="avaInput" accept="image/*" style="display:none">
         </div>
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
-        <button class="seller-logout" id="headLogout">Sair</button>
+        <a class="seller-gear" href="#/vendedora/config" title="Configurações">⚙️</a>
       </div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
       <div class="goal-pill">
@@ -345,7 +349,11 @@ async function viewSeller(app) {
         </button>
       </div>
     </div>
-    <div class="phrase"><div class="phrase-title">Frase do dia:</div><div class="phrase-text">“${esc(phraseRes.text || 'Boas vendas!') }”</div></div>
+    <div class="phrase"><div class="phrase-title">Frase do dia:</div><div class="phrase-text">“${esc(phraseRes.text || 'Boas vendas!') }”</div>
+      ${phraseRes.author ? `<div class="phrase-author">— ${esc(phraseRes.author)}</div>` : ''}
+      ${!phraseRes.author && phraseRes.canWrite ? `<button class="btn btn-accent" id="writePhrase">✍️ Hoje é seu dia! Escrever a frase</button>` : ''}
+      ${!phraseRes.author && !phraseRes.canWrite && phraseRes.drawnSellerName ? `<div class="muted" style="font-size:12px;margin-top:8px">Aguardando ${esc(phraseRes.drawnSellerName.split(' ')[0])} escrever…</div>` : ''}
+    </div>
     <div class="mini-pills" id="homePills">
       <button data-k="hoje" class="on">Hoje</button>
       <button data-k="ontem">Ontem</button>
@@ -356,8 +364,9 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
-  $('#headLogout').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
   bindAvatar();
+  const wp = $('#writePhrase');
+  if (wp) wp.onclick = () => modalPhrase();
   const loadList = async (k) => {
     const r = rangeFor(k);
     try {
@@ -377,14 +386,38 @@ async function viewSeller(app) {
   loadList('hoje');
 }
 
+// ---------- TEMA da vendedora (só verdes, fundo sempre branco) ----------
+function applyThemeVars(t) {
+  if (!t) return;
+  const r = document.documentElement.style;
+  r.setProperty('--brand', t.brand);
+  r.setProperty('--brand-2', t.brand2);
+  r.setProperty('--accent', t.accent);
+  r.setProperty('--brand-soft', t.soft);
+  r.setProperty('--accent-weak', t.weak);
+}
+try {
+  const su = store.user;
+  if (su && su.role === 'seller') {
+    const cached = JSON.parse(localStorage.getItem('ec_theme_' + su.id) || 'null');
+    if (cached) applyThemeVars(cached);
+  }
+} catch { /* sem tema em cache */ }
+async function refreshTheme() {
+  try {
+    if (store.user?.role !== 'seller') return;
+    const { presets, preset } = await api('/api/settings/theme');
+    if (presets[preset]) {
+      applyThemeVars(presets[preset]);
+      localStorage.setItem('ec_theme_' + store.user.id, JSON.stringify(presets[preset]));
+    }
+  } catch { /* mantém padrão */ }
+}
+
 // upload da foto de perfil (redimensiona no celular antes de enviar)
-function bindAvatar() {
-  const inp = $('#avaInput');
-  if (!inp) return;
-  $('#avaCam').onclick = () => inp.click();
-  inp.onchange = () => {
-    const f = inp.files[0]; if (!f) return;
-    if (!f.type.startsWith('image/')) return toast('Escolha um arquivo de imagem.', 'err');
+function processAvatar(file) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) return reject(new Error('Escolha um arquivo de imagem.'));
     const img = new Image();
     img.onload = () => {
       try {
@@ -395,16 +428,107 @@ function bindAvatar() {
         const w = img.width * sc, hh = img.height * sc;
         ctx.fillStyle = '#0b3b2c'; ctx.fillRect(0, 0, S, S);
         ctx.drawImage(img, (S - w) / 2, (S - hh) / 2, w, hh);
-        const url = c.toDataURL('image/jpeg', 0.82);
-        URL.revokeObjectURL(img.src);
-        api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) })
-          .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
-          .catch((e) => toast(e.message, 'err'));
-      } catch { toast('Não foi possível ler a imagem.', 'err'); }
+        resolve(c.toDataURL('image/jpeg', 0.82));
+      } catch { reject(new Error('Não foi possível ler a imagem.')); }
+      URL.revokeObjectURL(img.src);
     };
-    img.onerror = () => toast('Não foi possível ler a imagem.', 'err');
-    img.src = URL.createObjectURL(f);
+    img.onerror = () => reject(new Error('Não foi possível ler a imagem.'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+function bindAvatar() {
+  const inp = $('#avaInput');
+  if (!inp) return;
+  $('#avaCam').onclick = () => inp.click();
+  inp.onchange = () => {
+    const f = inp.files[0]; if (!f) return;
+    processAvatar(f)
+      .then((url) => api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) }))
+      .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
+      .catch((e) => toast(e.message, 'err'));
   };
+}
+
+function modalPhrase() {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">Frase de hoje ✍️</h3>
+    <p class="muted" style="font-size:13px">Você foi sorteada! Escreva algo para inspirar a equipe (máx. 140 caracteres).</p>
+    <form id="fPhrase">
+      <label>Sua frase</label>
+      <textarea id="phText" rows="3" maxlength="140" placeholder="Ex: Hoje é dia de recorde!" style="width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:14px;font-size:15px;font-family:inherit" required></textarea>
+      <div class="muted" style="font-size:12px;text-align:right"><span id="phCount">0</span>/140</div>
+      <div style="height:8px"></div>
+      <button class="btn btn-primary btn-big" type="submit">Publicar frase</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#phText').oninput = (e) => { $('#phCount').textContent = e.target.value.length; };
+  $('#fPhrase').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/phrases/daily', { method: 'POST', body: JSON.stringify({ text: $('#phText').value }) });
+      closeModal(); toast('Frase publicada! 💚'); route();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+// ---------- CONFIGURAÇÕES da vendedora ----------
+async function viewConfig(app) {
+  const me = store.user;
+  app.innerHTML = `
+    <a href="#/vendedora" class="muted" style="font-size:13px">← Voltar</a>
+    <h2 style="margin:6px 0">Configurações</h2>
+    <div class="card">
+      <div class="row" style="align-items:center;flex-wrap:nowrap">
+        <div class="ava-wrap">
+          <div class="ava" style="width:64px;height:64px;font-size:26px">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</div>
+        </div>
+        <div style="flex:1"><b>${esc(me.name)}</b><br><span class="muted" style="font-size:12px">${esc(me.email)}</span></div>
+      </div>
+      <div style="height:10px"></div>
+      <button class="btn btn-big" id="cfgPhoto">📷 Trocar foto de perfil</button>
+      <input type="file" id="cfgAvaInput" accept="image/*" style="display:none">
+    </div>
+    <h3 class="section-title">Tema do app</h3>
+    <div class="card">
+      <div class="check-list" id="themeGrid"><p class="muted">Carregando…</p></div>
+      <p class="muted" style="font-size:12px">Só tons de verde. O fundo fica sempre branco e os textos sempre legíveis.</p>
+    </div>
+    <div style="height:14px"></div>
+    <button class="btn btn-big" id="cfgLogout">Sair da conta</button>
+    <div class="foot">Desenvolvido pela Wisionarium</div>
+  `;
+  $('#cfgPhoto').onclick = () => $('#cfgAvaInput').click();
+  $('#cfgAvaInput').onchange = () => {
+    const f = $('#cfgAvaInput').files[0]; if (!f) return;
+    processAvatar(f)
+      .then((url) => api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) }))
+      .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
+      .catch((e) => toast(e.message, 'err'));
+  };
+  $('#cfgLogout').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
+  try {
+    const { presets, preset } = await api('/api/settings/theme');
+    $('#themeGrid').innerHTML = Object.entries(presets).map(([id, t]) => `
+      <div class="check ${id === preset ? 'on' : ''}" data-theme="${id}">
+        <span class="swdot" style="background:linear-gradient(135deg, ${t.brand} 50%, ${t.accent} 50%)"></span>${esc(t.name)}
+      </div>`).join('');
+    $('#themeGrid').onclick = async (e) => {
+      const c = e.target.closest('[data-theme]'); if (!c) return;
+      try {
+        const { theme } = await api('/api/settings/theme', { method: 'PUT', body: JSON.stringify({ preset: c.dataset.theme }) });
+        applyThemeVars(theme);
+        localStorage.setItem('ec_theme_' + me.id, JSON.stringify(theme));
+        $$('#themeGrid .check').forEach((x) => x.classList.toggle('on', x === c));
+        toast('Tema aplicado! 💚');
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  } catch (e) {
+    $('#themeGrid').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
 }
 
 // ---------- HISTÓRICO da vendedora (ícone papel) ----------
@@ -857,6 +981,7 @@ if ('serviceWorker' in navigator) {
       store.user = user;
     } catch { store.token = null; store.user = null; }
   }
+  refreshTheme();
   if (!location.hash) location.hash = store.user ? (store.user.role === 'admin' ? '#/admin' : '#/vendedora') : '#/login';
   route();
 })();

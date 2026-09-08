@@ -169,13 +169,86 @@ app.put('/api/goals', requireAuth, ah(async (req, res) => {
   res.json({ month, target, seller_id: sid });
 }));
 
+// ---------- THEME (só tons de verde, fundo sempre branco) ----------
+const THEME_PRESETS = {
+  padrao:    { name: 'Padrão',     brand: '#0b3b2c', brand2: '#12503c', accent: '#1e6b4e', soft: '#e7f0e8', weak: '#e2efe5' },
+  floresta:  { name: 'Floresta',   brand: '#0a2a20', brand2: '#143f2d', accent: '#2f7d4e', soft: '#e6f0e6', weak: '#dff0e2' },
+  esmeralda: { name: 'Esmeralda',  brand: '#064e3b', brand2: '#0a6b4f', accent: '#0e9f6e', soft: '#e1f3ea', weak: '#d9f0e3' },
+  musgo:     { name: 'Musgo',      brand: '#1a2e1f', brand2: '#2e4d31', accent: '#4d7c4d', soft: '#e9efe3', weak: '#e2eddc' },
+  menta:     { name: 'Menta',      brand: '#083f3a', brand2: '#0e5a52', accent: '#0d9488', soft: '#e1f2ee', weak: '#d9efe8' },
+  lima:      { name: 'Lima Noite', brand: '#1c2f12', brand2: '#314d1c', accent: '#4d7c0f', soft: '#eef3de', weak: '#e7f0d4' },
+};
+
+app.get('/api/settings/theme', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  const row = await db.get('SELECT * FROM seller_settings WHERE seller_id=?', req.user.id);
+  res.json({ presets: THEME_PRESETS, preset: row ? row.preset : 'padrao' });
+}));
+
+app.put('/api/settings/theme', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  const { preset } = req.body || {};
+  if (!THEME_PRESETS[preset]) return res.status(400).json({ error: 'Tema inválido.' });
+  await db.run(
+    'INSERT INTO seller_settings (seller_id, preset) VALUES (?,?) ON CONFLICT(seller_id) DO UPDATE SET preset=excluded.preset',
+    req.user.id, preset
+  );
+  res.json({ preset, theme: THEME_PRESETS[preset] });
+}));
+
+// rodízio diário: vendedora do dia = rotação entre as ativas
+async function drawnSeller(dateISO) {
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY id");
+  if (!sellers.length) return null;
+  const [y, mo, dd] = dateISO.split('-').map(Number);
+  const n = Math.floor(Date.UTC(y, mo - 1, dd) / 86400000);
+  return sellers[n % sellers.length];
+}
+
+function bankPhrase(list, dateISO) {
+  const [y, mo, dd] = dateISO.split('-').map(Number);
+  const n = Math.floor(Date.UTC(y, mo - 1, dd) / 86400000);
+  return list[n % list.length].text;
+}
+
 // ---------- PHRASES (frase do dia) ----------
 app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
+  const today = todayISO();
+  const drawn = await drawnSeller(today);
+  const dp = await db.get(
+    'SELECT dp.*, u.name AS author_name FROM daily_phrases dp JOIN users u ON u.id=dp.seller_id WHERE dp.date=?', today
+  );
+  if (dp) {
+    return res.json({
+      text: dp.text, author: dp.author_name, authorId: dp.seller_id, date: today,
+      drawnSellerId: drawn ? drawn.id : null, drawnSellerName: drawn ? drawn.name : null,
+      canWrite: drawn ? (req.user.id === drawn.id || req.user.role === 'admin') : false,
+    });
+  }
   const list = await db.all('SELECT * FROM phrases WHERE active=1 ORDER BY id');
-  if (!list.length) return res.json({ text: '' });
-  const now = new Date();
-  const day = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
-  res.json({ text: list[day % list.length].text });
+  res.json({
+    text: list.length ? bankPhrase(list, today) : '', author: null, authorId: null, date: today,
+    drawnSellerId: drawn ? drawn.id : null, drawnSellerName: drawn ? drawn.name : null,
+    canWrite: drawn ? (req.user.id === drawn.id || req.user.role === 'admin') : false,
+  });
+}));
+
+// frase do dia escrita pela sorteada (máx. 140 caracteres)
+app.post('/api/phrases/daily', requireAuth, ah(async (req, res) => {
+  const today = todayISO();
+  const drawn = await drawnSeller(today);
+  if (!drawn) return res.status(400).json({ error: 'Nenhuma vendedora ativa.' });
+  if (req.user.id !== drawn.id && req.user.role !== 'admin')
+    return res.status(403).json({ error: `Hoje é o dia de ${drawn.name} escrever a frase.` });
+  const { text } = req.body || {};
+  const clean = String(text || '').trim();
+  if (!clean) return res.status(400).json({ error: 'Escreva a frase.' });
+  if (clean.length > 140) return res.status(400).json({ error: `Máximo de 140 caracteres (tem ${clean.length}).` });
+  await db.run(
+    'INSERT INTO daily_phrases (date, seller_id, text) VALUES (?,?,?) ON CONFLICT(date) DO UPDATE SET text=excluded.text, seller_id=excluded.seller_id',
+    today, req.user.id, clean
+  );
+  res.status(201).json({ ok: true });
 }));
 
 app.get('/api/phrases', requireAuth, requireAdmin, ah(async (req, res) => {

@@ -66,6 +66,18 @@ const SCHEMA = [
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // tema da vendedora (só tons de verde, fundo sempre branco)
+  `CREATE TABLE IF NOT EXISTS seller_settings (
+    seller_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    preset TEXT NOT NULL DEFAULT 'padrao'
+  )`,
+  // frase do dia escrita em rodízio pelas vendedoras
+  `CREATE TABLE IF NOT EXISTS daily_phrases (
+    date TEXT PRIMARY KEY,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 let all;
