@@ -865,7 +865,7 @@ async function viewReport(app) {
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''} (${s.channel})`;
     const msg =
       `*RELATÓRIO COMERCIAL - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}\nConversão: ${fmtPct(summary.conversion)}` +
-      details.map((d) => `\n\n*${d.name.toUpperCase()} - ${fmtV(d.credit)} vendas - ${fmtInt(d.calls)} chamadas*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
+      details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - ${fmtV(d.credit)} vendas - ${fmtInt(d.calls)} chamadas*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
       <div class="card">
@@ -875,7 +875,7 @@ async function viewReport(app) {
         ${details.map((d) => `
           <div class="sale-card">
             <div class="row" style="justify-content:space-between;align-items:center">
-              <b>${esc(d.name)}</b>
+              <b>${esc(d.name)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</b>
               <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
             </div>
             ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <span class="chip ${s.channel === 'WhatsApp' ? 'wa' : 'crm'}">${esc(s.channel)}</span></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}

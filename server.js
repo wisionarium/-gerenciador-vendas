@@ -541,8 +541,9 @@ app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
     return { seller_id: s.id, name: s.name, calls: st.calls, sales: st.salesCredit };
   }));
   const ranking = allRows.filter((r) => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
-  // detalhamento alfabético por vendedora (relatório WhatsApp)
-  const details = await Promise.all(sellers.map(async (s) => {
+  // detalhamento alfabético por vendedora (relatório WhatsApp) — inclui todas, mesmo zeradas
+  const roster = await db.all("SELECT * FROM users WHERE role='seller' ORDER BY name");
+  const details = await Promise.all(roster.map(async (s) => {
     const st = await summarize(date, date, s.id);
     const rows = await db.all(
       'SELECT s.* FROM sales s JOIN sale_participants spf ON spf.sale_id=s.id AND spf.seller_id=? WHERE s.sale_date=? ORDER BY s.id',
@@ -554,7 +555,7 @@ app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
       const partners = full.participants.filter((p) => p.seller_id !== s.id).map((p) => p.seller_name);
       return { product: sale.product, channel: sale.channel, credit: Number(me ? me.credit : 0), partners };
     }));
-    return { seller_id: s.id, name: s.name, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
+    return { seller_id: s.id, name: s.name, active: !!s.active, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
   }));
   res.json({ date, summary, ranking, details });
 }));
