@@ -132,6 +132,10 @@ const ready = (async () => {
   for (const sql of SCHEMA) await run(sql);
   // migração leve: foto de perfil (ignora se a coluna já existir)
   try { await run('ALTER TABLE users ADD COLUMN avatar_url TEXT'); } catch {}
+  // migração leve: tema em duas cores (ignora se já existir)
+  try { await run('ALTER TABLE seller_settings ADD COLUMN theme_dark TEXT'); } catch {}
+  try { await run('ALTER TABLE seller_settings ADD COLUMN theme_light TEXT'); } catch {}
+  await run("UPDATE seller_settings SET theme_dark='verde', theme_light='classico' WHERE theme_dark IS NULL OR theme_light IS NULL");
   const row = await get('SELECT COUNT(*) AS c FROM users');
   if (Number(row.c) === 0) {
     console.log('[db] Seed inicial...');

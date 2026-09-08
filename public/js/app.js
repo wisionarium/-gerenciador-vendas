@@ -395,6 +395,7 @@ function applyThemeVars(t) {
   r.setProperty('--accent', t.accent);
   r.setProperty('--brand-soft', t.soft);
   r.setProperty('--accent-weak', t.weak);
+  r.setProperty('--on-accent', t.onAccent || '#fff');
 }
 try {
   const su = store.user;
@@ -406,10 +407,10 @@ try {
 async function refreshTheme() {
   try {
     if (store.user?.role !== 'seller') return;
-    const { presets, preset } = await api('/api/settings/theme');
-    if (presets[preset]) {
-      applyThemeVars(presets[preset]);
-      localStorage.setItem('ec_theme_' + store.user.id, JSON.stringify(presets[preset]));
+    const { theme } = await api('/api/settings/theme');
+    if (theme) {
+      applyThemeVars(theme);
+      localStorage.setItem('ec_theme_' + store.user.id, JSON.stringify(theme));
     }
   } catch { /* mantém padrão */ }
 }
@@ -492,10 +493,14 @@ async function viewConfig(app) {
       <button class="btn btn-big" id="cfgPhoto">📷 Trocar foto de perfil</button>
       <input type="file" id="cfgAvaInput" accept="image/*" style="display:none">
     </div>
-    <h3 class="section-title">Tema do app</h3>
+    <h3 class="section-title">Cor principal (fundo escuro)</h3>
     <div class="card">
-      <div class="check-list" id="themeGrid"><p class="muted">Carregando…</p></div>
-      <p class="muted" style="font-size:12px">Só tons de verde. O fundo fica sempre branco e os textos sempre legíveis.</p>
+      <div class="check-list" id="darkGrid"><p class="muted">Carregando…</p></div>
+    </div>
+    <h3 class="section-title">Cor detalhe (clara)</h3>
+    <div class="card">
+      <div class="check-list" id="lightGrid"><p class="muted">Carregando…</p></div>
+      <p class="muted" style="font-size:12px">Sem branco: o fundo fica sempre branco e os textos se ajustam sozinhos.</p>
     </div>
     <div style="height:14px"></div>
     <button class="btn btn-big" id="cfgLogout">Sair da conta</button>
@@ -511,23 +516,38 @@ async function viewConfig(app) {
   };
   $('#cfgLogout').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
   try {
-    const { presets, preset } = await api('/api/settings/theme');
-    $('#themeGrid').innerHTML = Object.entries(presets).map(([id, t]) => `
-      <div class="check ${id === preset ? 'on' : ''}" data-theme="${id}">
-        <span class="swdot" style="background:linear-gradient(135deg, ${t.brand} 50%, ${t.accent} 50%)"></span>${esc(t.name)}
-      </div>`).join('');
-    $('#themeGrid').onclick = async (e) => {
-      const c = e.target.closest('[data-theme]'); if (!c) return;
+    const { darks, lights, dark, light } = await api('/api/settings/theme');
+    const paint = (gridId, map, current, colorOf) => {
+      $('#' + gridId).innerHTML = Object.entries(map).map(([id, t]) => `
+        <div class="check ${id === current ? 'on' : ''}" data-v="${id}">
+          <span class="swdot" style="background:${colorOf(t)}"></span>${esc(t.name)}
+        </div>`).join('');
+    };
+    let selDark = dark, selLight = light;
+    const save = async () => {
       try {
-        const { theme } = await api('/api/settings/theme', { method: 'PUT', body: JSON.stringify({ preset: c.dataset.theme }) });
+        const { theme } = await api('/api/settings/theme', { method: 'PUT', body: JSON.stringify({ dark: selDark, light: selLight }) });
         applyThemeVars(theme);
         localStorage.setItem('ec_theme_' + me.id, JSON.stringify(theme));
-        $$('#themeGrid .check').forEach((x) => x.classList.toggle('on', x === c));
         toast('Tema aplicado! 💚');
       } catch (err) { toast(err.message, 'err'); }
     };
+    paint('darkGrid', darks, selDark, (t) => `linear-gradient(135deg, ${t.brand} 50%, ${t.brand2} 50%)`);
+    paint('lightGrid', lights, selLight, (t) => `linear-gradient(135deg, ${t.accent} 50%, ${t.soft} 50%)`);
+    const mark = () => {
+      $$('#darkGrid .check').forEach((x) => x.classList.toggle('on', x.dataset.v === selDark));
+      $$('#lightGrid .check').forEach((x) => x.classList.toggle('on', x.dataset.v === selLight));
+    };
+    $('#darkGrid').onclick = (e) => {
+      const c = e.target.closest('[data-v]'); if (!c) return;
+      selDark = c.dataset.v; mark(); save();
+    };
+    $('#lightGrid').onclick = (e) => {
+      const c = e.target.closest('[data-v]'); if (!c) return;
+      selLight = c.dataset.v; mark(); save();
+    };
   } catch (e) {
-    $('#themeGrid').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    $('#darkGrid').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
 
