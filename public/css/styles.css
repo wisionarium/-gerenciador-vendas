@@ -108,3 +108,33 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
 .check.on{background:var(--accent-weak);border-color:var(--accent)}
 .delta-up{color:var(--green);font-weight:800}.delta-down{color:var(--red);font-weight:800}
 .mono{font-variant-numeric:tabular-nums}
+/* ---------- home da vendedora (layout Canva) ---------- */
+.seller-head{background:linear-gradient(165deg,var(--brand-2),var(--brand));border-radius:0 0 32px 32px;padding:20px 20px 26px;color:#fff;margin:-16px -16px 0}
+.seller-top{display:flex;align-items:center;gap:12px}
+.ava{width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#e6f2b8,#a4c98d);display:grid;place-items:center;font-weight:800;font-size:22px;color:#0b3b2c;flex:none}
+.seller-hi{font-size:20px;font-weight:800}
+.seller-motiv{text-align:center;font-size:23px;font-weight:800;margin:16px 0 14px;letter-spacing:-.01em}
+.goal-pill{background:#fff;border-radius:24px;display:flex;color:var(--ink);overflow:hidden;box-shadow:var(--shadow)}
+.goal-left{flex:1.5;padding:12px 8px;text-align:center}
+.goal-div{width:1px;background:var(--line);margin:12px 0}
+.goal-right{flex:1;padding:12px 8px;text-align:center;border:none;background:transparent;cursor:pointer;color:var(--ink);font-family:inherit}
+.goal-lab{font-size:12px;font-weight:700;color:#3c4a43}
+.goal-num{font-size:24px;font-weight:800}
+.goal-hint{font-size:10px;color:var(--muted)}
+.phrase{margin:20px 6px 6px;text-align:center}
+.phrase-title{font-size:12px;color:var(--muted)}
+.phrase-text{font-style:italic;font-size:15px;line-height:1.5;margin-top:4px}
+.mini-pills{display:flex;gap:10px;justify-content:center;margin:16px 0 14px}
+.mini-pills button{border:none;background:#e7ede8;color:#3c4a43;font-weight:800;font-size:13px;padding:9px 20px;border-radius:999px;cursor:pointer}
+.mini-pills button.on{background:var(--lime);color:var(--lime-ink)}
+.sli{background:#f0f4f0;border-radius:16px;padding:12px 14px;margin-bottom:10px;display:flex;gap:10px;align-items:flex-start}
+.sli-mid{flex:1;min-width:0}
+.sli-mid b{display:block;font-size:14px}
+.sli-mid span{font-size:12px;color:var(--muted)}
+.sli-side{text-align:right;flex:none}
+.sli-credit{font-weight:800;font-size:15px}
+.sli-parts{font-size:11px;color:var(--muted);max-width:130px}
+.foot{text-align:center;color:var(--muted);font-size:11px;margin:20px 0 6px}
+.hist-filters .mini-pills{justify-content:flex-start}
+.search-row{display:flex;gap:8px;margin:10px 0}
+.search-row select{flex:1}

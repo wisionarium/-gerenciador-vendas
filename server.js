@@ -122,6 +122,74 @@ app.patch('/api/users/:id/status', requireAuth, requireAdmin, ah(async (req, res
   res.json({ user: toPublicUser(u) });
 }));
 
+// ---------- GOALS (meta mensal da vendedora) ----------
+const monthKey = (d = new Date()) => d.toISOString().slice(0, 7);
+
+app.get('/api/goals/me', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  const month = req.query.month || monthKey();
+  const g = await db.get('SELECT * FROM seller_goals WHERE seller_id=? AND month=?', req.user.id, month);
+  res.json({ month, target: g ? Number(g.target) : null });
+}));
+
+app.put('/api/goals', requireAuth, ah(async (req, res) => {
+  let { month, target, seller_id } = req.body || {};
+  month = month || monthKey();
+  target = Number(target);
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido.' });
+  if (!Number.isFinite(target) || target < 0 || target > 100000)
+    return res.status(400).json({ error: 'Meta deve ser entre 0 e 100000.' });
+  let sid = req.user.id;
+  if (req.user.role === 'admin') {
+    if (!seller_id) return res.status(400).json({ error: 'Selecione a vendedora.' });
+    sid = Number(seller_id);
+  } else if (req.user.role !== 'seller') {
+    return res.status(403).json({ error: 'Sem permissão.' });
+  }
+  await db.run(
+    'INSERT INTO seller_goals (seller_id, month, target) VALUES (?,?,?) ON CONFLICT(seller_id, month) DO UPDATE SET target=excluded.target',
+    sid, month, target
+  );
+  res.json({ month, target, seller_id: sid });
+}));
+
+// ---------- PHRASES (frase do dia) ----------
+app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
+  const list = await db.all('SELECT * FROM phrases WHERE active=1 ORDER BY id');
+  if (!list.length) return res.json({ text: '' });
+  const now = new Date();
+  const day = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
+  res.json({ text: list[day % list.length].text });
+}));
+
+app.get('/api/phrases', requireAuth, requireAdmin, ah(async (req, res) => {
+  res.json({ phrases: await db.all('SELECT * FROM phrases ORDER BY id') });
+}));
+
+app.post('/api/phrases', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { text } = req.body || {};
+  if (!text?.trim()) return res.status(400).json({ error: 'Texto obrigatório.' });
+  const r = await db.run('INSERT INTO phrases (text, active) VALUES (?,1)', text.trim());
+  res.status(201).json({ phrase: await db.get('SELECT * FROM phrases WHERE id=?', r.lastInsertRowid) });
+}));
+
+app.patch('/api/phrases/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const row = await db.get('SELECT * FROM phrases WHERE id=?', req.params.id);
+  if (!row) return res.status(404).json({ error: 'Frase não encontrada.' });
+  const { text, active } = req.body || {};
+  if (text != null) {
+    if (!String(text).trim()) return res.status(400).json({ error: 'Texto obrigatório.' });
+    await db.run('UPDATE phrases SET text=? WHERE id=?', String(text).trim(), row.id);
+  }
+  if (active != null) await db.run('UPDATE phrases SET active=? WHERE id=?', active ? 1 : 0, row.id);
+  res.json({ phrase: await db.get('SELECT * FROM phrases WHERE id=?', row.id) });
+}));
+
+app.delete('/api/phrases/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  await db.run('DELETE FROM phrases WHERE id=?', req.params.id);
+  res.json({ ok: true });
+}));
+
 // ---------- CALLS ----------
 app.get('/api/calls', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id } = req.query;

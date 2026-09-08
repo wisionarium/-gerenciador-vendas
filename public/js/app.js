@@ -89,7 +89,7 @@ function setNav() {
     nav.innerHTML = `
       <a href="#/vendedora" data-r="home">🏠<span></span>Início</a>
       ${fab}
-      <a href="#/vendedora/vendas" data-r="minhas">🧾<span></span>Vendas</a>`;
+      <a href="#/vendedora/historico" data-r="historico">📄<span></span>Histórico</a>`;
   }
   const fabBtn = $('#fabSale');
   if (fabBtn) fabBtn.onclick = () => modalEscolhaRegistro();
@@ -117,7 +117,7 @@ async function route() {
     if (h === '#/login' || h === '') return viewLogin(app);
     if (h.startsWith('#/vendedora')) {
       if (u.role !== 'seller' && u.role !== 'admin') throw new Error('Sem permissão.');
-      if (h === '#/vendedora/vendas') return viewMySales(app);
+      if (h === '#/vendedora/historico' || h === '#/vendedora/vendas') return viewHistory(app);
       return viewSeller(app);
     }
     if (h.startsWith('#/admin')) {
@@ -232,59 +232,165 @@ function txRow(s, meId) {
   </div>`;
 }
 
-// ---------- SELLER ----------
-async function viewSeller(app) {
+// linha estilo Canva p/ lista da vendedora (com nomes das participantes)
+function sliRow(s, meId) {
+  const names = (s.participants || []).map((p) => p.seller_name).join(', ');
+  const mine = (s.participants || []).filter((p) => p.seller_id === meId).reduce((a, p) => a + Number(p.credit), 0);
+  return `
+  <div class="sli">
+    <div class="sli-mid"><b>${esc(s.customer_name)}</b><span>${esc(s.product)} - ${esc(s.color)} - ${fmtDateBR(s.sale_date)}</span></div>
+    <div class="sli-side"><div class="sli-credit">+${fmtV(mine)}</div><div class="sli-parts">${esc(names)}</div></div>
+  </div>`;
+}
+
+function rangeFor(k) {
   const t = todayISO();
-  const m = monthRange(0), pm = monthRange(-1);
+  if (k === 'hoje') return { from: t, to: t, label: 'Hoje' };
+  if (k === 'ontem') {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    const y = d.toISOString().slice(0, 10);
+    return { from: y, to: y, label: 'Ontem' };
+  }
+  return { ...weekRange(), label: 'Semana' };
+}
+
+function motivFor(sales, target) {
+  if (target == null || target <= 0) return 'Defina sua meta do mês! 🎯';
+  const p = sales / target;
+  if (p >= 1) return 'Meta batida! 🎉';
+  if (p >= 0.7) return 'Estamos quase lá!';
+  if (p > 0) return 'Bom começo, vamos subir! 🚀';
+  return 'Um novo dia, novas vendas! 💪';
+}
+
+function modalGoal(current, month) {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">Minha meta de ${month.slice(5, 7)}/${month.slice(0, 4)}</h3>
+    <p class="muted" style="font-size:13px">Quantas vendas você quer fazer neste mês?</p>
+    <form id="fGoal">
+      <label>Meta (vendas)</label>
+      <input id="gVal" type="number" min="0" max="100000" step="0.5" value="${current ?? ''}" placeholder="Ex: 50" required>
+      <div style="height:12px"></div>
+      <button class="btn btn-primary btn-big" type="submit">Salvar meta</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fGoal').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/goals', { method: 'PUT', body: JSON.stringify({ month, target: Number($('#gVal').value) }) });
+      closeModal(); toast('Meta salva!'); route();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+// ---------- SELLER HOME (layout Canva) ----------
+async function viewSeller(app) {
   const me = store.user;
+  const t = todayISO();
+  const m = monthRange(0);
+  const mk = t.slice(0, 7);
   app.innerHTML = `<div class="card"><p class="muted">Carregando…</p></div>`;
-  const [day, month, prev, sellersRes, lastSales] = await Promise.all([
-    api(`/api/stats/summary?from=${t}&to=${t}`),
+  const [monthSum, goalRes, phraseRes] = await Promise.all([
     api(`/api/stats/summary?from=${m.from}&to=${m.to}`),
-    api(`/api/stats/summary?from=${pm.from}&to=${pm.to}`),
-    api('/api/sellers'),
-    api(`/api/sales?from=${m.from}&to=${m.to}`),
+    api(`/api/goals/me?month=${mk}`),
+    api('/api/phrases/today'),
   ]);
-  const delta = prev.salesCredit > 0 ? ((month.salesCredit - prev.salesCredit) / prev.salesCredit) * 100 : null;
+  const target = goalRes.target;
   app.innerHTML = `
-    <div class="hero">
-      <div class="hero-hi">Olá, ${esc(me.name)} 👋</div>
-      <div class="hero-label" id="heroLabel">Minhas vendas hoje</div>
-      <div class="hero-value mono" id="heroValue">${fmtV(day.salesCredit)}</div>
-      <div class="hero-sub" id="heroSub">${fmtInt(day.calls)} chamadas • Conversão ${fmtPct(day.conversion)}</div>
-      <div class="hero-actions">
-        <button class="btn-lime" id="btnCalls">📞 Chamadas</button>
-        <button class="btn-lime" id="btnSale">+ Venda</button>
+    <div class="seller-head">
+      <div class="seller-top">
+        <div class="ava">${esc((me.name || '?')[0].toUpperCase())}</div>
+        <div class="seller-hi">Olá, ${esc(me.name.split(' ')[0])}</div>
       </div>
-      <div class="hero-tabs" id="heroTabs">
-        <button data-p="hoje" class="on">Hoje</button>
-        <button data-p="mes">Este mês</button>
-      </div>
-    </div>
-    <h3 class="section-title">Mês atual x mês anterior</h3>
-    <div class="card">
-      <div class="row" style="justify-content:space-between">
-        <div><div class="muted" style="font-size:12px">ESTE MÊS</div><b class="mono" style="font-size:22px">${fmtV(month.salesCredit)} vendas</b><div class="muted">${fmtInt(month.calls)} chamadas • ${fmtPct(month.conversion)}</div></div>
-        <div style="text-align:right"><div class="muted" style="font-size:12px">MÊS PASSADO</div><b class="mono" style="font-size:22px">${fmtV(prev.salesCredit)}</b><div class="${delta != null && delta >= 0 ? 'delta-up' : 'delta-down'}">${delta == null ? '—' : (delta >= 0 ? '↑ ' : '↓ ') + fmtPct(Math.abs(delta)).replace('%', '') + '%'}</div></div>
+      <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
+      <div class="goal-pill">
+        <div class="goal-left"><div class="goal-lab">Vendas deste mês:</div><div class="goal-num mono">${fmtV(monthSum.salesCredit)}</div></div>
+        <div class="goal-div"></div>
+        <button class="goal-right" id="goalEdit" title="Definir minha meta">
+          <div class="goal-lab">Meta</div>
+          <div class="goal-num mono">${target == null ? '—' : fmtV(target)}</div>
+          <div class="goal-hint">toque para definir ✎</div>
+        </button>
       </div>
     </div>
-    <div class="section-head"><h3 class="section-title">Últimas vendas</h3><a class="link-more" href="#/vendedora/vendas">Ver tudo</a></div>
-    <div id="lastSales">${lastSales.sales.length ? lastSales.sales.slice(0, 6).map((s) => txRow(s, me.id)).join('') : '<div class="card empty">Nenhuma venda registrada neste mês.</div>'}</div>
+    <div class="phrase"><div class="phrase-title">Frase do dia:</div><div class="phrase-text">“${esc(phraseRes.text || 'Boas vendas!') }”</div></div>
+    <div class="mini-pills" id="homePills">
+      <button data-k="hoje" class="on">Hoje</button>
+      <button data-k="ontem">Ontem</button>
+      <button data-k="semana">Semana</button>
+    </div>
+    <div id="homeList"><div class="card empty">Carregando…</div></div>
+    <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
-  const heroData = {
-    hoje: { label: 'Minhas vendas hoje', v: day.salesCredit, sub: `${fmtInt(day.calls)} chamadas • Conversão ${fmtPct(day.conversion)}` },
-    mes: { label: 'Minhas vendas no mês', v: month.salesCredit, sub: `${fmtInt(month.calls)} chamadas • Conversão ${fmtPct(month.conversion)}` },
+  $('#goalEdit').onclick = () => modalGoal(target, mk);
+  const loadList = async (k) => {
+    const r = rangeFor(k);
+    try {
+      const { sales } = await api(`/api/sales?from=${r.from}&to=${r.to}`);
+      $('#homeList').innerHTML = sales.length
+        ? sales.slice(0, 20).map((s) => sliRow(s, me.id)).join('')
+        : '<div class="card empty">Nenhuma venda neste período.</div>';
+    } catch (e) {
+      $('#homeList').innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
+    }
   };
-  $('#heroTabs').onclick = (e) => {
+  $('#homePills').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
-    $$('#heroTabs button').forEach((x) => x.classList.toggle('on', x === b));
-    const d = heroData[b.dataset.p];
-    $('#heroLabel').textContent = d.label;
-    $('#heroValue').textContent = fmtV(d.v);
-    $('#heroSub').textContent = d.sub;
+    $$('#homePills button').forEach((x) => x.classList.toggle('on', x === b));
+    loadList(b.dataset.k);
   };
-  $('#btnCalls').onclick = () => modalCalls();
-  $('#btnSale').onclick = () => modalSale(sellersRes.sellers);
+  loadList('hoje');
+}
+
+// ---------- HISTÓRICO da vendedora (ícone papel) ----------
+async function viewHistory(app) {
+  const me = store.user;
+  app.innerHTML = `
+    <h2 style="margin:4px 0">Meu histórico</h2>
+    <div class="hist-filters">
+      <div class="mini-pills" id="hPills">
+        <button data-k="hoje" class="on">Hoje</button>
+        <button data-k="ontem">Ontem</button>
+        <button data-k="semana">Semana</button>
+        <button data-k="mes">Mês</button>
+      </div>
+      <div class="search-row">
+        <select id="hChannel"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
+        <input id="hQ" placeholder="Buscar cliente, produto…">
+      </div>
+    </div>
+    <div id="hList"><div class="card empty">Carregando…</div></div>
+    <div class="foot">Desenvolvido pela Wisionarium</div>
+  `;
+  let key = 'hoje';
+  const load = async () => {
+    const r = key === 'mes' ? { ...monthRange(0), label: 'Mês' } : rangeFor(key);
+    const qs = new URLSearchParams({ from: r.from, to: r.to });
+    if ($('#hChannel').value) qs.set('channel', $('#hChannel').value);
+    if ($('#hQ').value.trim()) qs.set('q', $('#hQ').value.trim());
+    try {
+      const { sales } = await api(`/api/sales?${qs}`);
+      const mine = sales.reduce((a, s) => a + s.participants.filter((p) => p.seller_id === me.id).reduce((x, p) => x + Number(p.credit), 0), 0);
+      $('#hList').innerHTML = `
+        <p class="muted" style="margin:4px 0 10px">${r.label} • ${sales.length} registro(s) • <b class="mono">${fmtV(mine)} vendas</b></p>
+        ${sales.length ? sales.map((s) => sliRow(s, me.id)).join('') : '<div class="card empty">Nenhuma venda neste período.</div>'}`;
+    } catch (e) {
+      $('#hList').innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
+    }
+  };
+  $('#hPills').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    $$('#hPills button').forEach((x) => x.classList.toggle('on', x === b));
+    key = b.dataset.k; load();
+  };
+  $('#hChannel').onchange = load;
+  let deb = null;
+  $('#hQ').oninput = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
+  load();
 }
 
 async function viewMySales(app) {
@@ -602,6 +708,55 @@ async function viewTeam(app) {
   };
   $('#add').onclick = () => modalUser(null, load);
   await load();
+  await loadPhrases();
+}
+
+async function loadPhrases() {
+  const app = $('#app');
+  const box = document.createElement('div');
+  box.id = 'phrasesBox';
+  box.innerHTML = `<h3 class="section-title">Frases motivacionais</h3><div class="card"><p class="muted">Carregando…</p></div>`;
+  app.appendChild(box);
+  const render = async () => {
+    try {
+      const { phrases } = await api('/api/phrases');
+      $('#phrasesBox').innerHTML = `
+        <h3 class="section-title">Frases motivacionais</h3>
+        <div class="card">
+          <form id="fPhrase" class="row" style="flex-wrap:nowrap">
+            <input id="pText" placeholder="Nova frase do dia…" style="flex:1">
+            <button class="btn btn-primary" type="submit">Adicionar</button>
+          </form>
+          <div style="margin-top:10px">${phrases.length ? phrases.map((p) => `
+            <div class="row" style="align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:10px 0">
+              <div style="flex:1;font-size:14px;${p.active ? '' : 'opacity:.5;text-decoration:line-through'}">${esc(p.text)}</div>
+              <button class="btn" data-ptoggle="${p.id}">${p.active ? 'Pausar' : 'Ativar'}</button>
+              <button class="btn btn-ghost" data-pdel="${p.id}">🗑️</button>
+            </div>`).join('') : '<div class="empty">Nenhuma frase cadastrada.</div>'}</div>
+          <p class="muted" style="font-size:12px">Uma frase ativa é sorteada por dia para as vendedoras.</p>
+        </div>`;
+      $('#fPhrase').onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          await api('/api/phrases', { method: 'POST', body: JSON.stringify({ text: $('#pText').value }) });
+          toast('Frase adicionada!'); render();
+        } catch (err) { toast(err.message, 'err'); }
+      };
+      $$('#phrasesBox [data-ptoggle]').forEach((b) => (b.onclick = async () => {
+        const cur = phrases.find((x) => String(x.id) === String(b.dataset.ptoggle));
+        await api(`/api/phrases/${cur.id}`, { method: 'PATCH', body: JSON.stringify({ active: !cur.active }) });
+        render();
+      }));
+      $$('#phrasesBox [data-pdel]').forEach((b) => (b.onclick = async () => {
+        if (!confirm('Excluir esta frase?')) return;
+        await api(`/api/phrases/${b.dataset.pdel}`, { method: 'DELETE' });
+        render();
+      }));
+    } catch (e) {
+      $('#phrasesBox').innerHTML = `<h3 class="section-title">Frases motivacionais</h3><div class="card empty">${esc(e.message)}</div>`;
+    }
+  };
+  render();
 }
 
 function modalUser(u, reload) {

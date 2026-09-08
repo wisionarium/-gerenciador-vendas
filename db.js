@@ -51,6 +51,21 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_part_seller ON sale_participants(seller_id)`,
   `CREATE INDEX IF NOT EXISTS idx_part_sale ON sale_participants(sale_id)`,
+  // meta mensal definida pela própria vendedora
+  `CREATE TABLE IF NOT EXISTS seller_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    target REAL NOT NULL CHECK (target >= 0 AND target <= 100000),
+    UNIQUE (seller_id, month)
+  )`,
+  // frases motivacionais (uma sorteada por dia)
+  `CREATE TABLE IF NOT EXISTS phrases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 let all;
@@ -117,6 +132,23 @@ const ready = (async () => {
     await run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1) ON CONFLICT(email) DO NOTHING',
       'Carla', 'carla@equipe.com', mk('carla123'), 'seller');
     console.log('[db] Seed concluído.');
+  }
+  const ph = await get('SELECT COUNT(*) AS c FROM phrases');
+  if (Number(ph.c) === 0) {
+    const defaults = [
+      'Aqui vai a frase do dia, com coisas boas da vida e tudo mais é isso.',
+      'Cada chamada é uma porta que se abre. Continue batendo.',
+      'Quem planta atendimento, colhe vendas.',
+      'O não de hoje é o sim de amanhã. Persista.',
+      'Vendedora de sucesso não espera cliente: ela cria oportunidade.',
+      'Seu esforço de hoje é o ranking de amanhã.',
+      'Atenda com o coração e venda com a razão.',
+      'Foco, energia e sorriso: a tríade de quem bate meta.',
+      'Uma venda por vez, um recorde por mês.',
+      'A melhor hora para vender foi ontem. A segunda melhor é agora.',
+    ];
+    for (const t of defaults) await run('INSERT INTO phrases (text, active) VALUES (?,1)', t);
+    console.log('[db] Frases seed: ' + defaults.length);
   }
 })();
 
