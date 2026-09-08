@@ -69,9 +69,9 @@ function toast(msg, type = 'ok') {
 
 // ---------- shell / nav ----------
 const ICONS = {
-  home: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5 2 11h3v9h5v-6h4v6h5v-9h3z"/></svg>',
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5V20a1.5 1.5 0 0 1-1.5 1.5H14v-6h-4v6H5.5A1.5 1.5 0 0 1 4 20z"/></svg>',
   tag: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/></svg>',
-  doc: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6v20h12V8l-4-6zm0 6V3.5L18.5 8H14z"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l5 5V20.5H7z"/><path d="M14 3.5V9h5"/></svg>',
   chart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21V10h4v11zm7 0V3h4v18zm7 0v-7h4v7z"/></svg>',
   team: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/></svg>',
 };
@@ -396,6 +396,7 @@ function applyThemeVars(t) {
   r.setProperty('--brand-soft', t.soft);
   r.setProperty('--accent-weak', t.weak);
   r.setProperty('--on-accent', t.onAccent || '#fff');
+  r.setProperty('--lime', t.lime || '#cdf14d');
 }
 try {
   const su = store.user;

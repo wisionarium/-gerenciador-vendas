@@ -175,18 +175,21 @@ const THEME_DARKS = {
   rosa:     { name: 'Rosa',     brand: '#8a1145', brand2: '#ad1c52' },
   roxo:     { name: 'Roxo',     brand: '#4c1d95', brand2: '#5f27b8' },
   caramelo: { name: 'Caramelo', brand: '#6f4a1f', brand2: '#8a5f28' },
+  azul:     { name: 'Azul',     brand: '#1e3a8a', brand2: '#2b4fa3' },
 };
 const THEME_LIGHTS = {
-  classico: { name: 'Clássico', accent: '#1e6b4e', soft: '#e7f0e8', weak: '#e2efe5', onAccent: '#ffffff' },
-  menta:    { name: 'Menta',    accent: '#7cc4a3', soft: '#e9f4ec', weak: '#e2f1e6', onAccent: '#0f1f17' },
-  rosa:     { name: 'Rosa',     accent: '#f2a4c4', soft: '#fdeef4', weak: '#fce7f0', onAccent: '#0f1f17' },
-  lavanda:  { name: 'Lavanda',  accent: '#b9a5f0', soft: '#efe9fd', weak: '#e8e0fb', onAccent: '#0f1f17' },
-  bege:     { name: 'Bege',     accent: '#d9c193', soft: '#faf5e9', weak: '#f4ecda', onAccent: '#0f1f17' },
+  classico: { name: 'Clássico', accent: '#1e6b4e', soft: '#e7f0e8', weak: '#e2efe5', onAccent: '#ffffff', lime: '#cdf14d' },
+  menta:    { name: 'Menta',    accent: '#7cc4a3', soft: '#e9f4ec', weak: '#e2f1e6', onAccent: '#0f1f17', lime: '#34d399' },
+  rosa:     { name: 'Rosa',     accent: '#f2a4c4', soft: '#fdeef4', weak: '#fce7f0', onAccent: '#0f1f17', lime: '#f472b6' },
+  lavanda:  { name: 'Lavanda',  accent: '#b9a5f0', soft: '#efe9fd', weak: '#e8e0fb', onAccent: '#0f1f17', lime: '#a78bfa' },
+  bege:     { name: 'Bege',     accent: '#d9c193', soft: '#faf5e9', weak: '#f4ecda', onAccent: '#0f1f17', lime: '#eab308' },
+  pessego:  { name: 'Pêssego',  accent: '#f2b28c', soft: '#fdf0e4', weak: '#fbe9d7', onAccent: '#0f1f17', lime: '#fb923c' },
+  amarelo:  { name: 'Amarelo',  accent: '#eed36a', soft: '#fbf3da', weak: '#f8eed2', onAccent: '#0f1f17', lime: '#facc15' },
 };
 function mergedTheme(darkId, lightId) {
   const d = THEME_DARKS[darkId] || THEME_DARKS.verde;
   const l = THEME_LIGHTS[lightId] || THEME_LIGHTS.classico;
-  return { brand: d.brand, brand2: d.brand2, accent: l.accent, soft: l.soft, weak: l.weak, onAccent: l.onAccent };
+  return { brand: d.brand, brand2: d.brand2, accent: l.accent, soft: l.soft, weak: l.weak, onAccent: l.onAccent, lime: l.lime };
 }
 
 app.get('/api/settings/theme', requireAuth, ah(async (req, res) => {
