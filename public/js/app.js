@@ -294,10 +294,11 @@ async function viewSeller(app) {
   const m = monthRange(0);
   const mk = t.slice(0, 7);
   app.innerHTML = `<div class="card"><p class="muted">Carregando…</p></div>`;
+  // cada bloco tem fallback: a home nunca trava por causa de um widget
   const [monthSum, goalRes, phraseRes] = await Promise.all([
-    api(`/api/stats/summary?from=${m.from}&to=${m.to}`),
-    api(`/api/goals/me?month=${mk}`),
-    api('/api/phrases/today'),
+    api(`/api/stats/summary?from=${m.from}&to=${m.to}`).catch(() => ({ salesCredit: 0, calls: 0, conversion: null, records: 0, whatsapp: 0, crm: 0 })),
+    api(`/api/goals/me?month=${mk}`).catch(() => ({ target: null })),
+    api('/api/phrases/today').catch(() => ({ text: '' })),
   ]);
   const target = goalRes.target;
   app.innerHTML = `
