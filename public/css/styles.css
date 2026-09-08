@@ -8,6 +8,9 @@
   --max:1100px;
 }
 *{box-sizing:border-box}
+html,body{overflow-x:hidden;max-width:100vw}
+img{max-width:100%}
+#userBadge{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
 a{color:inherit}
 /* ---------- topo ---------- */
@@ -113,7 +116,7 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
 body.seller-home .topbar{display:none}
 body.seller-home #app{padding-top:0}
 /* ---------- home da vendedora (layout Canva) ---------- */
-.seller-head{background:linear-gradient(165deg,var(--brand-2),var(--brand));border-radius:0 0 32px 32px;padding:48px 22px 34px;color:#fff;margin:-16px -16px 0}
+.seller-head{background:linear-gradient(165deg,var(--brand-2),var(--brand));border-radius:0 0 46px 46px;padding:48px 22px 38px;color:#fff;margin:-16px -16px 0}
 .seller-top{display:flex;align-items:center;gap:12px}
 .ava-wrap{position:relative;flex:none}
 .ava{width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#e6f2b8,#a4c98d);display:grid;place-items:center;font-weight:800;font-size:22px;color:#0b3b2c;flex:none;overflow:hidden}
