@@ -241,11 +241,12 @@ function txRow(s, meId) {
 }
 
 // linha estilo Canva p/ lista da vendedora (com nomes das participantes)
-function sliRow(s, meId) {
+function sliRow(s, meId, i = -1) {
   const names = (s.participants || []).map((p) => p.seller_name).join(', ');
   const mine = (s.participants || []).filter((p) => p.seller_id === meId).reduce((a, p) => a + Number(p.credit), 0);
+  const delay = i >= 0 ? ` style="animation-delay:${Math.min(i, 9) * 70}ms"` : '';
   return `
-  <div class="sli">
+  <div class="sli"${delay}>
     <div class="sli-mid"><b>${esc(s.customer_name)}</b><span>${esc(s.product)} - ${esc(s.color)} - ${fmtDateBR(s.sale_date)}</span></div>
     <div class="sli-side"><div class="sli-credit">+${fmtV(mine)}</div><div class="sli-parts">${esc(names)}</div></div>
   </div>`;
@@ -269,6 +270,20 @@ function motivFor(sales, target) {
   if (p >= 0.7) return 'Estamos quase lá!';
   if (p > 0) return 'Bom começo, vamos subir! 🚀';
   return 'Um novo dia, novas vendas! 💪';
+}
+
+// contagem 0 → valor (sensação de progresso)
+function countUp(el, target, dur = 1300) {
+  if (!el) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = fmtV(target); return; }
+  const t0 = performance.now();
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / dur);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmtV(target * e);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 function modalGoal(current, month) {
@@ -322,7 +337,7 @@ async function viewSeller(app) {
       </div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
       <div class="goal-pill">
-        <div class="goal-left"><div class="goal-lab">Vendas deste mês:</div><div class="goal-num mono">${fmtV(monthSum.salesCredit)}</div></div>
+        <div class="goal-left"><div class="goal-lab">Vendas deste mês:</div><div class="goal-num mono" id="goalMonth">0</div></div>
         <div class="goal-div"></div>
         <button class="goal-right" id="goalEdit" title="Definir minha meta">
           <div class="goal-lab">Meta</div>
@@ -340,6 +355,7 @@ async function viewSeller(app) {
     <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
+  countUp($('#goalMonth'), monthSum.salesCredit);
   $('#headLogout').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
   bindAvatar();
   const loadList = async (k) => {
@@ -347,7 +363,7 @@ async function viewSeller(app) {
     try {
       const { sales } = await api(`/api/sales?from=${r.from}&to=${r.to}`);
       $('#homeList').innerHTML = sales.length
-        ? sales.slice(0, 20).map((s) => sliRow(s, me.id)).join('')
+        ? sales.slice(0, 20).map((s, idx) => sliRow(s, me.id, idx)).join('')
         : '<div class="card empty">Nenhuma venda neste período.</div>';
     } catch (e) {
       $('#homeList').innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
@@ -599,7 +615,7 @@ async function viewAdmin(app) {
 // menu do botão central: escolher o que registrar
 function modalEscolhaRegistro() {
   $('#modalRoot').innerHTML = `
-  <div class="modal-bg" id="mbg"><div class="modal">
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">O que deseja registrar?</h3>
     <p class="muted" style="font-size:13px">Escolha uma opção abaixo.</p>
     <button class="btn btn-accent btn-big" id="chSale">🛵 Registrar venda</button>

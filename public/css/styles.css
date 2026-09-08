@@ -150,3 +150,9 @@ body.seller-home #app{padding-top:0}
 .hist-filters .mini-pills{justify-content:flex-start}
 .search-row{display:flex;gap:8px;margin:10px 0}
 .search-row select{flex:1}
+/* ---------- animações (só home da vendedora) ---------- */
+@keyframes riseIn{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+#homeList .sli{animation:riseIn .5s cubic-bezier(.2,.7,.3,1) both}
+.modal-bg.anim-up .modal{animation:sheetUp .34s cubic-bezier(.2,.8,.3,1)}
+@keyframes sheetUp{from{opacity:.3;transform:translateY(70px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
