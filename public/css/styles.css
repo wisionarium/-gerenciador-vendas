@@ -109,10 +109,12 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04
 .delta-up{color:var(--green);font-weight:800}.delta-down{color:var(--red);font-weight:800}
 .mono{font-variant-numeric:tabular-nums}
 #alertBox:empty{display:none}
+#alertBox{position:fixed;top:12px;left:50%;transform:translateX(-50%);width:min(560px,calc(100% - 24px));z-index:60}
+#alertBox .alert{margin:0;box-shadow:0 12px 32px rgba(11,59,44,.25)}
 body.seller-home .topbar{display:none}
 body.seller-home #app{padding-top:0}
 /* ---------- home da vendedora (layout Canva) ---------- */
-.seller-head{background:linear-gradient(165deg,var(--brand-2),var(--brand));border-radius:0 0 32px 32px;padding:20px 20px 26px;color:#fff;margin:-16px -16px 0}
+.seller-head{background:linear-gradient(165deg,var(--brand-2),var(--brand));border-radius:0 0 32px 32px;padding:30px 22px 32px;color:#fff;margin:-16px -16px 0}
 .seller-top{display:flex;align-items:center;gap:12px}
 .ava-wrap{position:relative;flex:none}
 .ava{width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#e6f2b8,#a4c98d);display:grid;place-items:center;font-weight:800;font-size:22px;color:#0b3b2c;flex:none;overflow:hidden}
@@ -122,7 +124,7 @@ body.seller-home #app{padding-top:0}
 .seller-logout{background:transparent;border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:6px 12px;cursor:pointer;flex:none}
 .seller-hi{font-size:20px;font-weight:800}
 .seller-motiv{text-align:center;font-size:23px;font-weight:800;margin:16px 0 14px;letter-spacing:-.01em}
-.goal-pill{background:#fff;border-radius:24px;display:flex;color:var(--ink);overflow:hidden;box-shadow:var(--shadow)}
+.goal-pill{background:#fff;border-radius:24px;display:flex;color:var(--ink);overflow:hidden;box-shadow:var(--shadow);max-width:440px;margin:0 auto}
 .goal-left{flex:1.5;padding:12px 8px;text-align:center}
 .goal-div{width:1px;background:var(--line);margin:12px 0}
 .goal-right{flex:1;padding:12px 8px;text-align:center;border:none;background:transparent;cursor:pointer;color:var(--ink);font-family:inherit}
