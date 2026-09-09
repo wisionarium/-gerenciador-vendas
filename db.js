@@ -151,23 +151,9 @@ const ready = (async () => {
       'Carla', 'carla@equipe.com', mk('carla123'), 'seller');
     console.log('[db] Seed concluído.');
   }
-  const ph = await get('SELECT COUNT(*) AS c FROM phrases');
-  if (Number(ph.c) === 0) {
-    const defaults = [
-      'Aqui vai a frase do dia, com coisas boas da vida e tudo mais é isso.',
-      'Cada chamada é uma porta que se abre. Continue batendo.',
-      'Quem planta atendimento, colhe vendas.',
-      'O não de hoje é o sim de amanhã. Persista.',
-      'Vendedora de sucesso não espera cliente: ela cria oportunidade.',
-      'Seu esforço de hoje é o ranking de amanhã.',
-      'Atenda com o coração e venda com a razão.',
-      'Foco, energia e sorriso: a tríade de quem bate meta.',
-      'Uma venda por vez, um recorde por mês.',
-      'A melhor hora para vender foi ontem. A segunda melhor é agora.',
-    ];
-    for (const t of defaults) await run('INSERT INTO phrases (text, active) VALUES (?,1)', t);
-    console.log('[db] Frases seed: ' + defaults.length);
-  }
+  // frases padrão removidas: agora só vale a frase escrita pela vendedora (daily_phrases).
+  // limpa qualquer frase padrão que já exista no banco.
+  try { await run('DELETE FROM phrases'); } catch {}
 })();
 
 module.exports = { all, get, run, ready, creditForParticipants, isRemote };

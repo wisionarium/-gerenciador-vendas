@@ -351,8 +351,8 @@ async function viewSeller(app) {
         </button>
       </div>
     </div>
-    <div class="phrase">
-      ${phraseRes.author ? `<div class="phrase-title">Frase do dia:</div><div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : ''}
+    <div class="phrase"><div class="phrase-title">Frase do dia:</div>
+      ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : ''}
       ${!phraseRes.author && phraseRes.canWrite ? `<button class="btn btn-accent" id="writePhrase">✍️ Hoje é seu dia! Escrever a frase</button>` : ''}
       ${!phraseRes.author && !phraseRes.canWrite && phraseRes.drawnSellerName ? `<div class="muted" style="font-size:12px;margin-top:8px">Aguardando ${esc(phraseRes.drawnSellerName.split(' ')[0])} escrever…</div>` : ''}
     </div>
