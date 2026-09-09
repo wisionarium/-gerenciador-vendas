@@ -424,61 +424,31 @@ function modalPonto(onSaved) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Bater ponto 🕒</h3>
-    <p class="muted" style="font-size:13px">Escaneie o QR da loja ou digite o código impresso. A localização é usada <b>só agora</b>.</p>
+    <p class="muted" style="font-size:13px">Aponte a câmera para o QR da loja. Vale para entrada e saída — a localização é usada <b>só agora</b>.</p>
     <button class="btn btn-big" id="scanBtn">📷 Escanear QR</button>
     <div id="scanBox" style="display:none;margin-top:10px"><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000"></video>
-    <p class="muted" style="font-size:12px">Aponte para o QR…</p></div>
-    <label>Código do ponto</label><input id="pCode" placeholder="Ex: PONTO-LOJA-01" autocomplete="off" style="text-transform:uppercase">
-    <div style="height:12px"></div>
-    <button class="btn btn-accent btn-big" id="punchBtn">Confirmar batida</button>
-    <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    <p class="muted" id="scanStatus" style="font-size:12px">Aponte para o QR…</p></div>
+    <button class="btn btn-ghost btn-big" type="button" id="cancel" style="margin-top:10px">Cancelar</button>
   </div></div>`;
   $('#cancel').onclick = () => { stopScan(); closeModal(); };
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') { stopScan(); closeModal(); } };
   let stream = null;
   let scanning = false;
-  const stopScan = () => { scanning = false; try { (stream || []).forEach?.(() => {}); } catch {} if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} stream = null; } const v = $('#scanVideo'); if (v) v.srcObject = null; };
-  window.__stopScan = stopScan;
-  $('#scanBtn').onclick = async () => {
-    if (!('BarcodeDetector' in window)) { toast('Leitor de câmera indisponível aqui. Digite o código.', 'err'); return; }
+  let done = false;
+  const stopScan = () => { scanning = false; if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} stream = null; } const v = $('#scanVideo'); if (v) v.srcObject = null; };
+  const punch = async (code) => {
+    if (done) return;
+    done = true;
+    scanning = false;
+    const st = $('#scanStatus');
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    } catch { toast('Permita a câmera para escanear.', 'err'); return; }
-    $('#scanBox').style.display = 'block';
-    const video = $('#scanVideo');
-    video.srcObject = stream;
-    await video.play().catch(() => {});
-    const det = new BarcodeDetector({ formats: ['qr_code'] });
-    scanning = true;
-    const tick = async () => {
-      if (!scanning) return;
-      try {
-        const codes = await det.detect(video);
-        if (codes?.length) {
-          $('#pCode').value = String(codes[0].rawValue || '').toUpperCase();
-          stopScan();
-          $('#scanBox').style.display = 'none';
-          toast('QR lido! Confira e confirme.');
-          return;
-        }
-      } catch {}
-      setTimeout(tick, 400);
-    };
-    tick();
-  };
-  $('#punchBtn').onclick = async () => {
-    const code = $('#pCode').value.trim();
-    if (!code) return toast('Informe o código do ponto.', 'err');
-    const btn = $('#punchBtn');
-    btn.disabled = true;
-    btn.textContent = 'Obtendo localização…';
-    try {
+      if (st) st.textContent = 'QR lido! Obtendo localização…';
       const pos = await getGeo();
-      btn.textContent = 'Registrando…';
+      if (st) st.textContent = 'Registrando…';
       const r = await api('/api/ponto/bater', {
         method: 'POST',
         body: JSON.stringify({
-          qr_code: code.toUpperCase(),
+          qr_code: String(code).toUpperCase(),
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
@@ -487,9 +457,29 @@ function modalPonto(onSaved) {
       stopScan(); closeModal();
       toast(r.type === 'in' ? `Entrada registrada: ${r.punch.in_hhmm}` : `Saída registrada: ${r.punch.out_hhmm}`);
       if (onSaved) onSaved();
-    } catch (err) { toast(err.message, 'err'); }
-    btn.disabled = false;
-    btn.textContent = 'Confirmar batida';
+    } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
+  };
+  $('#scanBtn').onclick = async () => {
+    if (!('BarcodeDetector' in window)) { toast('Leitura de QR indisponível neste aparelho.', 'err'); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    } catch { toast('Permita a câmera para escanear.', 'err'); return; }
+    $('#scanBox').style.display = 'block';
+    $('#scanBtn').disabled = true;
+    const video = $('#scanVideo');
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    const det = new BarcodeDetector({ formats: ['qr_code'] });
+    scanning = true;
+    const tick = async () => {
+      if (!scanning || done) return;
+      try {
+        const codes = await det.detect(video);
+        if (codes?.length && codes[0].rawValue) { punch(codes[0].rawValue.trim()); return; }
+      } catch {}
+      setTimeout(tick, 400);
+    };
+    tick();
   };
 }
 
