@@ -116,7 +116,7 @@ async function route() {
   setNav();
   const h = location.hash || '#/login';
   document.body.classList.toggle('seller-home', h === '#/vendedora');
-  document.body.classList.toggle('history-top', h === '#/vendedora/historico' || h === '#/vendedora/vendas');
+  document.body.classList.toggle('history-top', h === '#/vendedora/historico' || h === '#/vendedora/vendas' || h === '#/vendedora/config');
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { location.hash = '#/login'; return; }
