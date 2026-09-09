@@ -706,6 +706,29 @@ app.put('/api/ponto/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol) });
 }));
 
+// lançamento manual / contingência (admin): cria ou ajusta o dia sem QR/GPS
+app.post('/api/ponto/manual', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { seller_id, date, check_in_hhmm, check_out_hhmm } = req.body || {};
+  const seller = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", Number(seller_id));
+  if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  const d = date || todayISO();
+  if (!isValidDate(d)) return res.status(400).json({ error: 'Data inválida.' });
+  const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+  if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return res.status(400).json({ error: 'Horário inválido (use HH:MM).' });
+  if (!check_in_hhmm) return res.status(400).json({ error: 'Entrada é obrigatória.' });
+  const toISO = (hhmm) => new Date(`${d}T${hhmm}:00-03:00`).toISOString();
+  const inISO = toISO(check_in_hhmm);
+  const outISO = check_out_hhmm ? toISO(check_out_hhmm) : null;
+  if (outISO && Date.parse(outISO) <= Date.parse(inISO)) return res.status(400).json({ error: 'Saída deve ser depois da entrada.' });
+  await db.run(
+    `INSERT INTO punches (seller_id, date, check_in_at, check_out_at) VALUES (?,?,?,?)
+     ON CONFLICT(seller_id, date) DO UPDATE SET check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, updated_at=datetime('now')`,
+    seller.id, d, inISO, outISO
+  );
+  const hol = await db.get('SELECT * FROM holidays WHERE date=?', d);
+  res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol) });
+}));
+
 // ---------- STATS ----------
 async function summarize(from, to, sellerId) {
   const p = [];

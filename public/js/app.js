@@ -470,7 +470,7 @@ function modalPonto(onSaved) {
         scanning = true;
         await qr.start(
           { facingMode: 'environment' },
-          { fps: 10, qrbox: (w, h) => ({ width: Math.min(w, 260), height: Math.min(h, 260) }) },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
           (decoded) => { try { qr.stop().catch(() => {}); } catch {} scanning = false; punch(String(decoded).trim()); },
           () => {}
         );
@@ -1129,7 +1129,7 @@ async function viewPonto(app) {
             <span class="muted mono" style="font-size:12px">${r.punch ? `Entrada ${r.punch.in_hhmm || '—'} • Saída ${r.punch.out_hhmm || '—'}` : '—'}</span>
           </div>
           <div class="muted" style="font-size:13px;margin-top:4px">Extra: <b class="mono">${r.punch ? r.punch.extra_label : '0h 0min'}</b>${r.punch?.worked_label ? ` • Trabalhou ${r.punch.worked_label}` : ''}</div>
-          ${r.punch ? `<div class="sale-foot"><button class="btn" data-fix="${r.punch.id}">Corrigir</button></div>` : ''}
+          ${r.punch ? `<div class="sale-foot"><button class="btn" data-fix="${r.punch.id}">Corrigir</button></div>` : `<div class="sale-foot"><button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button></div>`}
           </div>`).join('') || '<div class="empty">Sem vendedoras ativas.</div>'}`;
       const cf = $('#confHol');
       if (cf) cf.onclick = async () => {
@@ -1139,6 +1139,10 @@ async function viewPonto(app) {
       $$('#pDay [data-fix]').forEach((b) => (b.onclick = () => {
         const row = d.rows.flatMap((x) => x.punch ? [x.punch] : []).find((p) => String(p.id) === String(b.dataset.fix));
         modalFixPonto(row, loadDay);
+      }));
+      $$('#pDay [data-lancar]').forEach((b) => (b.onclick = () => {
+        const row = d.rows.find((x) => String(x.seller_id) === String(b.dataset.lancar));
+        modalManualPonto(row.seller_id, row.name, date, loadDay);
       }));
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
@@ -1188,6 +1192,30 @@ async function viewPonto(app) {
     } catch (err) { toast(err.message, 'err'); }
   };
   await loadHols();
+}
+
+function modalManualPonto(sellerId, sellerName, date, reload) {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">Lançar ponto — ${esc(sellerName)}</h3>
+    <p class="muted" style="font-size:13px">${esc(date)} — horário de São Paulo (HH:MM). Use quando o QR falhar.</p>
+    <form id="fManual">
+      <label>Entrada *</label><input id="mIn" required placeholder="08:00" inputmode="numeric">
+      <label>Saída (vazio = só entrada)</label><input id="mOut" placeholder="18:00" inputmode="numeric">
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Salvar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fManual').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/ponto/manual', { method: 'POST', body: JSON.stringify({ seller_id: sellerId, date, check_in_hhmm: $('#mIn').value.trim(), check_out_hhmm: $('#mOut').value.trim() || null }) });
+      closeModal(); toast('Ponto lançado!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
 }
 
 function modalFixPonto(p, reload) {
