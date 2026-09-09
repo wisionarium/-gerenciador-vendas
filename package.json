@@ -12,6 +12,7 @@
     "@libsql/client": "^0.18.0",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "qrcode": "^1.5.4"
   }
 }

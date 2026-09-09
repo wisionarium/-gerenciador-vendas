@@ -78,6 +78,39 @@ const SCHEMA = [
     text TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // ponto: config da loja (linha única id=1) + feriados + batidas
+  `CREATE TABLE IF NOT EXISTS ponto_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    store_name TEXT NOT NULL DEFAULT 'Loja',
+    lat REAL,
+    lng REAL,
+    radius_m INTEGER NOT NULL DEFAULT 150,
+    qr_code TEXT NOT NULL DEFAULT 'PONTO-LOJA-01',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS holidays (
+    date TEXT PRIMARY KEY,
+    label TEXT NOT NULL DEFAULT 'Feriado',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS punches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    check_in_at TEXT,
+    check_in_lat REAL,
+    check_in_lng REAL,
+    check_in_acc REAL,
+    check_out_at TEXT,
+    check_out_lat REAL,
+    check_out_lng REAL,
+    check_out_acc REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (seller_id, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_punches_date ON punches(date)`,
+  `CREATE INDEX IF NOT EXISTS idx_punches_seller_date ON punches(seller_id, date)`,
 ];
 
 let all;
@@ -154,6 +187,8 @@ const ready = (async () => {
   // frases padrão removidas: agora só vale a frase escrita pela vendedora (daily_phrases).
   // limpa qualquer frase padrão que já exista no banco.
   try { await run('DELETE FROM phrases'); } catch {}
+  // ponto: garante linha única de config da loja
+  try { await run("INSERT INTO ponto_config (id, store_name, radius_m, qr_code) VALUES (1,'Loja',150,'PONTO-LOJA-01') ON CONFLICT(id) DO NOTHING"); } catch {}
 })();
 
 module.exports = { all, get, run, ready, creditForParticipants, isRemote };

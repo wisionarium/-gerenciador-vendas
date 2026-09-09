@@ -136,6 +136,7 @@ async function route() {
     if (h.startsWith('#/admin')) {
       if (u.role !== 'admin') { location.hash = '#/vendedora'; return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
+      if (h === '#/admin/ponto') return viewPonto(app);
       if (h === '#/admin/relatorio') return viewReport(app);
       if (h === '#/admin/vendedoras') return viewTeam(app);
       if (h.startsWith('#/admin/vendedora/')) return viewSellerDetail(app, h.split('/').pop());
@@ -350,6 +351,7 @@ async function viewSeller(app) {
           <div class="goal-num mono">${target == null ? '—' : fmtV(target)}</div>
         </button>
       </div>
+      <div class="ponto-strip" id="pontoStrip"><span>🕒 Carregando ponto…</span></div>
     </div>
     <div class="phrase"><div class="phrase-title">Frase do dia:</div>
       ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : ''}
@@ -386,6 +388,111 @@ async function viewSeller(app) {
     loadList(b.dataset.k);
   };
   loadList('hoje');
+  const renderPonto = (punch) => {
+    const el = $('#pontoStrip');
+    if (!el) return;
+    if (!punch) {
+      el.innerHTML = `<span>🕒 Hoje: —</span><button class="ponto-btn" id="pontoBtn">Bater ponto</button>`;
+    } else if (punch.check_in_at && !punch.check_out_at) {
+      el.innerHTML = `<span>🕒 Entrada ${esc(punch.in_hhmm || '')} • Saída —</span><button class="ponto-btn" id="pontoBtn">Bater saída</button>`;
+    } else {
+      el.innerHTML = `<span>🕒 Entrada ${esc(punch.in_hhmm || '')} • Saída ${esc(punch.out_hhmm || '')}</span>`;
+    }
+    const b = $('#pontoBtn');
+    if (b) b.onclick = () => modalPonto(() => loadPonto());
+  };
+  const loadPonto = async () => {
+    try {
+      const r = await api('/api/ponto/hoje');
+      renderPonto(r.punch);
+    } catch { renderPonto(null); }
+  };
+  loadPonto();
+}
+
+// ---------- PONTO da vendedora (QR + GPS, só na batida) ----------
+function getGeo() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('Este celular não tem GPS.'));
+    navigator.geolocation.getCurrentPosition(resolve, (err) => {
+      if (err.code === 1) reject(new Error('Localização negada. Ative em Ajustes → Privacidade → Localização e escolha "Ao usar o app".'));
+      else if (err.code === 2) reject(new Error('Sem sinal de GPS. Ative a localização e tente perto da entrada.'));
+      else if (err.code === 3) reject(new Error('Tempo esgotado no GPS. Tente de novo.'));
+      else reject(new Error('Não foi possível obter a localização.'));
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+  });
+}
+function modalPonto(onSaved) {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">Bater ponto 🕒</h3>
+    <p class="muted" style="font-size:13px">Escaneie o QR da loja ou digite o código impresso. A localização é usada <b>só agora</b>.</p>
+    <button class="btn btn-big" id="scanBtn">📷 Escanear QR</button>
+    <div id="scanBox" style="display:none;margin-top:10px"><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000"></video>
+    <p class="muted" style="font-size:12px">Aponte para o QR…</p></div>
+    <label>Código do ponto</label><input id="pCode" placeholder="Ex: PONTO-LOJA-01" autocomplete="off" style="text-transform:uppercase">
+    <div style="height:12px"></div>
+    <button class="btn btn-accent btn-big" id="punchBtn">Confirmar batida</button>
+    <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+  </div></div>`;
+  $('#cancel').onclick = () => { stopScan(); closeModal(); };
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') { stopScan(); closeModal(); } };
+  let stream = null;
+  let scanning = false;
+  const stopScan = () => { scanning = false; try { (stream || []).forEach?.(() => {}); } catch {} if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} stream = null; } const v = $('#scanVideo'); if (v) v.srcObject = null; };
+  window.__stopScan = stopScan;
+  $('#scanBtn').onclick = async () => {
+    if (!('BarcodeDetector' in window)) { toast('Leitor de câmera indisponível aqui. Digite o código.', 'err'); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    } catch { toast('Permita a câmera para escanear.', 'err'); return; }
+    $('#scanBox').style.display = 'block';
+    const video = $('#scanVideo');
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    const det = new BarcodeDetector({ formats: ['qr_code'] });
+    scanning = true;
+    const tick = async () => {
+      if (!scanning) return;
+      try {
+        const codes = await det.detect(video);
+        if (codes?.length) {
+          $('#pCode').value = String(codes[0].rawValue || '').toUpperCase();
+          stopScan();
+          $('#scanBox').style.display = 'none';
+          toast('QR lido! Confira e confirme.');
+          return;
+        }
+      } catch {}
+      setTimeout(tick, 400);
+    };
+    tick();
+  };
+  $('#punchBtn').onclick = async () => {
+    const code = $('#pCode').value.trim();
+    if (!code) return toast('Informe o código do ponto.', 'err');
+    const btn = $('#punchBtn');
+    btn.disabled = true;
+    btn.textContent = 'Obtendo localização…';
+    try {
+      const pos = await getGeo();
+      btn.textContent = 'Registrando…';
+      const r = await api('/api/ponto/bater', {
+        method: 'POST',
+        body: JSON.stringify({
+          qr_code: code.toUpperCase(),
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        }),
+      });
+      stopScan(); closeModal();
+      toast(r.type === 'in' ? `Entrada registrada: ${r.punch.in_hhmm}` : `Saída registrada: ${r.punch.out_hhmm}`);
+      if (onSaved) onSaved();
+    } catch (err) { toast(err.message, 'err'); }
+    btn.disabled = false;
+    btn.textContent = 'Confirmar batida';
+  };
 }
 
 // ---------- TEMA da vendedora (só verdes, fundo sempre branco) ----------
@@ -752,7 +859,7 @@ function modalEditSale(sale, sellers, onSaved) {
 // ---------- ADMIN ----------
 async function viewAdmin(app) {
   app.innerHTML = `
-    <h2 style="margin:4px 0">Visão geral</h2>
+    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral</h2><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a></div>
     ${periodPills(adminPeriod.key)}
     <div id="customRow" style="display:${adminPeriod.key === 'custom' ? 'block' : 'none'}" class="card">
       <div class="row"><div style="flex:1"><label>De</label><input type="date" id="fFrom" value="${adminPeriod.from || ''}"></div>
@@ -890,6 +997,188 @@ async function viewAllSales(app) {
   };
   $('#go').onclick = load;
   await load();
+}
+
+// ---------- PONTO (admin): QR + dia + feriados + extras do mês ----------
+async function viewPonto(app) {
+  const t = todayISO();
+  app.innerHTML = `
+    <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
+    <h2 style="margin:6px 0">Ponto 🕒</h2>
+    <div class="card">
+      <b>QR da loja</b>
+      <p class="muted" style="font-size:13px;margin:4px 0">Imprima e cole na parede. O código manual fica abaixo do QR.</p>
+      <div id="qrBox"><p class="muted">Carregando…</p></div>
+      <div style="height:8px"></div>
+      <button class="btn btn-big" id="printQr">🖨️ Imprimir QR</button>
+    </div>
+    <h3 class="section-title">Loja e raio</h3>
+    <div class="card"><div id="cfgBox"><p class="muted">Carregando…</p></div></div>
+    <h3 class="section-title">Ponto do dia</h3>
+    <div class="card">
+      <label>Data</label><input type="date" id="pDate" value="${t}" max="${t}">
+      <div style="height:10px"></div><button class="btn btn-primary" id="pGo">Ver dia</button>
+      <div id="pDay" style="margin-top:12px"></div>
+    </div>
+    <h3 class="section-title">Extras do mês</h3>
+    <div class="card">
+      <label>Mês</label><input type="month" id="pMonth" value="${t.slice(0, 7)}">
+      <div style="height:10px"></div><button class="btn btn-primary" id="pMonthGo">Ver mês</button>
+      <div id="pMonthBody" style="margin-top:12px"></div>
+    </div>
+    <h3 class="section-title">Feriados</h3>
+    <div class="card">
+      <form id="fHol" class="row" style="flex-wrap:nowrap;align-items:end">
+        <div style="flex:1"><label>Data</label><input type="date" id="hDate" required></div>
+        <div style="flex:2"><label>Rótulo</label><input id="hLabel" placeholder="Ex: Natal" value="Feriado"></div>
+        <button class="btn btn-primary" type="submit">Marcar</button>
+      </form>
+      <div id="hList" style="margin-top:10px"></div>
+    </div>
+    <div class="foot">Desenvolvido pela Wisionarium</div>`;
+  // QR
+  try {
+    const { qr_code, qrImage, store_name } = await api('/api/ponto/qr');
+    $('#qrBox').innerHTML = `
+      <div style="text-align:center">
+        <img src="${qrImage}" alt="QR do ponto" style="width:220px;height:220px;max-width:100%">
+        <div class="mono" style="font-weight:800;font-size:18px;letter-spacing:.06em">${esc(qr_code)}</div>
+        <div class="muted" style="font-size:12px">${esc(store_name)}</div>
+      </div>`;
+    $('#printQr').onclick = () => {
+      const w = window.open('', '_blank');
+      w.document.write(`<html><head><title>QR Ponto — ${esc(store_name)}</title></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h1>${esc(store_name)} — Ponto</h1><img src="${qrImage}" style="width:320px;height:320px"><h2 style="letter-spacing:.1em">${esc(qr_code)}</h2><p>Escaneie ao chegar e ao sair. A localização é verificada.</p><script>onload=()=>{print();}<\/script></body></html>`);
+      w.document.close();
+    };
+  } catch (e) { $('#qrBox').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  // config
+  const loadCfg = async () => {
+    try {
+      const { config } = await api('/api/ponto/config');
+      $('#cfgBox').innerHTML = `
+        <label>Nome da loja</label><input id="cName" value="${esc(config.store_name || '')}">
+        <div class="row"><div style="flex:1"><label>Latitude</label><input id="cLat" inputmode="decimal" placeholder="-23.55" value="${config.lat ?? ''}"></div>
+        <div style="flex:1"><label>Longitude</label><input id="cLng" inputmode="decimal" placeholder="-46.63" value="${config.lng ?? ''}"></div></div>
+        <label>Raio (metros, 30–2000)</label><input id="cRad" type="number" min="30" max="2000" value="${config.radius_m ?? 150}">
+        <p class="muted" style="font-size:12px">Dica: abra o mapa no celular na porta da loja e copie as coordenadas. <button class="btn" type="button" id="useGeo">📍 Usar minha posição atual</button></p>
+        <button class="btn btn-accent btn-big" id="saveCfg">Salvar</button>`;
+      $('#useGeo').onclick = async () => {
+        try {
+          const pos = await getGeo();
+          $('#cLat').value = pos.coords.latitude.toFixed(6);
+          $('#cLng').value = pos.coords.longitude.toFixed(6);
+          toast('Posição capturada! Confira e salve.');
+        } catch (e) { toast(e.message, 'err'); }
+      };
+      $('#saveCfg').onclick = async () => {
+        try {
+          await api('/api/ponto/config', { method: 'PUT', body: JSON.stringify({ store_name: $('#cName').value, lat: $('#cLat').value === '' ? null : Number($('#cLat').value), lng: $('#cLng').value === '' ? null : Number($('#cLng').value), radius_m: Number($('#cRad').value) }) });
+          toast('Loja salva!');
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    } catch (e) { $('#cfgBox').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  await loadCfg();
+  // dia
+  const loadDay = async () => {
+    const date = $('#pDate').value || t;
+    const box = $('#pDay');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const d = await api(`/api/ponto/dia?date=${date}`);
+      box.innerHTML = `
+        ${d.is_holiday ? `<p class="muted">🎉 Feriado (${esc(d.holiday.label)}) — padrão 5h 0min</p>` : ''}
+        ${d.possible_holiday ? `<div class="card" style="background:#fffbeb;border-color:#fde68a;margin-bottom:10px"><b>⚠️ Possível feriado?</b><br><span class="muted" style="font-size:13px">Várias saídas ~13h. Se foi feriado, confirme:</span><div style="height:8px"></div><button class="btn btn-primary" id="confHol">Confirmar feriado</button></div>` : ''}
+        <p class="muted" style="font-size:13px">Presentes: <b>${d.present}</b> • Saídas pendentes: <b>${d.pending}</b></p>
+        ${d.rows.map((r) => `
+          <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center">
+            <b>${esc(r.name)}</b>
+            <span class="muted mono" style="font-size:12px">${r.punch ? `Entrada ${r.punch.in_hhmm || '—'} • Saída ${r.punch.out_hhmm || '—'}` : '—'}</span>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:4px">Extra: <b class="mono">${r.punch ? r.punch.extra_label : '0h 0min'}</b>${r.punch?.worked_label ? ` • Trabalhou ${r.punch.worked_label}` : ''}</div>
+          ${r.punch ? `<div class="sale-foot"><button class="btn" data-fix="${r.punch.id}">Corrigir</button></div>` : ''}
+          </div>`).join('') || '<div class="empty">Sem vendedoras ativas.</div>'}`;
+      const cf = $('#confHol');
+      if (cf) cf.onclick = async () => {
+        await api('/api/ponto/feriados', { method: 'POST', body: JSON.stringify({ date, label: 'Feriado' }) });
+        toast('Feriado confirmado!'); loadDay(); loadHols();
+      };
+      $$('#pDay [data-fix]').forEach((b) => (b.onclick = () => {
+        const row = d.rows.flatMap((x) => x.punch ? [x.punch] : []).find((p) => String(p.id) === String(b.dataset.fix));
+        modalFixPonto(row, loadDay);
+      }));
+    } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  $('#pGo').onclick = loadDay;
+  await loadDay();
+  // mês
+  const loadMonth = async () => {
+    const month = $('#pMonth').value || t.slice(0, 7);
+    const box = $('#pMonthBody');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const r = await api(`/api/ponto/resumo?month=${month}`);
+      box.innerHTML = `
+        <p class="muted" style="font-size:13px">Total geral: <b class="mono">${r.total_extra_label}</b></p>
+        ${r.rows.map((x, i) => `<div class="bar-row"><span>#${i + 1}</span><div class="bar"><div style="width:${r.total_extra_min ? (x.extra_min / Math.max(1, Math.max(...r.rows.map((y) => y.extra_min)))) * 100 : 0}%"></div></div><b class="mono">${x.extra_label}</b></div><div style="font-size:13px;margin:-2px 0 8px 60px"><b>${esc(x.name)}</b> <span class="muted">• ${x.days} dia(s)</span></div>`).join('')}
+        <button class="btn btn-big" id="copyExtra">Copiar resumo</button>`;
+      $('#copyExtra').onclick = async () => {
+        const msg = `*HORAS EXTRAS — ${month}*\nTotal: ${r.total_extra_label}\n` + r.rows.map((x) => `• ${x.name}: ${x.extra_label} (${x.days} dias)`).join('\n');
+        await navigator.clipboard.writeText(msg).catch(() => {});
+        toast('Resumo copiado!');
+      };
+    } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  $('#pMonthGo').onclick = loadMonth;
+  await loadMonth();
+  // feriados
+  const loadHols = async () => {
+    try {
+      const { holidays } = await api('/api/ponto/feriados');
+      $('#hList').innerHTML = holidays.length ? holidays.map((h) => `
+        <div class="row" style="align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:8px 0">
+          <div><b class="mono">${fmtDateBR(h.date)}</b> <span class="muted" style="font-size:13px">${esc(h.label)}</span></div>
+          <button class="btn btn-ghost" data-hdel="${h.date}">🗑️</button>
+        </div>`).join('') : '<div class="empty">Nenhum feriado marcado.</div>';
+      $$('#hList [data-hdel]').forEach((b) => (b.onclick = async () => {
+        if (!confirm('Remover este feriado?')) return;
+        await api(`/api/ponto/feriados/${b.dataset.hdel}`, { method: 'DELETE' });
+        toast('Feriado removido.'); loadHols(); loadDay();
+      }));
+    } catch (e) { $('#hList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  $('#fHol').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/ponto/feriados', { method: 'POST', body: JSON.stringify({ date: $('#hDate').value, label: $('#hLabel').value || 'Feriado' }) });
+      toast('Feriado marcado!'); $('#hDate').value = ''; loadHols(); loadDay();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  await loadHols();
+}
+
+function modalFixPonto(p, reload) {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">Corrigir ponto #${p.id}</h3>
+    <p class="muted" style="font-size:13px">${esc(p.date)} — horário de São Paulo (HH:MM). Apague a saída para deixar pendente.</p>
+    <form id="fFix">
+      <label>Entrada *</label><input id="fxIn" required placeholder="08:00" value="${esc(p.in_hhmm || '')}">
+      <label>Saída (vazio = pendente)</label><input id="fxOut" placeholder="18:00" value="${esc(p.out_hhmm || '')}">
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Salvar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fFix').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/api/ponto/${p.id}`, { method: 'PUT', body: JSON.stringify({ check_in_hhmm: $('#fxIn').value.trim(), check_out_hhmm: $('#fxOut').value.trim() || null }) });
+      closeModal(); toast('Ponto corrigido!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
 }
 
 async function viewSellerDetail(app, id) {

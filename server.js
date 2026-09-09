@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const QRCode = require('qrcode');
 const db = require('./db');
 
 const app = express();
@@ -482,6 +483,227 @@ app.delete('/api/sales/:id', requireAuth, ah(async (req, res) => {
     return res.status(403).json({ error: 'Você só pode excluir vendas criadas por você.' });
   await db.run('DELETE FROM sales WHERE id=?', sale.id);
   res.json({ ok: true });
+}));
+
+// ---------- PONTO (QR + localização) ----------
+// Padrão do dia em minutos: seg–sex 600 (8–18), sáb 540 (8–17), dom 240 (8–12), feriado 300 (8–13)
+function stdMinutesFor(dateISO, isHoliday) {
+  if (isHoliday) return 300;
+  const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
+  if (dow === 0) return 240;
+  if (dow === 6) return 540;
+  return 600;
+}
+const fmtDur = (min) => `${Math.floor(min / 60)}h ${min % 60}min`;
+// minutos do dia em São Paulo (UTC-3) a partir de ISO
+function spMinOfISO(iso) {
+  const ms = Date.parse(iso);
+  if (isNaN(ms)) return null;
+  return Math.floor(ms / 60000 - 180) % 1440;
+}
+function hhmmFromISO(iso) {
+  const m = spMinOfISO(iso);
+  if (m == null) return '—';
+  const hh = String(Math.floor(m / 60)).padStart(2, '0');
+  const mm = String(m % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function punchCalc(p, isHoliday) {
+  const std = stdMinutesFor(p.date, isHoliday);
+  let worked = null;
+  let extra = 0;
+  if (p.check_in_at && p.check_out_at) {
+    worked = Math.max(0, Math.round((Date.parse(p.check_out_at) - Date.parse(p.check_in_at)) / 60000));
+    extra = Math.max(0, worked - std);
+  }
+  return {
+    ...p,
+    in_hhmm: p.check_in_at ? hhmmFromISO(p.check_in_at) : null,
+    out_hhmm: p.check_out_at ? hhmmFromISO(p.check_out_at) : null,
+    std_min: std,
+    std_label: fmtDur(std),
+    worked_min: worked,
+    worked_label: worked == null ? null : fmtDur(worked),
+    extra_min: extra,
+    extra_label: fmtDur(extra),
+  };
+}
+async function getPontoConfig() {
+  let cfg = await db.get('SELECT * FROM ponto_config WHERE id=1');
+  if (!cfg) {
+    await db.run("INSERT INTO ponto_config (id, store_name, radius_m, qr_code) VALUES (1,'Loja',150,'PONTO-LOJA-01') ON CONFLICT(id) DO NOTHING");
+    cfg = await db.get('SELECT * FROM ponto_config WHERE id=1');
+  }
+  return cfg;
+}
+
+// config da loja (admin)
+app.get('/api/ponto/config', requireAuth, requireAdmin, ah(async (req, res) => {
+  res.json({ config: await getPontoConfig() });
+}));
+app.put('/api/ponto/config', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { store_name, lat, lng, radius_m } = req.body || {};
+  const cfg = await getPontoConfig();
+  const nLat = lat === null || lat === undefined || lat === '' ? null : Number(lat);
+  const nLng = lng === null || lng === undefined || lng === '' ? null : Number(lng);
+  const nRad = Number(radius_m);
+  if (nLat != null && (!Number.isFinite(nLat) || nLat < -90 || nLat > 90)) return res.status(400).json({ error: 'Latitude inválida.' });
+  if (nLng != null && (!Number.isFinite(nLng) || nLng < -180 || nLng > 180)) return res.status(400).json({ error: 'Longitude inválida.' });
+  if (!Number.isFinite(nRad) || nRad < 30 || nRad > 2000) return res.status(400).json({ error: 'Raio deve ser entre 30 e 2000 metros.' });
+  await db.run('UPDATE ponto_config SET store_name=?, lat=?, lng=?, radius_m=?, updated_at=datetime(\'now\') WHERE id=1',
+    String(store_name || cfg.store_name || 'Loja').slice(0, 80), nLat, nLng, Math.round(nRad));
+  res.json({ config: await getPontoConfig() });
+}));
+
+// QR para impressão (admin) — imagem + código manual
+app.get('/api/ponto/qr', requireAuth, requireAdmin, ah(async (req, res) => {
+  const cfg = await getPontoConfig();
+  const qrImage = await QRCode.toDataURL(String(cfg.qr_code), { width: 600, margin: 2 });
+  res.json({ qr_code: cfg.qr_code, qrImage, store_name: cfg.store_name });
+}));
+
+// bater ponto (vendedora): QR + GPS; tipo automático (entrada → saída)
+app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  const { qr_code, lat, lng, accuracy } = req.body || {};
+  const cfg = await getPontoConfig();
+  if (String(qr_code || '').trim().toUpperCase() !== String(cfg.qr_code).trim().toUpperCase())
+    return res.status(400).json({ error: 'QR inválido. Escaneie o QR da loja.' });
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (!Number.isFinite(nLat) || !Number.isFinite(nLng)) return res.status(400).json({ error: 'Ative a localização para bater o ponto.' });
+  if (cfg.lat == null || cfg.lng == null) return res.status(500).json({ error: 'Loja sem localização cadastrada. Fale com o admin.' });
+  const acc = accuracy == null || accuracy === '' ? null : Number(accuracy);
+  if (acc != null && Number.isFinite(acc) && acc > 200)
+    return res.status(400).json({ error: 'Sinal de GPS fraco. Aproxime-se da entrada e tente de novo.' });
+  const dist = haversineM(nLat, nLng, Number(cfg.lat), Number(cfg.lng));
+  if (dist > Number(cfg.radius_m || 150))
+    return res.status(403).json({ error: `Você está a ${Math.round(dist)}m da loja (raio ${cfg.radius_m}m). Aproxime-se para bater o ponto.` });
+  const today = todayISO();
+  const now = new Date().toISOString();
+  let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+  if (!p) {
+    await db.run('INSERT INTO punches (seller_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?)',
+      req.user.id, today, now, nLat, nLng, acc);
+    p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+    const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
+    return res.status(201).json({ type: 'in', punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
+  }
+  if (p.check_in_at && !p.check_out_at) {
+    if (Date.parse(now) - Date.parse(p.check_in_at) < 3 * 60000)
+      return res.status(409).json({ error: 'Entrada registrada agora mesmo. Aguarde alguns minutos antes da saída.' });
+    await db.run('UPDATE punches SET check_out_at=?, check_out_lat=?, check_out_lng=?, check_out_acc=?, updated_at=datetime(\'now\') WHERE id=?',
+      now, nLat, nLng, acc, p.id);
+    p = await db.get('SELECT * FROM punches WHERE id=?', p.id);
+    const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
+    return res.json({ type: 'out', punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
+  }
+  return res.status(409).json({ error: 'Dia já encerrado (entrada e saída registradas).' });
+}));
+
+// ponto de hoje (vendedora)
+app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  const today = todayISO();
+  const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+  const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
+  res.json({ date: today, punch: p ? punchCalc(p, !!hol) : null, is_holiday: !!hol });
+}));
+
+// relatório do dia (admin) + sugestão automática de feriado
+app.get('/api/ponto/dia', requireAuth, requireAdmin, ah(async (req, res) => {
+  const date = req.query.date || todayISO();
+  if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+  const hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const rows = await Promise.all(sellers.map(async (s) => {
+    const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', s.id, date);
+    return {
+      seller_id: s.id, name: s.name, avatar_url: s.avatar_url || null,
+      punch: p ? punchCalc(p, !!hol) : null,
+    };
+  }));
+  // heurística feriado: seg–sáb (não feriado ainda) com maioria saindo 12:30–13:30
+  let possible_holiday = false;
+  const dow = new Date(date + 'T12:00:00Z').getUTCDay();
+  if (!hol && dow !== 0) {
+    const outs = rows.map((r) => r.punch?.check_out_at).filter(Boolean).map(spMinOfISO).filter((m) => m != null);
+    const inWindow = outs.filter((m) => m >= 750 && m <= 810).length; // 12:30–13:30 SP
+    const base = rows.filter((r) => r.punch).length;
+    if ((inWindow >= 3 || (base >= 3 && inWindow / base >= 0.6))) possible_holiday = true;
+  }
+  const present = rows.filter((r) => r.punch).length;
+  const pending = rows.filter((r) => r.punch && !r.punch.check_out_at).length;
+  res.json({ date, is_holiday: !!hol, holiday: hol || null, possible_holiday, present, pending, rows });
+}));
+
+// feriados (admin)
+app.get('/api/ponto/feriados', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { month } = req.query;
+  if (month && /^\d{4}-\d{2}$/.test(month)) {
+    return res.json({ holidays: await db.all('SELECT * FROM holidays WHERE date LIKE ? ORDER BY date', `${month}%`) });
+  }
+  res.json({ holidays: await db.all('SELECT * FROM holidays ORDER BY date DESC LIMIT 100') });
+}));
+app.post('/api/ponto/feriados', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { date, label } = req.body || {};
+  if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+  await db.run('INSERT INTO holidays (date, label) VALUES (?,?) ON CONFLICT(date) DO UPDATE SET label=excluded.label',
+    date, String(label || 'Feriado').slice(0, 80));
+  res.status(201).json({ holiday: await db.get('SELECT * FROM holidays WHERE date=?', date) });
+}));
+app.delete('/api/ponto/feriados/:date', requireAuth, requireAdmin, ah(async (req, res) => {
+  await db.run('DELETE FROM holidays WHERE date=?', req.params.date);
+  res.json({ ok: true });
+}));
+
+// resumo mensal de extras (admin)
+app.get('/api/ponto/resumo', requireAuth, requireAdmin, ah(async (req, res) => {
+  const month = req.query.month || todayISO().slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido.' });
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const hols = await db.all('SELECT date FROM holidays WHERE date LIKE ?', `${month}%`);
+  const holSet = new Set(hols.map((h) => h.date));
+  const rows = await Promise.all(sellers.map(async (s) => {
+    const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date', s.id, `${month}%`);
+    let extra = 0, worked = 0, days = 0;
+    for (const p of ps) {
+      const c = punchCalc(p, holSet.has(p.date));
+      if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
+    }
+    return {
+      seller_id: s.id, name: s.name, avatar_url: s.avatar_url || null,
+      days, worked_min: worked, worked_label: fmtDur(worked),
+      extra_min: extra, extra_label: fmtDur(extra),
+    };
+  }));
+  rows.sort((a, b) => b.extra_min - a.extra_min);
+  res.json({ month, rows, total_extra_min: rows.reduce((a, r) => a + r.extra_min, 0), total_extra_label: fmtDur(rows.reduce((a, r) => a + r.extra_min, 0)) });
+}));
+
+// correção manual (admin): HH:MM no horário de SP
+app.put('/api/ponto/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const p = await db.get('SELECT * FROM punches WHERE id=?', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Registro não encontrado.' });
+  const { check_in_hhmm, check_out_hhmm } = req.body || {};
+  const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+  if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return res.status(400).json({ error: 'Horário inválido (use HH:MM).' });
+  if (!check_in_hhmm) return res.status(400).json({ error: 'Entrada é obrigatória.' });
+  const toISO = (hhmm) => new Date(`${p.date}T${hhmm}:00-03:00`).toISOString();
+  const inISO = toISO(check_in_hhmm);
+  const outISO = check_out_hhmm ? toISO(check_out_hhmm) : null;
+  if (outISO && Date.parse(outISO) <= Date.parse(inISO)) return res.status(400).json({ error: 'Saída deve ser depois da entrada.' });
+  await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, updated_at=datetime(\'now\') WHERE id=?', inISO, outISO, p.id);
+  const hol = await db.get('SELECT * FROM holidays WHERE date=?', p.date);
+  res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol) });
 }));
 
 // ---------- STATS ----------
