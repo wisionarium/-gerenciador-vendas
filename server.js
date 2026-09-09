@@ -441,6 +441,7 @@ app.post('/api/sales', requireAuth, ah(async (req, res) => {
   );
   const saleId = r.lastInsertRowid;
   for (const sid of pids) await db.run('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)', saleId, sid, credit);
+  await syncCommissions(saleId, pids.map((sid) => ({ seller_id: sid, credit })), date.slice(0, 7));
   const sale = await db.get('SELECT * FROM sales WHERE id=?', saleId);
   res.status(201).json({ sale: await saleWithParticipants(sale) });
 }));
@@ -472,6 +473,7 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   );
   await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
   for (const sid of pids) await db.run('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)', sale.id, sid, credit);
+  await syncCommissions(sale.id, pids.map((sid) => ({ seller_id: sid, credit })), date.slice(0, 7));
   const updated = await db.get('SELECT * FROM sales WHERE id=?', sale.id);
   res.json({ sale: await saleWithParticipants(updated) });
 }));
@@ -481,8 +483,80 @@ app.delete('/api/sales/:id', requireAuth, ah(async (req, res) => {
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   if (req.user.role !== 'admin' && sale.created_by !== req.user.id)
     return res.status(403).json({ error: 'Você só pode excluir vendas criadas por você.' });
+  await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id);
   await db.run('DELETE FROM sales WHERE id=?', sale.id);
   res.json({ ok: true });
+}));
+
+// ---------- COMISSÕES (R$25 individual / R$12,50 dividida, em centavos) ----------
+const commCents = (credit) => (Number(credit) >= 1 ? 2500 : 1250);
+async function syncCommissions(saleId, parts, month) {
+  await db.run('DELETE FROM commissions WHERE sale_id=?', saleId);
+  for (const p of parts) {
+    await db.run('INSERT INTO commissions (sale_id, seller_id, month, amount_cents) VALUES (?,?,?,?) ON CONFLICT(sale_id, seller_id) DO UPDATE SET month=excluded.month, amount_cents=excluded.amount_cents',
+      saleId, p.seller_id, month, commCents(p.credit));
+  }
+}
+async function pendingCents(sellerId) {
+  const c = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM commissions WHERE seller_id=?', sellerId);
+  const p = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM payouts WHERE seller_id=?', sellerId);
+  return Number(c.t) - Number(p.t);
+}
+
+// saldo da vendedora logada
+app.get('/api/commissions/me', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
+  const m = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM commissions WHERE seller_id=? AND month=?', req.user.id, month);
+  res.json({ month, month_cents: Number(m.t), pending_cents: await pendingCents(req.user.id) });
+}));
+
+// resumo por vendedora (admin)
+app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, res) => {
+  const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' ORDER BY name");
+  const rows = await Promise.all(sellers.map(async (s) => {
+    const m = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM commissions WHERE seller_id=? AND month=?', s.id, month);
+    const pm = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM payouts WHERE seller_id=? AND month=?', s.id, month);
+    return {
+      seller_id: s.id, name: s.name, active: !!s.active, avatar_url: s.avatar_url || null,
+      month_cents: Number(m.t), paid_month_cents: Number(pm.t),
+      pending_cents: await pendingCents(s.id),
+    };
+  }));
+  const tot = (k) => rows.reduce((a, r) => a + r[k], 0);
+  res.json({ month, rows, total_month_cents: tot('month_cents'), total_pending_cents: tot('pending_cents') });
+}));
+
+// histórico de pagamentos (admin)
+app.get('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { month, seller_id } = req.query;
+  const conds = [];
+  const params = [];
+  if (month && /^\d{4}-\d{2}$/.test(month)) { conds.push('p.month=?'); params.push(month); }
+  if (seller_id) { conds.push('p.seller_id=?'); params.push(Number(seller_id)); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const rows = await db.all(
+    `SELECT p.*, u.name AS seller_name, a.name AS by_name FROM payouts p
+     JOIN users u ON u.id=p.seller_id LEFT JOIN users a ON a.id=p.created_by ${where}
+     ORDER BY p.id DESC LIMIT 200`, ...params
+  );
+  res.json({ payouts: rows });
+}));
+
+// registrar pagamento (admin)
+app.post('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { seller_id, amount_cents, month } = req.body || {};
+  const seller = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", Number(seller_id));
+  if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  const cents = Math.round(Number(amount_cents));
+  if (!Number.isFinite(cents) || cents <= 0) return res.status(400).json({ error: 'Valor inválido.' });
+  const m = (month && /^\d{4}-\d{2}$/.test(month)) ? month : todayISO().slice(0, 7);
+  const pend = await pendingCents(seller.id);
+  if (cents > pend) return res.status(400).json({ error: `Valor maior que o pendente (${(pend / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}).` });
+  const r = await db.run('INSERT INTO payouts (seller_id, month, amount_cents, created_by) VALUES (?,?,?,?)',
+    seller.id, m, cents, req.user.id);
+  res.status(201).json({ payout: await db.get('SELECT * FROM payouts WHERE id=?', r.lastInsertRowid), pending_cents: pend - cents });
 }));
 
 // ---------- PONTO (QR + localização) ----------

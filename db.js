@@ -111,6 +111,27 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_punches_date ON punches(date)`,
   `CREATE INDEX IF NOT EXISTS idx_punches_seller_date ON punches(seller_id, date)`,
+  // comissões: R$25 individual (crédito 1,0) / R$12,50 dividida (crédito 0,5) — valores em centavos
+  `CREATE TABLE IF NOT EXISTS commissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents IN (2500, 1250)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (sale_id, seller_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_comm_seller_month ON commissions(seller_id, month)`,
+  // baixas de pagamento feitas pelo admin
+  `CREATE TABLE IF NOT EXISTS payouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_payout_seller ON payouts(seller_id)`,
 ];
 
 let all;
@@ -189,6 +210,14 @@ const ready = (async () => {
   try { await run('DELETE FROM phrases'); } catch {}
   // ponto: garante linha única de config da loja
   try { await run("INSERT INTO ponto_config (id, store_name, radius_m, qr_code) VALUES (1,'Loja',150,'PONTO-LOJA-01') ON CONFLICT(id) DO NOTHING"); } catch {}
+  // comissões: backfill idempotente das vendas antigas (1,0 → 2500 / 0,5 → 1250)
+  try {
+    await run(`INSERT INTO commissions (sale_id, seller_id, month, amount_cents)
+      SELECT sp.sale_id, sp.seller_id, substr(s.sale_date,1,7),
+        CASE WHEN sp.credit >= 1 THEN 2500 ELSE 1250 END
+      FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id
+      WHERE NOT EXISTS (SELECT 1 FROM commissions c WHERE c.sale_id=sp.sale_id AND c.seller_id=sp.seller_id)`);
+  } catch {}
 })();
 
 module.exports = { all, get, run, ready, creditForParticipants, isRemote };

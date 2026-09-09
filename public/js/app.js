@@ -29,6 +29,7 @@ const todayISO = () => { const d = new Date(); return d.toISOString().slice(0, 1
 const fmtV = (n) => (Number(n) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
 const fmtInt = (n) => (Number(n) || 0).toLocaleString('pt-BR');
 const fmtPct = (n) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%');
+const fmtBRL = (cents) => ((Number(cents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtDateBR = (iso) => { if (!iso) return '—'; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -137,6 +138,7 @@ async function route() {
       if (u.role !== 'admin') { location.hash = '#/vendedora'; return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
       if (h === '#/admin/ponto') return viewPonto(app);
+      if (h === '#/admin/comissoes') return viewComissoes(app);
       if (h === '#/admin/relatorio') return viewReport(app);
       if (h === '#/admin/vendedoras') return viewTeam(app);
       if (h.startsWith('#/admin/vendedora/')) return viewSellerDetail(app, h.split('/').pop());
@@ -343,6 +345,7 @@ async function viewSeller(app) {
         <a class="seller-gear" href="#/vendedora/config" title="Configurações"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
       </div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
+      <div class="saldo-line" id="saldoLine">Saldo a receber: —</div>
       <div class="goal-pill">
         <div class="goal-left"><div class="goal-lab">Vendas deste mês:</div><div class="goal-num mono" id="goalMonth">0</div></div>
         <div class="goal-div"></div>
@@ -368,6 +371,7 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
+  api('/api/commissions/me').then((r) => { $('#saldoLine').textContent = `Saldo a receber: ${fmtBRL(r.pending_cents)}`; }).catch(() => {});
   bindAvatar();
   const wp = $('#writePhrase');
   if (wp) wp.onclick = () => modalPhrase();
@@ -883,7 +887,7 @@ function modalEditSale(sale, sellers, onSaved) {
 // ---------- ADMIN ----------
 async function viewAdmin(app) {
   app.innerHTML = `
-    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral</h2><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a></div>
+    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a><a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a></div></div>
     ${periodPills(adminPeriod.key)}
     <div id="customRow" style="display:${adminPeriod.key === 'custom' ? 'block' : 'none'}" class="card">
       <div class="row"><div style="flex:1"><label>De</label><input type="date" id="fFrom" value="${adminPeriod.from || ''}"></div>
@@ -1239,6 +1243,91 @@ function modalFixPonto(p, reload) {
     try {
       await api(`/api/ponto/${p.id}`, { method: 'PUT', body: JSON.stringify({ check_in_hhmm: $('#fxIn').value.trim(), check_out_hhmm: $('#fxOut').value.trim() || null }) });
       closeModal(); toast('Ponto corrigido!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+// ---------- COMISSÕES (admin): conta a pagar + baixas ----------
+async function viewComissoes(app) {
+  const t = todayISO();
+  app.innerHTML = `
+    <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
+    <h2 style="margin:6px 0">Comissões 💰</h2>
+    <p class="muted" style="font-size:13px;margin:0 0 10px">R$ 25,00 individual • R$ 12,50 dividida (2–3).</p>
+    <div class="card">
+      <label>Mês</label><input type="month" id="cMonth" value="${t.slice(0, 7)}">
+      <div style="height:10px"></div><button class="btn btn-primary" id="cGo">Ver mês</button>
+      <div id="cBody" style="margin-top:12px"></div>
+    </div>
+    <h3 class="section-title">Pagamentos</h3>
+    <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
+    <div class="foot">Desenvolvido pela Wisionarium</div>`;
+  const load = async () => {
+    const month = $('#cMonth').value || t.slice(0, 7);
+    const box = $('#cBody');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const s = await api(`/api/commissions/summary?month=${month}`);
+      box.innerHTML = `
+        <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Pendente geral: <b class="mono">${fmtBRL(s.total_pending_cents)}</b></p>
+        ${s.rows.map((r) => `
+          <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center">
+            <b>${esc(r.name)}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</b>
+            <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:4px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
+          ${r.pending_cents > 0 ? `<div class="sale-foot"><button class="btn" data-pay="${r.seller_id}">Marcar como pago</button></div>` : ''}
+          </div>`).join('' )}
+        <button class="btn btn-big" id="copyComm">Copiar resumo</button>`;
+      $('#copyComm').onclick = async () => {
+        const msg = `*COMISSÕES — ${month}*\nMês: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\nPendente: ${(s.total_pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n` +
+          s.rows.map((r) => `• ${r.name}: mês ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • pendente ${(r.pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`).join('\n');
+        await navigator.clipboard.writeText(msg).catch(() => {});
+        toast('Resumo copiado!');
+      };
+      $$('#cBody [data-pay]').forEach((b) => (b.onclick = () => {
+        const row = s.rows.find((x) => String(x.seller_id) === String(b.dataset.pay));
+        modalPagar(row, month, () => { load(); loadPays(); });
+      }));
+    } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const loadPays = async () => {
+    try {
+      const { payouts } = await api('/api/commissions/payouts');
+      $('#payList').innerHTML = payouts.length ? payouts.map((p) => `
+        <div class="row" style="align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:8px 0">
+          <div><b>${esc(p.seller_name)}</b> <span class="muted" style="font-size:12px">${esc(p.month)}${p.by_name ? ` • por ${esc(p.by_name)}` : ''}</span></div>
+          <b class="mono">${fmtBRL(p.amount_cents)}</b>
+        </div>`).join('') : '<div class="empty">Nenhum pagamento registrado.</div>';
+    } catch (e) { $('#payList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  $('#cGo').onclick = load;
+  await load();
+  await loadPays();
+}
+
+function modalPagar(row, month, reload) {
+  const maxReais = (row.pending_cents / 100).toFixed(2);
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">Pagar — ${esc(row.name)}</h3>
+    <p class="muted" style="font-size:13px">Pendente total: <b class="mono">${fmtBRL(row.pending_cents)}</b></p>
+    <form id="fPay">
+      <label>Valor (R$) *</label><input id="payVal" type="number" min="0.01" step="0.01" max="${maxReais}" value="${maxReais}" required>
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Confirmar pagamento</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fPay').onsubmit = async (e) => {
+    e.preventDefault();
+    const cents = Math.round(Number($('#payVal').value) * 100);
+    if (!confirm(`Confirmar pagamento de ${(cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para ${row.name}?`)) return;
+    try {
+      await api('/api/commissions/payouts', { method: 'POST', body: JSON.stringify({ seller_id: row.seller_id, amount_cents: cents, month }) });
+      closeModal(); toast('Pagamento registrado!'); if (reload) reload();
     } catch (err) { toast(err.message, 'err'); }
   };
 }
