@@ -1071,22 +1071,29 @@ async function viewPonto(app) {
       const { config } = await api('/api/ponto/config');
       $('#cfgBox').innerHTML = `
         <label>Nome da loja</label><input id="cName" value="${esc(config.store_name || '')}">
-        <div class="row"><div style="flex:1"><label>Latitude</label><input id="cLat" inputmode="decimal" placeholder="-23.55" value="${config.lat ?? ''}"></div>
-        <div style="flex:1"><label>Longitude</label><input id="cLng" inputmode="decimal" placeholder="-46.63" value="${config.lng ?? ''}"></div></div>
-        <label>Raio (metros, 30–2000)</label><input id="cRad" type="number" min="30" max="2000" value="${config.radius_m ?? 150}">
-        <p class="muted" style="font-size:12px">Dica: abra o mapa no celular na porta da loja e copie as coordenadas. <button class="btn" type="button" id="useGeo">📍 Usar minha posição atual</button></p>
+        <p class="muted" id="cGeoStatus" style="font-size:13px">${config.lat != null && config.lng != null ? '📍 Localização definida ✓' : '📍 Localização ainda não definida'}</p>
+        <button class="btn btn-big" type="button" id="useGeo">📍 Usar minha posição atual</button>
+        <div style="height:10px"></div>
         <button class="btn btn-accent btn-big" id="saveCfg">Salvar</button>`;
+      let pendingLat = config.lat ?? null;
+      let pendingLng = config.lng ?? null;
       $('#useGeo').onclick = async () => {
+        const btn = $('#useGeo');
+        btn.disabled = true;
+        btn.textContent = 'Obtendo localização…';
         try {
           const pos = await getGeo();
-          $('#cLat').value = pos.coords.latitude.toFixed(6);
-          $('#cLng').value = pos.coords.longitude.toFixed(6);
-          toast('Posição capturada! Confira e salve.');
+          pendingLat = Number(pos.coords.latitude.toFixed(6));
+          pendingLng = Number(pos.coords.longitude.toFixed(6));
+          $('#cGeoStatus').textContent = '📍 Localização capturada ✓ (salve para confirmar)';
+          toast('Posição capturada! Toque em Salvar.');
         } catch (e) { toast(e.message, 'err'); }
+        btn.disabled = false;
+        btn.textContent = '📍 Usar minha posição atual';
       };
       $('#saveCfg').onclick = async () => {
         try {
-          await api('/api/ponto/config', { method: 'PUT', body: JSON.stringify({ store_name: $('#cName').value, lat: $('#cLat').value === '' ? null : Number($('#cLat').value), lng: $('#cLng').value === '' ? null : Number($('#cLng').value), radius_m: Number($('#cRad').value) }) });
+          await api('/api/ponto/config', { method: 'PUT', body: JSON.stringify({ store_name: $('#cName').value, lat: pendingLat, lng: pendingLng, radius_m: config.radius_m ?? 150 }) });
           toast('Loja salva!');
         } catch (e) { toast(e.message, 'err'); }
       };
