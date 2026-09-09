@@ -149,9 +149,9 @@ body.history-top #userBadge{margin-left:auto;font-weight:700}
 .goal-right{flex:1;padding:12px 8px;text-align:center;border:none;background:transparent;cursor:pointer;color:var(--ink);font-family:inherit}
 .goal-lab{font-size:13px;font-weight:700;color:#3c4a43}
 .goal-num{font-size:30px;font-weight:800}
-.ponto-strip{margin:14px auto 0;max-width:440px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:8px 8px 8px 16px;display:flex;align-items:center;gap:10px;color:#fff;font-size:13px;font-weight:700;min-width:0}
+.ponto-strip{margin:12px auto 0;max-width:440px;background:transparent;border:none;padding:0 4px;display:flex;align-items:center;gap:10px;color:#fff;font-size:13px;font-weight:600;min-width:0}
 .ponto-strip span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ponto-btn{flex:none;border:none;background:var(--lime);color:var(--lime-ink);font-weight:800;font-size:13px;padding:10px 16px;border-radius:999px;cursor:pointer;min-height:44px}
+.ponto-btn{flex:none;border:none;background:var(--lime);color:var(--lime-ink);font-weight:700;font-size:12px;padding:8px 14px;border-radius:999px;cursor:pointer;min-height:36px}
 .phrase{margin:32px 6px 8px;text-align:center}
 .phrase-title{font-size:12px;color:var(--muted)}
 .phrase-text{font-style:italic;font-size:15px;line-height:1.5;margin-top:4px}
