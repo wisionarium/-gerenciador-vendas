@@ -469,15 +469,16 @@ function modalPonto(onSaved) {
         window.__qrScanner = qr;
         scanning = true;
         await qr.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 250 } },
+          { facingMode: 'environment', width: { ideal: 1280 } },
+          { fps: 15, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
           (decoded) => { try { qr.stop().catch(() => {}); } catch {} scanning = false; punch(String(decoded).trim()); },
           () => {}
         );
-      } catch {
+      } catch (err) {
         scanning = false;
         $('#scanBtn').disabled = false;
-        toast('Permita a câmera para escanear.', 'err');
+        const why = err && (err.name || err.message) ? ` (${err.name || ''} ${err.message || ''})`.trim().slice(0, 80) : '';
+        toast(`Não abriu a câmera${why}. Permita a câmera e tente de novo.`, 'err');
       }
       return;
     }
