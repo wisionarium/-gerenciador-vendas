@@ -426,7 +426,7 @@ function modalPonto(onSaved) {
     <h3 style="margin:0">Bater ponto 🕒</h3>
     <p class="muted" style="font-size:13px">Aponte a câmera para o QR da loja. Vale para entrada e saída — a localização é usada <b>só agora</b>.</p>
     <button class="btn btn-big" id="scanBtn">📷 Escanear QR</button>
-    <div id="scanBox" style="display:none;margin-top:10px"><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000"></video>
+    <div id="scanBox" style="display:none;margin-top:10px"><div id="qrReader" style="width:100%"></div><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000;display:none"></video>
     <p class="muted" id="scanStatus" style="font-size:12px">Aponte para o QR…</p></div>
     <button class="btn btn-ghost btn-big" type="button" id="cancel" style="margin-top:10px">Cancelar</button>
   </div></div>`;
@@ -435,7 +435,7 @@ function modalPonto(onSaved) {
   let stream = null;
   let scanning = false;
   let done = false;
-  const stopScan = () => { scanning = false; if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} stream = null; } const v = $('#scanVideo'); if (v) v.srcObject = null; };
+  const stopScan = () => { scanning = false; try { window.__qrScanner?.stop().catch(() => {}); } catch {} window.__qrScanner = null; if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} stream = null; } const v = $('#scanVideo'); if (v) { try { v.srcObject = null; v.innerHTML = ''; } catch {} } };
   const punch = async (code) => {
     if (done) return;
     done = true;
@@ -460,13 +460,36 @@ function modalPonto(onSaved) {
     } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
   };
   $('#scanBtn').onclick = async () => {
-    if (!('BarcodeDetector' in window)) { toast('Leitura de QR indisponível neste aparelho.', 'err'); return; }
+    // 1) tenta lib com decoder próprio (funciona no iPhone e Android)
+    if (window.Html5Qrcode) {
+      $('#scanBox').style.display = 'block';
+      $('#scanBtn').disabled = true;
+      try {
+        const qr = new Html5Qrcode('qrReader');
+        window.__qrScanner = qr;
+        scanning = true;
+        await qr.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: (w, h) => ({ width: Math.min(w, 260), height: Math.min(h, 260) }) },
+          (decoded) => { try { qr.stop().catch(() => {}); } catch {} scanning = false; punch(String(decoded).trim()); },
+          () => {}
+        );
+      } catch {
+        scanning = false;
+        $('#scanBtn').disabled = false;
+        toast('Permita a câmera para escanear.', 'err');
+      }
+      return;
+    }
+    // 2) fallback: detector nativo (Chrome/Edge em HTTPS)
+    if (!('BarcodeDetector' in window)) { toast('Leitura de QR indisponível. Atualize o app e tente de novo.', 'err'); return; }
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     } catch { toast('Permita a câmera para escanear.', 'err'); return; }
     $('#scanBox').style.display = 'block';
     $('#scanBtn').disabled = true;
     const video = $('#scanVideo');
+    video.style.display = 'block';
     video.srcObject = stream;
     await video.play().catch(() => {});
     const det = new BarcodeDetector({ formats: ['qr_code'] });
