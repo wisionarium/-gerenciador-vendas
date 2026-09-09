@@ -781,9 +781,12 @@ function modalSale(sellers) {
       <select id="sChannel"><option>WhatsApp</option><option>CRM</option></select>
       <label>Data</label><input type="date" id="sDate" value="${todayISO()}" max="${todayISO()}">
       <label>Participantes (1 a 3) *</label>
-      <div class="check-list" id="plist">
-        ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}">${esc(s.name)}</div>`).join('')}
-      </div>
+      <details class="tray" id="pTray">
+        <summary id="pTraySum">Selecionar participantes…</summary>
+        <div class="check-list" id="plist">
+          ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}">${esc(s.name)}</div>`).join('')}
+        </div>
+      </details>
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Registrar venda</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -795,7 +798,10 @@ function modalSale(sellers) {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
     if ($$('#plist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
+    const sel = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim());
+    $('#pTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
   };
+  $('#pTraySum').textContent = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim()).join(', ') || 'Selecionar participantes…';
   $('#fSale').onsubmit = async (e) => {
     e.preventDefault();
     const pids = $$('#plist .check.on').map((c) => Number(c.dataset.id));
@@ -831,9 +837,12 @@ function modalEditSale(sale, sellers, onSaved) {
       <select id="eChannel"><option ${sale.channel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${sale.channel === 'CRM' ? 'selected' : ''}>CRM</option></select>
       <label>Data</label><input type="date" id="eDate" value="${esc(sale.sale_date)}" max="${todayISO()}">
       <label>Participantes (1 a 3) *</label>
-      <div class="check-list" id="eplist">
-        ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}">${esc(s.name)}</div>`).join('')}
-      </div>
+      <details class="tray" id="eTray">
+        <summary id="eTraySum">Selecionar participantes…</summary>
+        <div class="check-list" id="eplist">
+          ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}">${esc(s.name)}</div>`).join('')}
+        </div>
+      </details>
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar alterações</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -845,7 +854,10 @@ function modalEditSale(sale, sellers, onSaved) {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
     if ($$('#eplist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
+    const sel = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim());
+    $('#eTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
   };
+  $('#eTraySum').textContent = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim()).join(', ') || 'Selecionar participantes…';
   $('#fEditSale').onsubmit = async (e) => {
     e.preventDefault();
     const pids = $$('#eplist .check.on').map((c) => Number(c.dataset.id));
