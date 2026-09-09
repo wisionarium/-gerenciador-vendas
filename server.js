@@ -241,9 +241,9 @@ app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
       canWrite: drawn ? (req.user.id === drawn.id || req.user.role === 'admin') : false,
     });
   }
-  const list = await db.all('SELECT * FROM phrases WHERE active=1 ORDER BY id');
+  // só vale a frase escrita pela vendedora (sem frase padrão/banco)
   res.json({
-    text: list.length ? bankPhrase(list, today) : '', author: null, authorId: null, date: today,
+    text: '', author: null, authorId: null, date: today,
     drawnSellerId: drawn ? drawn.id : null, drawnSellerName: drawn ? drawn.name : null,
     canWrite: drawn ? (req.user.id === drawn.id || req.user.role === 'admin') : false,
   });
