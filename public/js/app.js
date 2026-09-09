@@ -1447,9 +1447,44 @@ function modalUser(u, reload) {
   setTimeout(exit, 3000);
 })();
 
-// ---------- PWA ----------
+// ---------- PWA: auto-atualiza ao abrir/voltar (iPhone guarda o app suspenso) ----------
+let bootVersion = null;
+let alreadyReloaded = false;
+async function fetchAppVersion() {
+  try {
+    const r = await fetch('/version.json?ts=' + Date.now(), { cache: 'no-store' });
+    const j = await r.json();
+    return j.version ?? null;
+  } catch { return null; }
+}
+function maybeReload() {
+  if (alreadyReloaded) return;
+  alreadyReloaded = true;
+  location.reload();
+}
+async function checkAppUpdate() {
+  const v = await fetchAppVersion();
+  if (v == null) return;
+  if (bootVersion == null) { bootVersion = v; return; }
+  if (v !== bootVersion) maybeReload();
+}
+fetchAppVersion().then((v) => { bootVersion = v; });
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js')
+    .then((reg) => {
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (nw) nw.addEventListener('statechange', () => {
+          if (nw.state === 'activated' && navigator.serviceWorker.controller) maybeReload();
+        });
+      });
+    }).catch(() => {}));
+  navigator.serviceWorker.addEventListener('controllerchange', () => maybeReload());
+  const refreshSW = () => { try { navigator.serviceWorker.getRegistration().then((r) => r && r.update().catch(() => {})); } catch {} };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshSW(); checkAppUpdate(); } });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) checkAppUpdate(); else refreshSW(); });
+  window.addEventListener('focus', () => checkAppUpdate());
+  setInterval(checkAppUpdate, 15 * 60 * 1000);
 }
 // ---------- boot ----------
 (async function boot() {
