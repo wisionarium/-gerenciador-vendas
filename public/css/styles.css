@@ -123,6 +123,10 @@ th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);overf
 #alertBox .alert{margin:0;box-shadow:0 12px 32px rgba(11,59,44,.25)}
 body.seller-home .topbar{display:none}
 body.seller-home #app{padding-top:0}
+/* histórico: topo só com logo + nome da vendedora */
+body.history-top .brand-name,body.history-top .brand-sub,body.history-top #logoutBtn{display:none !important}
+body.history-top .topbar-inner{gap:10px}
+body.history-top #userBadge{margin-left:auto;font-weight:700}
 /* ---------- home da vendedora (layout Canva) ---------- */
 .seller-head{background:linear-gradient(165deg,var(--brand-2),var(--brand));border-radius:0 0 46px 46px;padding:calc(64px + env(safe-area-inset-top,0px)) 22px 38px;color:#fff;margin:-16px -16px 0;max-width:calc(100% + 32px)}
 .seller-top{display:flex;align-items:center;gap:12px;min-width:0}
