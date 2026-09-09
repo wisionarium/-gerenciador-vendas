@@ -392,14 +392,12 @@ async function viewSeller(app) {
     const el = $('#pontoStrip');
     if (!el) return;
     if (!punch) {
-      el.innerHTML = `<span>🕒 Hoje: —</span><button class="ponto-btn" id="pontoBtn">Bater ponto</button>`;
+      el.innerHTML = `<span>🕒 Hoje: —</span>`;
     } else if (punch.check_in_at && !punch.check_out_at) {
-      el.innerHTML = `<span>🕒 Entrada ${esc(punch.in_hhmm || '')} • Saída —</span><button class="ponto-btn" id="pontoBtn">Bater saída</button>`;
+      el.innerHTML = `<span>🕒 Entrada ${esc(punch.in_hhmm || '')} • Saída —</span>`;
     } else {
       el.innerHTML = `<span>🕒 Entrada ${esc(punch.in_hhmm || '')} • Saída ${esc(punch.out_hhmm || '')}</span>`;
     }
-    const b = $('#pontoBtn');
-    if (b) b.onclick = () => modalPonto(() => loadPonto());
   };
   const loadPonto = async () => {
     try {
@@ -925,10 +923,13 @@ function modalEscolhaRegistro() {
     <button class="btn btn-accent btn-big" id="chSale">🛵 Registrar venda</button>
     <div style="height:10px"></div>
     <button class="btn btn-primary btn-big" id="chCalls">📞 Registrar chamadas</button>
+    ${store.user?.role === 'seller' ? `<div style="height:10px"></div><button class="btn btn-big" id="chPonto" style="border-radius:10px;background:#fff">🕒 Bater ponto</button>` : ''}
     <button class="btn btn-ghost btn-big" id="cancel">Cancelar</button>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  const chPonto = $('#chPonto');
+  if (chPonto) chPonto.onclick = () => modalPonto(() => route());
   $('#chSale').onclick = async () => {
     try {
       const { sellers } = await api('/api/sellers');
