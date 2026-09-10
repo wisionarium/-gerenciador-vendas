@@ -109,7 +109,7 @@ function setNav() {
   });
   mark('#bottomNav a');
 }
-$('#logoutBtn').onclick = () => { store.token = null; store.user = null; go('#/login'); };
+$('#logoutBtn').onclick = () => modalConfirmLogout();
 
 // navegação sem empilhar histórico: o gesto de "voltar" do iPhone não tem para onde ir,
 // a navbar (e os links internos) é o único jeito de trocar de tela
@@ -677,7 +677,7 @@ async function viewConfig(app) {
       .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
       .catch((e) => toast(e.message, 'err'));
   };
-  $('#cfgLogout').onclick = () => { store.token = null; store.user = null; go('#/login'); };
+  $('#cfgLogout').onclick = () => modalConfirmLogout();
   try {
     const { darks, lights, dark, light } = await api('/api/settings/theme');
     const paint = (gridId, map, current, colorOf) => {
@@ -778,6 +778,21 @@ async function viewMySales(app) {
 
 // ---------- modals ----------
 function closeModal() { $('#modalRoot').innerHTML = ''; }
+
+// confirmação de saída (evita toque acidental ao rolar a tela)
+function modalConfirmLogout() {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">Sair da conta?</h3>
+    <p class="muted" style="font-size:14px">Você precisará fazer login de novo para entrar.</p>
+    <button class="btn btn-big" id="logoutYes" style="border-radius:10px;background:#fff">Sair</button>
+    <div style="height:10px"></div>
+    <button class="btn btn-ghost btn-big" id="cancel">Cancelar</button>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#logoutYes').onclick = () => { store.token = null; store.user = null; closeModal(); go('#/login'); };
+}
 
 function modalCalls() {
   $('#modalRoot').innerHTML = `
