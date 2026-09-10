@@ -543,9 +543,19 @@ function modalPonto(onSaved, autostart) {
       } catch (err) {
         scanning = false;
         $('#scanBtn').disabled = false;
-        if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) { modalCameraHelp(); return; }
-        const why = err && (err.name || err.message) ? ` (${err.name || ''} ${err.message || ''})`.trim().slice(0, 80) : '';
-        toast(`Câmera ao vivo indisponível${why}. Use "Fotografar QR" abaixo.`, 'err');
+        // diagnóstico real: o iPhone instalado muitas vezes nem expõe câmera ao site
+        let diag = '';
+        try {
+          const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+          const hasApi = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+          let nCams = '?';
+          try {
+            const devs = await navigator.mediaDevices.enumerateDevices();
+            nCams = devs.filter((d) => d.kind === 'videoinput').length;
+          } catch { nCams = 'erro'; }
+          diag = ` App instalado: ${standalone ? 'sim' : 'não'} • Câmera liberada pro site: ${hasApi ? 'sim' : 'não'} • Câmeras encontradas: ${nCams}`;
+        } catch {}
+        toast(`Sem câmera ao vivo aqui.${diag} Use "Fotografar QR".`, 'err');
       }
       return;
     }
