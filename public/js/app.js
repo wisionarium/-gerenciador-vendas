@@ -449,41 +449,18 @@ function getGeo() {
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
   });
 }
-function modalPonto(onSaved, autostart) {
+function modalPonto(onSaved) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Bater ponto 🕒</h3>
-    <p class="muted" style="font-size:13px">Aponte a câmera para o QR da loja. Vale para entrada e saída — a localização é usada <b>só agora</b>.</p>
+    <p class="muted" style="font-size:13px">Toque em Escanear e <b>permita a câmera</b> (marque "Ao usar o app"). Vale para entrada e saída — a localização é usada <b>só agora</b>.</p>
     <button class="btn btn-big" id="scanBtn">📷 Escanear QR</button>
-    <div style="height:10px"></div>
-    <button class="btn btn-big" id="photoBtn">🖼️ Fotografar QR</button>
-    <input type="file" id="qrFile" accept="image/*" capture="environment" style="display:none">
     <div id="scanBox" style="display:none;margin-top:10px"><div id="qrReader" style="width:100%"></div><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000;display:none"></video>
     <p class="muted" id="scanStatus" style="font-size:12px">Aponte para o QR…</p></div>
     <button class="btn btn-ghost btn-big" type="button" id="cancel" style="margin-top:10px">Cancelar</button>
   </div></div>`;
   $('#cancel').onclick = () => { stopScan(); closeModal(); };
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') { stopScan(); closeModal(); } };
-  // plano B (iPhones com câmera ao vivo bloqueada): fotografa e decodifica a imagem
-  $('#photoBtn').onclick = () => $('#qrFile').click();
-  $('#qrFile').onchange = async () => {
-    const f = $('#qrFile').files[0];
-    if (!f) return;
-    const st = $('#scanStatus');
-    $('#scanBox').style.display = 'block';
-    try {
-      stopScan();
-      if (st) st.textContent = 'Lendo QR da foto…';
-      const tmp = new Html5Qrcode('qrReader');
-      const decoded = await tmp.scanFile(f, false);
-      try { tmp.clear(); } catch {}
-      punch(String(decoded).trim());
-    } catch {
-      if (st) st.textContent = 'Aponte para o QR…';
-      toast('Não identifiquei o QR na foto. Tente de novo com mais luz, de perto.', 'err');
-    }
-    $('#qrFile').value = '';
-  };
   let stream = null;
   let scanning = false;
   let done = false;
@@ -511,22 +488,8 @@ function modalPonto(onSaved, autostart) {
       if (onSaved) onSaved();
     } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
   };
+  // abre DIRETO no toque (sem telas no meio): o iOS só libera a câmera dentro do gesto
   $('#scanBtn').onclick = async () => {
-    // na reabertura automática (pós-aviso) pula a checagem e vai direto ao sistema
-    if (!autostart) {
-      try {
-        if (navigator.permissions && navigator.permissions.query) {
-          const st = await navigator.permissions.query({ name: 'camera' });
-          if (st.state === 'denied') { modalCameraHelp(); return; }
-          if (st.state === 'prompt') {
-            const go2 = await modalCameraAsk();
-            modalPonto(onSaved, go2);
-            return;
-          }
-        }
-      } catch {}
-    }
-    // 1) tenta lib com decoder próprio (funciona no iPhone e Android)
     if (window.Html5Qrcode) {
       $('#scanBox').style.display = 'block';
       $('#scanBtn').disabled = true;
@@ -535,27 +498,16 @@ function modalPonto(onSaved, autostart) {
         window.__qrScanner = qr;
         scanning = true;
         await qr.start(
-          { facingMode: 'environment', width: { ideal: 1280 } },
-          { fps: 15, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: 250 },
           (decoded) => { try { qr.stop().catch(() => {}); } catch {} scanning = false; punch(String(decoded).trim()); },
           () => {}
         );
       } catch (err) {
         scanning = false;
         $('#scanBtn').disabled = false;
-        // diagnóstico real: o iPhone instalado muitas vezes nem expõe câmera ao site
-        let diag = '';
-        try {
-          const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
-          const hasApi = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-          let nCams = '?';
-          try {
-            const devs = await navigator.mediaDevices.enumerateDevices();
-            nCams = devs.filter((d) => d.kind === 'videoinput').length;
-          } catch { nCams = 'erro'; }
-          diag = ` App instalado: ${standalone ? 'sim' : 'não'} • Câmera liberada pro site: ${hasApi ? 'sim' : 'não'} • Câmeras encontradas: ${nCams}`;
-        } catch {}
-        toast(`Sem câmera ao vivo aqui.${diag} Use "Fotografar QR".`, 'err');
+        if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) { modalCameraHelp(); return; }
+        toast(`Não abriu a câmera (${(err && (err.name || err.message)) || 'erro'}). Tente de novo.`, 'err');
       }
       return;
     }
@@ -582,23 +534,6 @@ function modalPonto(onSaved, autostart) {
     };
     tick();
   };
-  if (autostart) $('#scanBtn').click();
-}
-
-// explica antes de pedir: marcar "Ao usar o app" evita perguntar toda vez
-function modalCameraAsk() {
-  return new Promise((resolve) => {
-    $('#modalRoot').innerHTML = `
-    <div class="modal-bg anim-up" id="mbg"><div class="modal">
-      <h3 style="margin:0">📷 Permissão da câmera</h3>
-      <p class="muted" style="font-size:14px;line-height:1.5">O celular vai pedir acesso à câmera.<br><br>Toque em <b>Permitir</b> e escolha <b>"Ao usar o app"</b> (não "Só desta vez") — assim ele <b>não pergunta de novo</b>.</p>
-      <button class="btn btn-accent btn-big" id="camOk">Entendi, abrir câmera</button>
-      <button class="btn btn-ghost btn-big" type="button" id="cancel">Agora não</button>
-    </div></div>`;
-    $('#cancel').onclick = () => { closeModal(); resolve(false); };
-    $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') { closeModal(); resolve(false); } };
-    $('#camOk').onclick = () => { closeModal(); resolve(true); };
-  });
 }
 
 // câmera bloqueada: ensina a liberar (o navegador não pergunta de novo sozinho)
