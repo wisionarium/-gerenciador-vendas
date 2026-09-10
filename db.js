@@ -18,6 +18,7 @@ const SCHEMA = [
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin','seller')) DEFAULT 'seller',
+    sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -35,9 +36,11 @@ const SCHEMA = [
     customer_name TEXT NOT NULL,
     product TEXT NOT NULL,
     color TEXT NOT NULL,
-    channel TEXT NOT NULL CHECK (channel IN ('WhatsApp','CRM')),
+    channel TEXT NOT NULL CHECK (channel IN ('WhatsApp','CRM','Presencial')),
     created_by INTEGER NOT NULL REFERENCES users(id),
     sale_date TEXT NOT NULL,
+    is_bonus INTEGER NOT NULL DEFAULT 0,
+    bonus_cents INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -111,13 +114,13 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_punches_date ON punches(date)`,
   `CREATE INDEX IF NOT EXISTS idx_punches_seller_date ON punches(seller_id, date)`,
-  // comissões: R$25 individual (crédito 1,0) / R$12,50 dividida (crédito 0,5) — valores em centavos
+  // comissões em centavos: online 2500/1250, presencial 3500/1750, modelo especial (bônus) = valor livre > 0
   `CREATE TABLE IF NOT EXISTS commissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sale_id INTEGER NOT NULL,
     seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     month TEXT NOT NULL,
-    amount_cents INTEGER NOT NULL CHECK (amount_cents IN (2500, 1250)),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (sale_id, seller_id)
   )`,
@@ -144,6 +147,8 @@ const SCHEMA = [
     participants TEXT NOT NULL DEFAULT '[]',
     reason TEXT NOT NULL CHECK (reason IN ('desistencia','outros')),
     note TEXT NOT NULL DEFAULT '',
+    is_bonus INTEGER NOT NULL DEFAULT 0,
+    bonus_cents INTEGER,
     canceled_by INTEGER REFERENCES users(id),
     canceled_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -196,6 +201,28 @@ function creditForParticipants(count) {
   throw new Error('Venda deve ter de 1 a 3 participantes.');
 }
 
+// ---- Comissão por setor + bônus de modelo especial ----
+// sectors: setores ('online'/'presencial') das participantes da venda
+// bonusCents: base exclusiva em centavos (modelo especial) ou null
+// - todos presencial → base 3500; se há qualquer online → base 2500
+// - individual recebe a base cheia; dividida (2–3) recebe metade
+function commissionBaseCents(sectors, bonusCents) {
+  if (bonusCents != null) return Math.round(Number(bonusCents));
+  const allPres = Array.isArray(sectors) && sectors.length > 0 && sectors.every((s) => s === 'presencial');
+  return allPres ? 3500 : 2500;
+}
+function commissionCents(sectors, count, bonusCents) {
+  if (count !== 1 && count !== 2 && count !== 3) throw new Error('Venda deve ter de 1 a 3 participantes.');
+  let bonus = null;
+  if (bonusCents != null && bonusCents !== '') {
+    bonus = Math.round(Number(bonusCents));
+    if (!Number.isFinite(bonus) || bonus <= 0 || bonus > 100000)
+      throw new Error('Bônus deve ser entre R$ 0,01 e R$ 1.000,00.');
+  }
+  const base = commissionBaseCents(sectors, bonus);
+  return count === 1 ? base : Math.round(base / 2);
+}
+
 const bcrypt = require('bcryptjs');
 
 const ready = (async () => {
@@ -234,6 +261,80 @@ const ready = (async () => {
       FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id
       WHERE NOT EXISTS (SELECT 1 FROM commissions c WHERE c.sale_id=sp.sale_id AND c.seller_id=sp.seller_id)`);
   } catch {}
+  // setor: vendedoras antigas viram 'online'
+  try { await run("ALTER TABLE users ADD COLUMN sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial'))"); } catch {}
+  try { await run("UPDATE users SET sector='online' WHERE sector IS NULL OR sector NOT IN ('online','presencial')"); } catch {}
+  // bônus na venda + auditoria de canceladas
+  try { await run('ALTER TABLE sales ADD COLUMN is_bonus INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { await run('ALTER TABLE sales ADD COLUMN bonus_cents INTEGER'); } catch {}
+  try { await run('ALTER TABLE canceled_sales ADD COLUMN is_bonus INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { await run('ALTER TABLE canceled_sales ADD COLUMN bonus_cents INTEGER'); } catch {}
+  await migrateTableChecks();
 })();
 
-module.exports = { all, get, run, ready, creditForParticipants, isRemote };
+// Rebuild idempotente de CHECKs antigos (canal 'Presencial' e comissões flexíveis).
+// Funciona no SQLite local e no Turso (só DDL/DML padrão).
+async function migrateTableChecks() {
+  const tableSQL = async (name) => {
+    try { const r = await get("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", name); return r ? r.sql : ''; }
+    catch { return ''; }
+  };
+  const noFK = async (fn) => {
+    if (isRemote) return fn();
+    try { await run('PRAGMA foreign_keys=OFF'); } catch {}
+    try { return await fn(); }
+    finally { try { await run('PRAGMA foreign_keys=ON'); } catch {} }
+  };
+  // sales: aceita canal 'Presencial'
+  try {
+    const sql = await tableSQL('sales');
+    if (sql && !sql.includes('Presencial')) {
+      await noFK(async () => {
+        await run(`CREATE TABLE sales_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          customer_name TEXT NOT NULL,
+          product TEXT NOT NULL,
+          color TEXT NOT NULL,
+          channel TEXT NOT NULL CHECK (channel IN ('WhatsApp','CRM','Presencial')),
+          created_by INTEGER NOT NULL REFERENCES users(id),
+          sale_date TEXT NOT NULL,
+          is_bonus INTEGER NOT NULL DEFAULT 0,
+          bonus_cents INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`);
+        await run(`INSERT INTO sales_new (id, customer_name, product, color, channel, created_by, sale_date, is_bonus, bonus_cents, created_at, updated_at)
+          SELECT id, customer_name, product, color, channel, created_by, sale_date, COALESCE(is_bonus,0), bonus_cents, created_at, updated_at FROM sales`);
+        await run('DROP TABLE sales');
+        await run('ALTER TABLE sales_new RENAME TO sales');
+        await run('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date)');
+      });
+      console.log('[db] Migração: canal Presencial aplicado.');
+    }
+  } catch (e) { console.log('[db] Migração canal pulada:', e.message); }
+  // commissions: CHECK flexível (qualquer valor > 0: 3500/1750 e bônus)
+  try {
+    const sql = await tableSQL('commissions');
+    if (sql && sql.includes('IN (2500')) {
+      await noFK(async () => {
+        await run(`CREATE TABLE commissions_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id INTEGER NOT NULL,
+          seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          month TEXT NOT NULL,
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (sale_id, seller_id)
+        )`);
+        await run(`INSERT INTO commissions_new (id, sale_id, seller_id, month, amount_cents, created_at)
+          SELECT id, sale_id, seller_id, month, amount_cents, created_at FROM commissions`);
+        await run('DROP TABLE commissions');
+        await run('ALTER TABLE commissions_new RENAME TO commissions');
+        await run('CREATE INDEX IF NOT EXISTS idx_comm_seller_month ON commissions(seller_id, month)');
+      });
+      console.log('[db] Migração: comissões flexíveis aplicada.');
+    }
+  } catch (e) { console.log('[db] Migração comissões pulada:', e.message); }
+}
+
+module.exports = { all, get, run, ready, creditForParticipants, commissionCents, commissionBaseCents, isRemote };

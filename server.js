@@ -19,7 +19,25 @@ const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 // ---------- helpers ----------
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !isNaN(Date.parse(s));
-const toPublicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null });
+const toPublicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, sector: u.sector || 'online', active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null });
+const validSector = (s) => ['online', 'presencial'].includes(s);
+const CHANNELS = ['WhatsApp', 'CRM', 'Presencial'];
+
+// bônus de modelo especial: body {is_bonus, bonus_value em R$} → centavos ou null.
+// Retorna {isBonus, bonusCents} ou {error}.
+function parseBonus(body) {
+  const flag = body && (body.is_bonus === true || body.is_bonus === 1 || body.is_bonus === '1');
+  if (!flag) return { isBonus: false, bonusCents: null };
+  const v = Math.round(Number(String(body.bonus_value ?? '').replace(',', '.')) * 100);
+  if (!Number.isFinite(v) || v <= 0 || v > 100000)
+    return { error: 'Informe o valor do bônus (R$ 0,01 a R$ 1.000,00).' };
+  return { isBonus: true, bonusCents: v };
+}
+// setores das participantes a partir das linhas de users
+const sectorsOf = (sellers, pids) => pids.map((id) => {
+  const s = sellers.find((x) => Number(x.id) === Number(id));
+  return (s && s.sector) || 'online';
+});
 
 function signToken(user) {
   return jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
@@ -79,11 +97,14 @@ app.put('/api/me/avatar', requireAuth, ah(async (req, res) => {
 
 // ---------- SELLERS / USERS ----------
 app.get('/api/sellers', requireAuth, ah(async (req, res) => {
+  const { sector } = req.query;
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
+  const sectorParam = validSector(sector) ? [sector] : [];
   if (req.user.role === 'admin') {
-    const rows = await db.all("SELECT * FROM users WHERE role='seller' ORDER BY name");
+    const rows = await db.all(`SELECT * FROM users WHERE role='seller'${sectorFilter} ORDER BY name`, ...sectorParam);
     return res.json({ sellers: rows.map(toPublicUser) });
   }
-  const rows = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const rows = await db.all(`SELECT * FROM users WHERE role='seller' AND active=1${sectorFilter} ORDER BY name`, ...sectorParam);
   return res.json({ sellers: rows.map(toPublicUser) });
 }));
 
@@ -93,13 +114,14 @@ app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role } = req.body || {};
+  const { name, email, password, role, sector } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
   if (!['admin', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
+  if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
   if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
   try {
-    const r = await db.run('INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
-      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role);
+    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, active) VALUES (?,?,?,?,?,1)',
+      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online');
     const u = await db.get('SELECT * FROM users WHERE id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
@@ -109,14 +131,15 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role } = req.body || {};
+  const { name, email, password, role, sector } = req.body || {};
   const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
   if (role && !['admin', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
+  if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
   try {
-    await db.run('UPDATE users SET name=?, email=?, role=? WHERE id=?',
-      name.trim(), email.trim().toLowerCase(), role || target.role, target.id);
+    await db.run('UPDATE users SET name=?, email=?, role=?, sector=? WHERE id=?',
+      name.trim(), email.trim().toLowerCase(), role || target.role, validSector(sector) ? sector : (target.sector || 'online'), target.id);
     if (password) {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
       await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
@@ -356,7 +379,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   const params = [];
   if (from && isValidDate(from)) { conds.push('s.sale_date >= ?'); params.push(from); }
   if (to && isValidDate(to)) { conds.push('s.sale_date <= ?'); params.push(to); }
-  if (channel && ['WhatsApp', 'CRM'].includes(channel)) { conds.push('s.channel = ?'); params.push(channel); }
+  if (channel && CHANNELS.includes(channel)) { conds.push('s.channel = ?'); params.push(channel); }
   if (product) { conds.push('s.product LIKE ?'); params.push(`%${product}%`); }
   if (q) { conds.push('(s.customer_name LIKE ? OR s.product LIKE ? OR s.color LIKE ?)'); params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
 
@@ -382,7 +405,7 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
   if (!product?.trim()) return res.status(400).json({ error: 'Produto é obrigatório.' });
   if (!color?.trim()) return res.status(400).json({ error: 'Cor é obrigatória.' });
-  if (!['WhatsApp', 'CRM'].includes(channel)) return res.status(400).json({ error: 'Canal deve ser WhatsApp ou CRM.' });
+  if (!CHANNELS.includes(channel)) return res.status(400).json({ error: 'Canal deve ser WhatsApp, CRM ou Presencial.' });
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   const pids = [...new Set((participant_ids || []).map(Number).filter(Boolean))];
   if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
@@ -391,6 +414,9 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   const placeholders = pids.map(() => '?').join(',');
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
+
+  const bonus = parseBonus(req.body);
+  if (bonus.error) return res.status(400).json({ error: bonus.error });
 
   // trava anti-duplicada: mesma data + mesmo cliente/produto/cor + mesmas participantes
   // 1 cadastro com 2 participantes já aparece no histórico das duas (0,5 cada / 1 no geral),
@@ -417,17 +443,21 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
     return res.status(409).json({ error: `Essa venda já foi cadastrada por ${who} (${origem}). Não cadastre novamente — ela já aparece no seu histórico.` });
   }
 
-  let credit;
-  try { credit = db.creditForParticipants(pids.length); }
+  let credit, perSellerCents;
+  try {
+    credit = db.creditForParticipants(pids.length);
+    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents);
+  }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   const r = await db.run(
-    'INSERT INTO sales (customer_name, product, color, channel, created_by, sale_date) VALUES (?,?,?,?,?,?)',
-    customer_name.trim(), product.trim(), color.trim(), channel, req.user.id, date
+    'INSERT INTO sales (customer_name, product, color, channel, created_by, sale_date, is_bonus, bonus_cents) VALUES (?,?,?,?,?,?,?,?)',
+    customer_name.trim(), product.trim(), color.trim(), channel, req.user.id, date,
+    bonus.isBonus ? 1 : 0, bonus.isBonus ? bonus.bonusCents : null
   );
   const saleId = r.lastInsertRowid;
   for (const sid of pids) await db.run('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)', saleId, sid, credit);
-  await syncCommissions(saleId, pids.map((sid) => ({ seller_id: sid, credit })), date.slice(0, 7));
+  await syncCommissions(saleId, pids.map((sid) => ({ seller_id: sid, amount_cents: perSellerCents })), date.slice(0, 7));
   const sale = await db.get('SELECT * FROM sales WHERE id=?', saleId);
   res.status(201).json({ sale: await saleWithParticipants(sale) });
 }));
@@ -440,7 +470,7 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
   if (!product?.trim()) return res.status(400).json({ error: 'Produto é obrigatório.' });
   if (!color?.trim()) return res.status(400).json({ error: 'Cor é obrigatória.' });
-  if (!['WhatsApp', 'CRM'].includes(channel)) return res.status(400).json({ error: 'Canal deve ser WhatsApp ou CRM.' });
+  if (!CHANNELS.includes(channel)) return res.status(400).json({ error: 'Canal deve ser WhatsApp, CRM ou Presencial.' });
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   const pids = [...new Set((participant_ids || []).map(Number).filter(Boolean))];
   if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
@@ -449,17 +479,23 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
 
-  let credit;
-  try { credit = db.creditForParticipants(pids.length); }
+  const bonus = parseBonus(req.body);
+  if (bonus.error) return res.status(400).json({ error: bonus.error });
+  let credit, perSellerCents;
+  try {
+    credit = db.creditForParticipants(pids.length);
+    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents);
+  }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   await db.run(
-    'UPDATE sales SET customer_name=?, product=?, color=?, channel=?, sale_date=?, updated_at=datetime(\'now\') WHERE id=?',
-    customer_name.trim(), product.trim(), color.trim(), channel, date, sale.id
+    'UPDATE sales SET customer_name=?, product=?, color=?, channel=?, sale_date=?, is_bonus=?, bonus_cents=?, updated_at=datetime(\'now\') WHERE id=?',
+    customer_name.trim(), product.trim(), color.trim(), channel, date,
+    bonus.isBonus ? 1 : 0, bonus.isBonus ? bonus.bonusCents : null, sale.id
   );
   await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
   for (const sid of pids) await db.run('INSERT INTO sale_participants (sale_id, seller_id, credit) VALUES (?,?,?)', sale.id, sid, credit);
-  await syncCommissions(sale.id, pids.map((sid) => ({ seller_id: sid, credit })), date.slice(0, 7));
+  await syncCommissions(sale.id, pids.map((sid) => ({ seller_id: sid, amount_cents: perSellerCents })), date.slice(0, 7));
   const updated = await db.get('SELECT * FROM sales WHERE id=?', sale.id);
   res.json({ sale: await saleWithParticipants(updated) });
 }));
@@ -490,9 +526,9 @@ app.post('/api/sales/:id/cancel', requireAuth, requireAdmin, ah(async (req, res)
   const full = await saleWithParticipants(sale);
   const parts = (full.participants || []).map((p) => ({ seller_id: p.seller_id, seller_name: p.seller_name, credit: Number(p.credit) }));
   await db.run(
-    'INSERT INTO canceled_sales (sale_id, customer_name, product, color, channel, sale_date, participants, reason, note, canceled_by) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO canceled_sales (sale_id, customer_name, product, color, channel, sale_date, participants, reason, note, is_bonus, bonus_cents, canceled_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     sale.id, sale.customer_name, sale.product, sale.color, sale.channel, sale.sale_date,
-    JSON.stringify(parts), reason, cleanNote, req.user.id
+    JSON.stringify(parts), reason, cleanNote, sale.is_bonus ? 1 : 0, sale.bonus_cents || null, req.user.id
   );
   try { await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id); }
   catch (e) { if (!/no such table/i.test(String(e.message))) throw e; }
@@ -510,13 +546,15 @@ app.get('/api/sales/canceled', requireAuth, requireAdmin, ah(async (req, res) =>
   res.json({ canceled: rows.map((r) => ({ ...r, participants: JSON.parse(r.participants || '[]') })) });
 }));
 
-// ---------- COMISSÕES (R$25 individual / R$12,50 dividida, em centavos) ----------
-const commCents = (credit) => (Number(credit) >= 1 ? 2500 : 1250);
+// ---------- COMISSÕES (online 25/12,50 • presencial 35/17,50 • bônus = valor exclusivo) ----------
+// parts: [{seller_id, amount_cents}]
 async function syncCommissions(saleId, parts, month) {
   await db.run('DELETE FROM commissions WHERE sale_id=?', saleId);
   for (const p of parts) {
+    const cents = Math.round(Number(p.amount_cents));
+    if (!Number.isFinite(cents) || cents <= 0) throw new Error('Comissão inválida.');
     await db.run('INSERT INTO commissions (sale_id, seller_id, month, amount_cents) VALUES (?,?,?,?) ON CONFLICT(sale_id, seller_id) DO UPDATE SET month=excluded.month, amount_cents=excluded.amount_cents',
-      saleId, p.seller_id, month, commCents(p.credit));
+      saleId, p.seller_id, month, cents);
   }
 }
 async function pendingCents(sellerId) {
@@ -536,18 +574,20 @@ app.get('/api/commissions/me', requireAuth, ah(async (req, res) => {
 // resumo por vendedora (admin)
 app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, res) => {
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
-  const sellers = await db.all("SELECT * FROM users WHERE role='seller' ORDER BY name");
+  const { sector } = req.query;
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
+  const sellers = await db.all(`SELECT * FROM users WHERE role='seller'${sectorFilter} ORDER BY name`, ...(validSector(sector) ? [sector] : []));
   const rows = await Promise.all(sellers.map(async (s) => {
     const m = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM commissions WHERE seller_id=? AND month=?', s.id, month);
     const pm = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM payouts WHERE seller_id=? AND month=?', s.id, month);
     return {
-      seller_id: s.id, name: s.name, active: !!s.active, avatar_url: s.avatar_url || null,
+      seller_id: s.id, name: s.name, sector: s.sector || 'online', active: !!s.active, avatar_url: s.avatar_url || null,
       month_cents: Number(m.t), paid_month_cents: Number(pm.t),
       pending_cents: await pendingCents(s.id),
     };
   }));
   const tot = (k) => rows.reduce((a, r) => a + r[k], 0);
-  res.json({ month, rows, total_month_cents: tot('month_cents'), total_pending_cents: tot('pending_cents') });
+  res.json({ month, sector: validSector(sector) ? sector : 'all', rows, total_month_cents: tot('month_cents'), total_pending_cents: tot('pending_cents') });
 }));
 
 // histórico de pagamentos (admin)
@@ -723,7 +763,7 @@ app.get('/api/ponto/dia', requireAuth, requireAdmin, ah(async (req, res) => {
   const rows = await Promise.all(sellers.map(async (s) => {
     const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', s.id, date);
     return {
-      seller_id: s.id, name: s.name, avatar_url: s.avatar_url || null,
+      seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null,
       punch: p ? punchCalc(p, !!hol) : null,
     };
   }));
@@ -776,7 +816,7 @@ app.get('/api/ponto/resumo', requireAuth, requireAdmin, ah(async (req, res) => {
       if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
     }
     return {
-      seller_id: s.id, name: s.name, avatar_url: s.avatar_url || null,
+      seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
     };
@@ -852,8 +892,10 @@ async function summarize(from, to, sellerId) {
   const credit = Number((await db.get(withSeller(creditSel), ...creditParams)).t);
   const waSel = withSeller(creditSel.replace('sp.credit', "CASE WHEN s.channel='WhatsApp' THEN sp.credit ELSE 0 END"));
   const crmSel = withSeller(creditSel.replace('sp.credit', "CASE WHEN s.channel='CRM' THEN sp.credit ELSE 0 END"));
+  const presSel = withSeller(creditSel.replace('sp.credit', "CASE WHEN s.channel='Presencial' THEN sp.credit ELSE 0 END"));
   const wa = Number((await db.get(waSel, ...creditParams)).t);
   const crm = Number((await db.get(crmSel, ...creditParams)).t);
+  const presencial = Number((await db.get(presSel, ...creditParams)).t);
 
   let countSel;
   let countParams;
@@ -867,21 +909,35 @@ async function summarize(from, to, sellerId) {
   const records = Number((await db.get(countSel, ...countParams)).t);
 
   const conversion = calls > 0 ? (credit / calls) * 100 : null;
-  return { calls, salesCredit: credit, whatsapp: wa, crm: crm, records, conversion };
+  return { calls, salesCredit: credit, whatsapp: wa, crm: crm, presencial, records, conversion };
 }
 
 app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
-  const { from, to, seller_id } = req.query;
+  const { from, to, seller_id, sector } = req.query;
   const sid = req.user.role === 'admin' ? (seller_id ? Number(seller_id) : null) : req.user.id;
+  if (req.user.role === 'admin' && !seller_id && validSector(sector)) {
+    const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 AND COALESCE(sector,'online')=?", sector);
+    const parts = await Promise.all(sellers.map((s) => summarize(from || null, to || null, s.id)));
+    const sum = (k) => parts.reduce((a, p) => a + (Number(p[k]) || 0), 0);
+    const calls = sum('calls'), salesCredit = sum('salesCredit');
+    return res.json({
+      calls, salesCredit, whatsapp: sum('whatsapp'), crm: sum('crm'), presencial: sum('presencial'),
+      records: sum('records'), conversion: calls > 0 ? (salesCredit / calls) * 100 : null,
+    });
+  }
   res.json(await summarize(from || null, to || null, sid));
 }));
 
 app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { from, to } = req.query;
-  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const { from, to, sector } = req.query;
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
+  const sellers = await db.all(
+    `SELECT * FROM users WHERE role='seller' AND active=1${sectorFilter} ORDER BY name`,
+    ...(validSector(sector) ? [sector] : [])
+  );
   const rows = await Promise.all(sellers.map(async (s) => {
     const st = await summarize(from || null, to || null, s.id);
-    return { seller_id: s.id, name: s.name, avatar_url: s.avatar_url || null, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, conversion: st.conversion };
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, presencial: st.presencial, conversion: st.conversion };
   }));
   rows.sort((a, b) => b.sales - a.sales || b.calls - a.calls);
   res.json({ ranking: rows });
@@ -923,6 +979,7 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
       conversion: pct(current.conversion, compare.conversion),
       whatsapp: pct(current.whatsapp, compare.whatsapp),
       crm: pct(current.crm, compare.crm),
+      presencial: pct(current.presencial, compare.presencial),
     } : null,
     daily, dailyCalls,
   });
@@ -930,16 +987,34 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
 
 app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
   const date = req.query.date || todayISO();
+  const { sector } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
-  const summary = await summarize(date, date, null);
-  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
+  const sectorParam = validSector(sector) ? [sector] : [];
+  const sellers = await db.all(`SELECT * FROM users WHERE role='seller' AND active=1${sectorFilter} ORDER BY name`, ...sectorParam);
   const allRows = await Promise.all(sellers.map(async (s) => {
     const st = await summarize(date, date, s.id);
-    return { seller_id: s.id, name: s.name, calls: st.calls, sales: st.salesCredit };
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', calls: st.calls, sales: st.salesCredit };
   }));
+  const summary = {
+    calls: allRows.reduce((a, r) => a + r.calls, 0),
+    salesCredit: allRows.reduce((a, r) => a + r.sales, 0),
+    records: 0,
+  };
+  if (!validSector(sector)) {
+    const full = await summarize(date, date, null);
+    summary.records = full.records;
+  } else {
+    const sids = sellers.map((s) => s.id);
+    if (sids.length) {
+      const ph = sids.map(() => '?').join(',');
+      const c = await db.get(`SELECT COUNT(DISTINCT s.id) AS t FROM sales s JOIN sale_participants sp ON sp.sale_id=s.id WHERE s.sale_date=? AND sp.seller_id IN (${ph})`, date, ...sids);
+      summary.records = Number(c.t);
+    }
+  }
   const ranking = allRows.filter((r) => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
   // detalhamento alfabético por vendedora (relatório WhatsApp) — inclui todas, mesmo zeradas
-  const roster = await db.all("SELECT * FROM users WHERE role='seller' ORDER BY name");
+  const roster = await db.all(`SELECT * FROM users WHERE role='seller'${sectorFilter} ORDER BY name`, ...sectorParam);
   const details = await Promise.all(roster.map(async (s) => {
     const st = await summarize(date, date, s.id);
     const rows = await db.all(
@@ -952,9 +1027,9 @@ app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
       const partners = full.participants.filter((p) => p.seller_id !== s.id).map((p) => p.seller_name);
       return { product: sale.product, channel: sale.channel, credit: Number(me ? me.credit : 0), partners };
     }));
-    return { seller_id: s.id, name: s.name, active: !!s.active, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', active: !!s.active, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
   }));
-  res.json({ date, summary, ranking, details });
+  res.json({ date, sector: validSector(sector) ? sector : 'all', summary, ranking, details });
 }));
 
 // SPA fallback

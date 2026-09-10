@@ -32,6 +32,23 @@ const fmtPct = (n) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString(
 const fmtBRL = (cents) => ((Number(cents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtDateBR = (iso) => { if (!iso) return '—'; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
+const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
+// prévia da comissão (espelha a regra do backend): base por setor ou bônus exclusivo; metade se dividida
+function previewCommission(sellers, pids, bonusCents) {
+  if (!pids.length) return null;
+  const sectors = pids.map((id) => {
+    const s = (sellers || []).find((x) => Number(x.id) === Number(id));
+    return (s && s.sector) || 'online';
+  });
+  const base = bonusCents != null ? bonusCents : (sectors.every((s) => s === 'presencial') ? 3500 : 2500);
+  const each = pids.length === 1 ? base : Math.round(base / 2);
+  return { base, each, count: pids.length, isBonus: bonusCents != null };
+}
+const parseBonusReais = (str) => {
+  const v = Math.round(Number(String(str ?? '').replace(',', '.')) * 100);
+  return Number.isFinite(v) && v > 0 ? v : null;
+};
 
 function monthRange(offset = 0) {
   const now = new Date();
@@ -59,8 +76,10 @@ const PERIODS = {
 
 let adminPeriod = { key: 'mes', ...PERIODS.mes() };
 let adminChannel = '';
+
 let adminSeller = '';
 
+let adminSector = '';
 function toast(msg, type = 'ok') {
   const box = $('#alertBox');
   box.innerHTML = `<div class="alert ${type === 'ok' ? 'alert-ok' : 'alert-err'}">${esc(msg)}</div>`;
@@ -236,13 +255,14 @@ function bindPeriodPills(cb) {
   });
 }
 
+const chanChip = (ch) => ch === 'WhatsApp' ? 'wa' : ch === 'Presencial' ? 'lime' : 'crm';
 function saleCard(s, delBtn = '') {
   const parts = (s.participants || []).map((p) => `${esc(p.seller_name)} → ${fmtV(p.credit)}`).join(' · ');
   return `
   <div class="sale-card">
     <div class="row" style="justify-content:space-between;align-items:center">
-      <b>${esc(s.customer_name)}</b>
-      <span class="chip ${s.channel === 'WhatsApp' ? 'wa' : 'crm'}">${esc(s.channel)}</span>
+      <b>${esc(s.customer_name)}${s.is_bonus ? ' ⭐' : ''}</b>
+      <span><span class="chip ${chanChip(s.channel)}">${esc(s.channel)}</span>${s.is_bonus && s.bonus_cents != null ? ` <span class="chip" title="Bônus exclusivo">🎁 ${fmtBRL(s.bonus_cents)}</span>` : ''}</span>
     </div>
     <div class="muted" style="font-size:13px;margin-top:4px">${esc(s.product)} • ${esc(s.color)} • ${fmtDateBR(s.sale_date)}</div>
     <div style="font-size:13px;margin-top:6px">👥 ${parts}</div>
@@ -863,7 +883,7 @@ async function viewHistory(app) {
         <button data-k="hoje">Hoje</button>
       </div>
       <div class="search-row">
-        <select id="hChannel"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
+        <select id="hChannel"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
         <input id="hQ" placeholder="Buscar cliente, produto…">
       </div>
     </div>
@@ -968,15 +988,21 @@ function modalSale(sellers) {
       <label>Produto *</label><input id="sProduct" required placeholder="Ex: Scooter X">
       <label>Cor *</label><input id="sColor" required placeholder="Ex: Preta">
       <label>Canal *</label>
-      <select id="sChannel"><option>WhatsApp</option><option>CRM</option></select>
+      <select id="sChannel"><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
       <label>Data</label><input type="date" id="sDate" value="${todayISO()}" max="${todayISO()}">
       <label>Participantes (1 a 3) *</label>
       <details class="tray" id="pTray">
         <summary id="pTraySum">Selecionar participantes…</summary>
         <div class="check-list" id="plist">
-          ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}">${esc(s.name)}</div>`).join('')}
+          ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}</div>`).join('')}
         </div>
       </details>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:10px"><input type="checkbox" id="sBonus" style="width:auto"> ⭐ Valor exclusivo (bônus de modelo especial)</label>
+      <div id="sBonusBox" style="display:none">
+        <label>Comissão exclusiva por vendedora (R$) *</label>
+        <input id="sBonusVal" type="number" min="0.01" max="1000" step="0.01" placeholder="Ex: 50,00">
+      </div>
+      <div class="card" id="sPreview" style="margin-top:10px;background:var(--brand-soft)"><p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p></div>
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Registrar venda</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -984,18 +1010,32 @@ function modalSale(sellers) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  const sBonusCents = () => ($('#sBonus').checked ? parseBonusReais($('#sBonusVal').value) : null);
+  const refreshSalePreview = () => {
+    const pids = $$('#plist .check.on').map((c) => Number(c.dataset.id));
+    const pv = previewCommission(sellers, pids, sBonusCents());
+    $('#sPreview').innerHTML = !pv
+      ? '<p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p>'
+      : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base)} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
+  };
+  $('#sBonus').onchange = () => { $('#sBonusBox').style.display = $('#sBonus').checked ? 'block' : 'none'; refreshSalePreview(); };
+  $('#sBonusVal').oninput = refreshSalePreview;
   $('#plist').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
     if ($$('#plist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
     const sel = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim());
     $('#pTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
+    refreshSalePreview();
   };
   $('#pTraySum').textContent = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim()).join(', ') || 'Selecionar participantes…';
+  refreshSalePreview();
   $('#fSale').onsubmit = async (e) => {
     e.preventDefault();
     const pids = $$('#plist .check.on').map((c) => Number(c.dataset.id));
     if (!pids.length) return toast('Selecione ao menos 1 participante.', 'err');
+    const isBonus = $('#sBonus').checked;
+    if (isBonus && sBonusCents() == null) return toast('Informe o valor do bônus.', 'err');
     try {
       await api('/api/sales', {
         method: 'POST',
@@ -1006,6 +1046,8 @@ function modalSale(sellers) {
           channel: $('#sChannel').value,
           sale_date: $('#sDate').value || todayISO(),
           participant_ids: pids,
+          is_bonus: isBonus,
+          bonus_value: isBonus ? Number(String($('#sBonusVal').value).replace(',', '.')) : undefined,
         }),
       });
       closeModal(); toast('Venda registrada!'); route();
@@ -1049,6 +1091,8 @@ function modalCancelSale(sale, onSaved) {
 
 function modalEditSale(sale, sellers, onSaved) {
   const selIds = (sale.participants || []).map((p) => Number(p.seller_id));
+  const wasBonus = !!sale.is_bonus;
+  const wasBonusReais = sale.bonus_cents != null ? (Number(sale.bonus_cents) / 100).toFixed(2) : '';
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Editar venda #${sale.id}</h3>
@@ -1058,15 +1102,21 @@ function modalEditSale(sale, sellers, onSaved) {
       <label>Produto *</label><input id="eProduct" required value="${esc(sale.product)}">
       <label>Cor *</label><input id="eColor" required value="${esc(sale.color)}">
       <label>Canal *</label>
-      <select id="eChannel"><option ${sale.channel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${sale.channel === 'CRM' ? 'selected' : ''}>CRM</option></select>
+      <select id="eChannel"><option ${sale.channel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${sale.channel === 'CRM' ? 'selected' : ''}>CRM</option><option ${sale.channel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
       <label>Data</label><input type="date" id="eDate" value="${esc(sale.sale_date)}" max="${todayISO()}">
       <label>Participantes (1 a 3) *</label>
       <details class="tray" id="eTray">
         <summary id="eTraySum">Selecionar participantes…</summary>
         <div class="check-list" id="eplist">
-          ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}">${esc(s.name)}</div>`).join('')}
+          ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}</div>`).join('')}
         </div>
       </details>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:10px"><input type="checkbox" id="eBonus" style="width:auto" ${wasBonus ? 'checked' : ''}> ⭐ Valor exclusivo (bônus de modelo especial)</label>
+      <div id="eBonusBox" style="display:${wasBonus ? 'block' : 'none'}">
+        <label>Comissão exclusiva por vendedora (R$) *</label>
+        <input id="eBonusVal" type="number" min="0.01" max="1000" step="0.01" placeholder="Ex: 50,00" value="${wasBonusReais}">
+      </div>
+      <div class="card" id="ePreview" style="margin-top:10px;background:var(--brand-soft)"></div>
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar alterações</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -1074,18 +1124,32 @@ function modalEditSale(sale, sellers, onSaved) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  const eBonusCents = () => ($('#eBonus').checked ? parseBonusReais($('#eBonusVal').value) : null);
+  const refreshEditPreview = () => {
+    const pids = $$('#eplist .check.on').map((c) => Number(c.dataset.id));
+    const pv = previewCommission(sellers, pids, eBonusCents());
+    $('#ePreview').innerHTML = !pv
+      ? '<p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p>'
+      : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base)} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
+  };
+  $('#eBonus').onchange = () => { $('#eBonusBox').style.display = $('#eBonus').checked ? 'block' : 'none'; refreshEditPreview(); };
+  $('#eBonusVal').oninput = refreshEditPreview;
   $('#eplist').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
     if ($$('#eplist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
     const sel = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim());
     $('#eTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
+    refreshEditPreview();
   };
   $('#eTraySum').textContent = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim()).join(', ') || 'Selecionar participantes…';
+  refreshEditPreview();
   $('#fEditSale').onsubmit = async (e) => {
     e.preventDefault();
     const pids = $$('#eplist .check.on').map((c) => Number(c.dataset.id));
     if (!pids.length) return toast('Selecione ao menos 1 participante.', 'err');
+    const isBonus = $('#eBonus').checked;
+    if (isBonus && eBonusCents() == null) return toast('Informe o valor do bônus.', 'err');
     try {
       await api(`/api/sales/${sale.id}`, {
         method: 'PUT',
@@ -1096,6 +1160,8 @@ function modalEditSale(sale, sellers, onSaved) {
           channel: $('#eChannel').value,
           sale_date: $('#eDate').value || sale.sale_date,
           participant_ids: pids,
+          is_bonus: isBonus,
+          bonus_value: isBonus ? Number(String($('#eBonusVal').value).replace(',', '.')) : undefined,
         }),
       });
       closeModal(); toast('Venda atualizada!'); if (onSaved) onSaved();
@@ -1108,6 +1174,11 @@ async function viewAdmin(app) {
   app.innerHTML = `
     <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a><a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a></div></div>
     <div id="kpiWrap"><div class="card"><p class="muted">Carregando…</p></div></div>
+    <div class="mini-pills" id="sectorPills">
+      <button data-s="" class="${!adminSector ? 'on' : ''}">Todos</button>
+      <button data-s="online" class="${adminSector === 'online' ? 'on' : ''}">Online</button>
+      <button data-s="presencial" class="${adminSector === 'presencial' ? 'on' : ''}">Presencial</button>
+    </div>
     ${periodPills(adminPeriod.key)}
     <div id="customRow" style="display:${adminPeriod.key === 'custom' ? 'block' : 'none'}" class="card">
       <div class="row"><div style="flex:1"><label>De</label><input type="date" id="fFrom" value="${adminPeriod.from || ''}"></div>
@@ -1116,9 +1187,14 @@ async function viewAdmin(app) {
     </div>
     <div class="row" style="margin:10px 0">
       <select id="fSeller" style="flex:1;max-width:240px"><option value="">Todas as vendedoras</option></select>
-      <select id="fChannel" style="flex:1;max-width:200px"><option value="">Todos os canais</option><option ${adminChannel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${adminChannel === 'CRM' ? 'selected' : ''}>CRM</option></select>
+      <select id="fChannel" style="flex:1;max-width:200px"><option value="">Todos os canais</option><option ${adminChannel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${adminChannel === 'CRM' ? 'selected' : ''}>CRM</option><option ${adminChannel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
     </div>
     <div id="rankWrap"></div>`;
+  $('#sectorPills').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    adminSector = b.dataset.s; adminSeller = '';
+    route();
+  };
   bindPeriodPills((p) => {
     if (p.key === 'custom') { adminPeriod = { key: 'custom', from: adminPeriod.from, to: adminPeriod.to }; route(); return; }
     adminPeriod = p; route();
@@ -1128,9 +1204,9 @@ async function viewAdmin(app) {
     loadAdminBody();
   });
 
-  const { sellers } = await api('/api/sellers');
+  const { sellers } = await api(`/api/sellers${adminSector ? `?sector=${adminSector}` : ''}`);
   const sel = $('#fSeller');
-  sel.innerHTML = `<option value="">Todas as vendedoras</option>` + sellers.map((s) => `<option value="${s.id}" ${String(adminSeller) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  sel.innerHTML = `<option value="">Todas as vendedoras</option>` + sellers.map((s) => `<option value="${s.id}" ${String(adminSeller) === String(s.id) ? 'selected' : ''}>${esc(s.name)} (${sectorLabel(s.sector)})</option>`).join('');
   sel.onchange = () => { adminSeller = sel.value; loadAdminBody(); };
   $('#fChannel').onchange = (e) => { adminChannel = e.target.value; loadAdminBody(); };
   await loadAdminBody();
@@ -1138,15 +1214,17 @@ async function viewAdmin(app) {
   async function loadAdminBody() {
     const { from, to } = adminPeriod;
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) });
+    const sectorQs = adminSector ? `&sector=${adminSector}` : '';
     const kpi = $('#kpiWrap');
     const rank = $('#rankWrap');
     const [summary, ranking] = await Promise.all([
-      api(`/api/stats/summary?${qs}${adminSeller ? `&seller_id=${adminSeller}` : ''}`),
-      api(`/api/stats/ranking?${qs}`),
+      api(`/api/stats/summary?${qs}${adminSeller ? `&seller_id=${adminSeller}` : sectorQs}`),
+      api(`/api/stats/ranking?${qs}${sectorQs}`),
     ]);
     const filtered = adminSeller ? ranking.ranking.filter((r) => String(r.seller_id) === String(adminSeller)) : ranking.ranking;
+    const chanVal = (r) => (adminChannel === 'WhatsApp' ? r.whatsapp : adminChannel === 'CRM' ? r.crm : r.presencial);
     const withChannel = adminChannel
-      ? filtered.map((r) => ({ ...r, sales: adminChannel === 'WhatsApp' ? r.whatsapp : r.crm }))
+      ? filtered.map((r) => ({ ...r, sales: chanVal(r) }))
       : filtered;
     kpi.innerHTML = `
       <p class="muted" style="margin:12px 0">${esc(adminPeriod.label || '')} • ${from ? fmtDateBR(from) : '…'} a ${to ? fmtDateBR(to) : '…'}</p>
@@ -1159,7 +1237,7 @@ async function viewAdmin(app) {
         <table><thead><tr><th>#</th><th>Vendedora</th><th>Chamadas</th><th>Vendas</th><th>Conv.</th></tr></thead>
         <tbody>${withChannel.map((r, i) => `<tr>
           <td>${i + 1}</td>
-          <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><b>${esc(r.name)}</b></span></a></td>
+          <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}</span></span></a></td>
           <td class="mono">${fmtInt(r.calls)}</td><td class="mono"><b>${fmtV(r.sales)}</b></td><td class="mono">${fmtPct(r.conversion)}</td>
         </tr>`).join('')}</tbody></table>
       </div>` : '<div class="card empty">Não há dados neste período.</div>'}
@@ -1226,7 +1304,7 @@ async function viewAllSales(app) {
     <div class="card"><label>Buscar</label><input id="q" placeholder="Cliente, produto, cor…">
     <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
       <select id="fSellerSales" style="flex:1"><option value="">Todas as vendedoras</option></select>
-      <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
+      <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
       <button class="btn btn-primary" id="go">Filtrar</button>
     </div></div>
     <div id="list" style="margin-top:12px"><div class="card"><p class="muted">Carregando…</p></div></div>`;
@@ -1361,7 +1439,7 @@ async function viewPonto(app) {
         <p class="muted" style="font-size:13px">Presentes: <b>${d.present}</b> • Saídas pendentes: <b>${d.pending}</b></p>
         ${d.rows.map((r) => `
           <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center">
-            <b>${esc(r.name)}</b>
+            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}</span>
             <span class="muted mono" style="font-size:12px">${r.punch ? `Entrada ${r.punch.in_hhmm || '—'} • Saída ${r.punch.out_hhmm || '—'}` : '—'}</span>
           </div>
           <div class="muted" style="font-size:13px;margin-top:4px">Extra: <b class="mono">${r.punch ? r.punch.extra_label : '0h 0min'}</b>${r.punch?.worked_label ? ` • Trabalhou ${r.punch.worked_label}` : ''}</div>
@@ -1393,7 +1471,7 @@ async function viewPonto(app) {
       const r = await api(`/api/ponto/resumo?month=${month}`);
       box.innerHTML = `
         <p class="muted" style="font-size:13px">Total geral: <b class="mono">${r.total_extra_label}</b></p>
-        ${r.rows.map((x, i) => `<div class="bar-row"><span>#${i + 1}</span><div class="bar"><div style="width:${r.total_extra_min ? (x.extra_min / Math.max(1, Math.max(...r.rows.map((y) => y.extra_min)))) * 100 : 0}%"></div></div><b class="mono">${x.extra_label}</b></div><div style="font-size:13px;margin:-2px 0 8px 60px"><b>${esc(x.name)}</b> <span class="muted">• ${x.days} dia(s)</span></div>`).join('')}
+        ${r.rows.map((x, i) => `<div class="bar-row"><span>#${i + 1}</span><div class="bar"><div style="width:${r.total_extra_min ? (x.extra_min / Math.max(1, Math.max(...r.rows.map((y) => y.extra_min)))) * 100 : 0}%"></div></div><b class="mono">${x.extra_label}</b></div><div style="font-size:13px;margin:-2px 0 8px 60px"><b>${esc(x.name)}</b> ${sectorTag(x.sector)} <span class="muted">• ${x.days} dia(s)</span></div>`).join('')}
         <button class="btn btn-big" id="copyExtra">Copiar resumo</button>`;
       $('#copyExtra').onclick = async () => {
         const msg = `*HORAS EXTRAS — ${month}*\nTotal: ${r.total_extra_label}\n` + r.rows.map((x) => `• ${x.name}: ${x.extra_label} (${x.days} dias)`).join('\n');
@@ -1484,7 +1562,12 @@ async function viewComissoes(app) {
   app.innerHTML = `
     <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
     <h2 style="margin:6px 0">Comissões 💰</h2>
-    <p class="muted" style="font-size:13px;margin:0 0 10px">R$ 25,00 individual • R$ 12,50 dividida (2–3).</p>
+    <p class="muted" style="font-size:13px;margin:0 0 10px">Online: R$ 25,00 / R$ 12,50 • Presencial: R$ 35,00 / R$ 17,50 • ⭐ modelo especial: valor exclusivo.</p>
+    <div class="mini-pills" id="commSector" style="margin-bottom:10px">
+      <button data-s="" class="on">Todos</button>
+      <button data-s="online">Online</button>
+      <button data-s="presencial">Presencial</button>
+    </div>
     <div class="card">
       <label>Mês</label><input type="month" id="cMonth" value="${t.slice(0, 7)}">
       <div style="height:10px"></div><button class="btn btn-primary" id="cGo">Ver mês</button>
@@ -1493,17 +1576,24 @@ async function viewComissoes(app) {
     <h3 class="section-title">Pagamentos</h3>
     <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
+  let commSector = '';
+  $('#commSector').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    commSector = b.dataset.s;
+    $$('#commSector button').forEach((x) => x.classList.toggle('on', x === b));
+    load();
+  };
   const load = async () => {
     const month = $('#cMonth').value || t.slice(0, 7);
     const box = $('#cBody');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
-      const s = await api(`/api/commissions/summary?month=${month}`);
+      const s = await api(`/api/commissions/summary?month=${month}${commSector ? `&sector=${commSector}` : ''}`);
       box.innerHTML = `
         <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Pendente geral: <b class="mono">${fmtBRL(s.total_pending_cents)}</b></p>
         ${s.rows.map((r) => `
           <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center">
-            <b>${esc(r.name)}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</b>
+            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
             <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
           </div>
           <div class="muted" style="font-size:13px;margin-top:4px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
@@ -1570,7 +1660,7 @@ async function viewSellerDetail(app, id) {
   const max = Math.max(0.1, ...d.daily.map((x) => x.sales));
   app.innerHTML = `
     <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
-    <h2 style="margin:6px 0">${esc(d.seller.name)}</h2>
+    <h2 style="margin:6px 0">${esc(d.seller.name)} ${sectorTag(d.seller.sector)}</h2>
     ${kpiCards(d.current, '• mês')}
     <div class="card" style="margin-top:12px">
       <b>Comparação com mês anterior</b>
@@ -1580,6 +1670,7 @@ async function viewSellerDetail(app, id) {
         <tr><td>Conversão</td><td class="mono">${fmtPct(d.current.conversion)}</td><td class="mono">${fmtPct(d.compare.conversion)}</td><td>${d.deltas.conversion == null ? '—' : fmtPct(d.deltas.conversion)}</td></tr>
         <tr><td>WhatsApp</td><td class="mono">${fmtV(d.current.whatsapp)}</td><td class="mono">${fmtV(d.compare.whatsapp)}</td><td>${d.deltas.whatsapp == null ? '—' : fmtPct(d.deltas.whatsapp)}</td></tr>
         <tr><td>CRM</td><td class="mono">${fmtV(d.current.crm)}</td><td class="mono">${fmtV(d.compare.crm)}</td><td>${d.deltas.crm == null ? '—' : fmtPct(d.deltas.crm)}</td></tr>
+        <tr><td>Presencial</td><td class="mono">${fmtV(d.current.presencial)}</td><td class="mono">${fmtV(d.compare.presencial)}</td><td>${d.deltas.presencial == null ? '—' : fmtPct(d.deltas.presencial)}</td></tr>
       </tbody></table>
     </div>
     <h3 class="section-title">Evolução diária (vendas)</h3>
@@ -1587,15 +1678,29 @@ async function viewSellerDetail(app, id) {
   `;
 }
 
+let reportSector = '';
 async function viewReport(app) {
   const t = todayISO();
-  app.innerHTML = `<h2 style="margin:4px 0">Relatório do dia</h2><div class="card"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}"><div style="height:10px"></div><button class="btn btn-primary" id="rGo">Gerar</button></div><div id="rBody" style="margin-top:12px"></div>`;
+  app.innerHTML = `<h2 style="margin:4px 0">Relatório do dia</h2><div class="card"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}">
+    <div class="mini-pills" id="repSector" style="margin-top:10px">
+      <button data-s="" class="${!reportSector ? 'on' : ''}">Todos</button>
+      <button data-s="online" class="${reportSector === 'online' ? 'on' : ''}">Online</button>
+      <button data-s="presencial" class="${reportSector === 'presencial' ? 'on' : ''}">Presencial</button>
+    </div>
+    <div style="height:10px"></div><button class="btn btn-primary" id="rGo">Gerar</button></div><div id="rBody" style="margin-top:12px"></div>`;
+  $('#repSector').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    reportSector = b.dataset.s;
+    $$('#repSector button').forEach((x) => x.classList.toggle('on', x === b));
+    load();
+  };
   const load = async () => {
     const date = $('#rDate').value || t;
-    const { summary, details } = await api(`/api/report/daily?date=${date}`);
+    const { summary, details, sector } = await api(`/api/report/daily?date=${date}${reportSector ? `&sector=${reportSector}` : ''}`);
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
+    const sectorTitle = sector && sector !== 'all' ? ` (${sectorLabel(sector).toUpperCase()})` : '';
     const msg =
-      `*RELATÓRIO COMERCIAL - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}` +
+      `*RELATÓRIO COMERCIAL${sectorTitle} - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}` +
       details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)} - Chamadas ${fmtInt(d.calls)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
@@ -1606,10 +1711,10 @@ async function viewReport(app) {
         ${details.map((d) => `
           <div class="sale-card">
             <div class="row" style="justify-content:space-between;align-items:center">
-              <b>${esc(d.name)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</b>
+              <span><b>${esc(d.name)}</b> ${sectorTag(d.sector)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
               <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
             </div>
-            ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : 'ch-crm'}">${esc(s.channel)}</b></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
+            ${d.sales.length ? `<div style="margin-top:6px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : s.channel === 'Presencial' ? 'ch-pres' : 'ch-crm'}">${esc(s.channel)}</b></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
           </div>`).join('')}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
@@ -1640,8 +1745,9 @@ async function viewTeam(app) {
       const { users } = await api('/api/users');
     const sellers = users.filter((u) => u.role === 'seller');
     $('#teamBody').innerHTML = sellers.length ? `<div class="card" style="padding:0;overflow:hidden"><table>
-      <thead><tr><th>Nome</th><th>Status</th><th>Ações</th></tr></thead><tbody>
+      <thead><tr><th>Nome</th><th>Setor</th><th>Status</th><th>Ações</th></tr></thead><tbody>
       ${sellers.map((s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
+      <td><span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span></td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
       <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button></td></tr>`).join('')}
       </tbody></table></div>` : '<div class="card empty">Nenhuma vendedora cadastrada.</div>';
@@ -1718,6 +1824,8 @@ function modalUser(u, reload) {
       <label>Nome *</label><input id="uName" required value="${esc(u?.name || '')}">
       <label>E-mail *</label><input id="uEmail" type="email" required value="${esc(u?.email || '')}">
       <label>${u ? 'Nova senha (opcional)' : 'Senha *'}</label><input id="uPass" type="password" ${u ? '' : 'required'} placeholder="mín. 4 caracteres">
+      <label>Setor *</label>
+      <select id="uSector"><option value="online" ${(u?.sector || 'online') === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${u?.sector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
       <div style="height:12px"></div>
       <button class="btn btn-primary btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -1727,7 +1835,7 @@ function modalUser(u, reload) {
   $('#fUser').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const payload = { name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role: 'seller', ...( $('#uPass').value ? { password: $('#uPass').value } : {}) };
+      const payload = { name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role: 'seller', sector: $('#uSector').value, ...( $('#uPass').value ? { password: $('#uPass').value } : {}) };
       if (u) await api(`/api/users/${u.id}`, { method: 'PUT', body: JSON.stringify(payload) });
       else await api('/api/users', { method: 'POST', body: JSON.stringify({ ...payload, password: $('#uPass').value }) });
       closeModal(); toast('Salvo com sucesso!'); reload();
