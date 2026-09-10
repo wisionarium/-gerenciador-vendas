@@ -351,11 +351,11 @@ async function viewSeller(app) {
       <div class="seller-top">
         <div class="ava-wrap">
           <a class="ava" href="#/vendedora/config" title="Configurações">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</a>
-          <button class="ava-cam" id="avaCam" title="Trocar foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1 2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          <button class="ava-cam" id="avaCam" title="Trocar foto"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.2-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.03-.44-.4-.81-.85-.81h-3.1c-.45 0-.82.37-.85.81l-.38 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47.02-.59.22l-1.92 3.32c-.12.2-.06.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.2.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.38 2.54c.03.44.4.81.85.81h3.1c.45 0 .82-.37.85-.81l.38-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47-.02.59-.22l1.92-3.32c-.12-.2-.06-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></button>
           <input type="file" id="avaInput" accept="image/*" style="display:none">
         </div>
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
-        <div class="saldo-top"><span id="saldoTxt">Saldo: —</span></div>
+        <button class="saldo-top" id="saldoBtn" title="Ocultar/mostrar saldo"><span id="saldoTxt">Saldo: —</span></button>
       </div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
       <div class="goal-pill">
@@ -383,7 +383,20 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
-  api('/api/commissions/me').then((r) => { $('#saldoTxt').textContent = `Saldo: ${fmtBRL(r.pending_cents)}`; }).catch(() => {});
+  api('/api/commissions/me').then((r) => { saldoCents = r.pending_cents; renderSaldo(); }).catch(() => {});
+  let saldoCents = null;
+  let saldoHidden = false;
+  try { saldoHidden = localStorage.getItem('ec_saldo_hide_' + me.id) === '1'; } catch {}
+  const renderSaldo = () => {
+    const txt = $('#saldoTxt');
+    if (txt) txt.textContent = saldoCents == null ? 'Saldo: —' : (saldoHidden ? 'Saldo: R$ ••••••' : `Saldo: ${fmtBRL(saldoCents)}`);
+  };
+  renderSaldo();
+  $('#saldoBtn').onclick = () => {
+    saldoHidden = !saldoHidden;
+    try { localStorage.setItem('ec_saldo_hide_' + me.id, saldoHidden ? '1' : '0'); } catch {}
+    renderSaldo();
+  };
   bindAvatar();
   const wp = $('#writePhrase');
   if (wp) wp.onclick = () => modalPhrase();
