@@ -449,7 +449,7 @@ function getGeo() {
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
   });
 }
-function modalPonto(onSaved) {
+function modalPonto(onSaved, autostart) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Bater ponto 🕒</h3>
@@ -489,6 +489,18 @@ function modalPonto(onSaved) {
     } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
   };
   $('#scanBtn').onclick = async () => {
+    // checa permissão antes: orienta a marcar "Ao usar o app" (não "só desta vez")
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        const st = await navigator.permissions.query({ name: 'camera' });
+        if (st.state === 'denied') { modalCameraHelp(); return; }
+        if (st.state === 'prompt') {
+          const go2 = await modalCameraAsk();
+          modalPonto(onSaved, go2);
+          return;
+        }
+      }
+    } catch {}
     // 1) tenta lib com decoder próprio (funciona no iPhone e Android)
     if (window.Html5Qrcode) {
       $('#scanBox').style.display = 'block';
@@ -506,6 +518,7 @@ function modalPonto(onSaved) {
       } catch (err) {
         scanning = false;
         $('#scanBtn').disabled = false;
+        if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) { modalCameraHelp(); return; }
         const why = err && (err.name || err.message) ? ` (${err.name || ''} ${err.message || ''})`.trim().slice(0, 80) : '';
         toast(`Não abriu a câmera${why}. Permita a câmera e tente de novo.`, 'err');
       }
@@ -534,6 +547,35 @@ function modalPonto(onSaved) {
     };
     tick();
   };
+  if (autostart) $('#scanBtn').click();
+}
+
+// explica antes de pedir: marcar "Ao usar o app" evita perguntar toda vez
+function modalCameraAsk() {
+  return new Promise((resolve) => {
+    $('#modalRoot').innerHTML = `
+    <div class="modal-bg anim-up" id="mbg"><div class="modal">
+      <h3 style="margin:0">📷 Permissão da câmera</h3>
+      <p class="muted" style="font-size:14px;line-height:1.5">O celular vai pedir acesso à câmera.<br><br>Toque em <b>Permitir</b> e escolha <b>"Ao usar o app"</b> (não "Só desta vez") — assim ele <b>não pergunta de novo</b>.</p>
+      <button class="btn btn-accent btn-big" id="camOk">Entendi, abrir câmera</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Agora não</button>
+    </div></div>`;
+    $('#cancel').onclick = () => { closeModal(); resolve(false); };
+    $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') { closeModal(); resolve(false); } };
+    $('#camOk').onclick = () => { closeModal(); resolve(true); };
+  });
+}
+
+// câmera bloqueada: ensina a liberar (o navegador não pergunta de novo sozinho)
+function modalCameraHelp() {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">📷 Câmera bloqueada</h3>
+    <p class="muted" style="font-size:14px;line-height:1.6"><b>iPhone (app instalado):</b> abra <b>Ajustes → role até SellDay → Câmera → Ativar</b>.<br><br><b>iPhone (no Safari):</b> toque no <b>"aA" ao lado do endereço → Ajustes do site → Câmera → Permitir</b>.<br><br><b>Android:</b> <b>Configurações → Apps → SellDay/Chrome → Permissões → Câmera → Permitir</b>.</p>
+    <button class="btn btn-accent btn-big" id="camOk">Entendi</button>
+  </div></div>`;
+  $('#camOk').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
 }
 
 // ---------- TEMA da vendedora (só verdes, fundo sempre branco) ----------
