@@ -643,10 +643,10 @@ function modalPhrase() {
 
 // ---------- COMPARTILHAR frase do dia (arte para baixar) ----------
 const SHARE_THEMES = [
-  { name: 'Clássico', bg: '#f3ede4', rect: '#2f7d5b', text: '#ffffff', sub: '#334155', brand: '#123f2c' },
-  { name: 'Escuro', bg: '#0b3b2c', rect: '#cdf14d', text: '#0b3b2c', sub: '#e7f0e8', brand: '#cdf14d' },
-  { name: 'Rosa', bg: '#fdeef4', rect: '#8a1145', text: '#ffffff', sub: '#6b2140', brand: '#8a1145' },
-  { name: 'Areia', bg: '#faf5e9', rect: '#6f4a1f', text: '#ffffff', sub: '#57534e', brand: '#6f4a1f' },
+  { name: 'Clássico', bg: '#f4efe6', rect: '#3d8b66', brand: '#0e3b2e' },
+  { name: 'Escuro', bg: '#0e3b2e', rect: '#cdf14d', brand: '#cdf14d' },
+  { name: 'Rosa', bg: '#fdeef4', rect: '#a11c50', brand: '#7c1039' },
+  { name: 'Areia', bg: '#faf5e9', rect: '#8a5f28', brand: '#5c3d17' },
 ];
 
 function wrapText(ctx, text, maxW) {
@@ -662,61 +662,88 @@ function wrapText(ctx, text, maxW) {
   return lines;
 }
 
-function drawPhraseArt(canvas, text, author, th) {
+// cor de texto legível sobre um fundo (branco ou escuro)
+function contrastOn(hex) {
+  const h = String(hex).replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const r = parseInt(full.slice(0, 2), 16) / 255;
+  const g = parseInt(full.slice(2, 4), 16) / 255;
+  const b = parseInt(full.slice(4, 6), 16) / 255;
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.5 ? '#1f2937' : '#ffffff';
+}
+
+function drawPhraseArt(canvas, text, author, c) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = th.bg;
+  ctx.shadowColor = 'rgba(0,0,0,0)';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.fillStyle = c.bg;
   ctx.fillRect(0, 0, W, H);
+  const phraseColor = contrastOn(c.rect);
+  const subColor = contrastOn(c.bg);
   // @wisionarium topo direito com transparência
   ctx.save();
   ctx.globalAlpha = 0.45;
-  ctx.fillStyle = th.sub;
+  ctx.fillStyle = subColor;
   ctx.font = '600 30px "Open Sans", sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText('@WISIONARIUM', W - 60, 80);
+  ctx.fillText('@WISIONARIUM', W - 60, 85);
   ctx.restore();
-  // Sell Day à esquerda
-  ctx.fillStyle = th.brand;
+  // Sell Day à esquerda (retângulo passa por cima, como na referência)
+  ctx.fillStyle = c.brand;
   ctx.textAlign = 'left';
-  ctx.font = '400 190px Allura, cursive';
-  ctx.fillText('Sell', 70, 640);
-  ctx.font = '400 230px "Yeseva One", serif';
-  ctx.fillText('DAY', 70, 860);
-  // frase dentro do retângulo verde (largura conforme texto)
+  ctx.font = '400 300px Allura, cursive';
+  ctx.fillText('Sell', 60, 520);
+  ctx.font = '400 340px "Yeseva One", serif';
+  ctx.fillText('DAY', 60, 800);
+  // frase dentro do retângulo (altura conforme o texto)
   ctx.font = '700 46px "Open Sans", sans-serif';
-  const maxW = 470;
+  const maxW = 460;
   const lines = wrapText(ctx, text, maxW);
-  const lh = 62;
+  const lh = 64;
   const padV = 55, padH = 45;
   const rw = maxW + padH * 2;
   const rh = lines.length * lh + padV * 2 - 14;
   const rx = W - rw - 60;
-  const ry = 500;
-  ctx.fillStyle = th.rect;
-  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, 28); ctx.fill(); }
+  const ry = Math.round((H - (rh + 70)) / 2);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.28)';
+  ctx.shadowBlur = 45;
+  ctx.shadowOffsetY = 14;
+  ctx.fillStyle = c.rect;
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, 36); ctx.fill(); }
   else ctx.fillRect(rx, ry, rw, rh);
-  ctx.fillStyle = th.text;
+  ctx.restore();
+  ctx.fillStyle = phraseColor;
   ctx.textAlign = 'center';
   lines.forEach((ln, i) => ctx.fillText(ln, rx + rw / 2, ry + padV + 34 + i * lh));
   // nome da vendedora abaixo do retângulo
-  ctx.fillStyle = th.sub;
-  ctx.font = '400 34px "Open Sans", sans-serif';
+  ctx.fillStyle = subColor;
+  ctx.font = '400 36px "Open Sans", sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText('– ' + author, rx + rw, ry + rh + 60);
+  ctx.fillText('– ' + author, rx + rw, ry + rh + 62);
 }
 
 function modalSharePhrase(text, author) {
-  let themeIdx = 0;
+  let custom = { ...SHARE_THEMES[0] };
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Compartilhar frase 📤</h3>
-    <p class="muted" style="font-size:13px">Escolha as cores e baixe a imagem.</p>
-    <canvas id="shareCanvas" width="1080" height="1350" style="width:100%;border-radius:16px;border:1px solid var(--line)"></canvas>
-    <label>Cores</label>
+    <p class="muted" style="font-size:13px">Escolha um modelo pronto ou ajuste cada cor.</p>
+    <canvas id="shareCanvas" width="1080" height="1080" style="width:100%;border-radius:16px;border:1px solid var(--line)"></canvas>
+    <label>Modelos prontos</label>
     <div class="check-list" id="themeList">
       ${SHARE_THEMES.map((t, i) => `<div class="check ${i === 0 ? 'on' : ''}" data-i="${i}"><span class="swdot" style="background:linear-gradient(135deg, ${t.bg} 50%, ${t.rect} 50%)"></span>${esc(t.name)}</div>`).join('')}
     </div>
+    <div class="row" style="margin-top:4px">
+      <div style="flex:1"><label>Fundo</label><input type="color" id="cBg" value="${custom.bg}" style="height:48px;padding:6px"></div>
+      <div style="flex:1"><label>Retângulo</label><input type="color" id="cRect" value="${custom.rect}" style="height:48px;padding:6px"></div>
+      <div style="flex:1"><label>Sell Day</label><input type="color" id="cBrand" value="${custom.brand}" style="height:48px;padding:6px"></div>
+    </div>
+    <p class="muted" style="font-size:12px">O texto da frase se ajusta sozinho (branco ou escuro) pra sempre contrastar.</p>
     <div style="height:12px"></div>
     <button class="btn btn-accent btn-big" id="dlArt">⬇️ Baixar imagem</button>
     <button class="btn btn-ghost btn-big" type="button" id="cancel">Fechar</button>
@@ -725,14 +752,19 @@ function modalSharePhrase(text, author) {
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   const redraw = async () => {
     try { await document.fonts.ready; } catch {}
-    drawPhraseArt($('#shareCanvas'), text, author, SHARE_THEMES[themeIdx]);
+    drawPhraseArt($('#shareCanvas'), text, author, custom);
   };
+  const syncInputs = () => { $('#cBg').value = custom.bg; $('#cRect').value = custom.rect; $('#cBrand').value = custom.brand; };
   $('#themeList').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
-    themeIdx = Number(c.dataset.i);
+    custom = { ...SHARE_THEMES[Number(c.dataset.i)] };
     $$('#themeList .check').forEach((x) => x.classList.toggle('on', x === c));
+    syncInputs();
     redraw();
   };
+  $('#cBg').oninput = (e) => { custom.bg = e.target.value; redraw(); };
+  $('#cRect').oninput = (e) => { custom.rect = e.target.value; redraw(); };
+  $('#cBrand').oninput = (e) => { custom.brand = e.target.value; redraw(); };
   $('#dlArt').onclick = () => {
     const a = document.createElement('a');
     a.download = 'frase-do-dia.png';
