@@ -357,8 +357,8 @@ async function viewSeller(app) {
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
         <a class="seller-gear" href="#/vendedora/config" title="Configurações"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
       </div>
+      <div class="saldo-line"><span id="saldoTxt">Saldo a receber: —</span><button class="saldo-eye" id="saldoEye" title="Mostrar/ocultar saldo"></button></div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
-      <div class="saldo-line" id="saldoLine">Saldo a receber: —</div>
       <div class="goal-pill">
         <div class="goal-left"><div class="goal-lab">Vendas deste mês:</div><div class="goal-num mono" id="goalMonth">0</div></div>
         <div class="goal-div"></div>
@@ -384,7 +384,24 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
-  api('/api/commissions/me').then((r) => { $('#saldoLine').textContent = `Saldo a receber: ${fmtBRL(r.pending_cents)}`; }).catch(() => {});
+  api('/api/commissions/me').then((r) => { saldoCents = r.pending_cents; renderSaldo(); }).catch(() => {});
+  const EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.6 10.6 0 0 1 12 19c-6.5 0-10-7-10-7a17.6 17.6 0 0 1 4.06-4.94M9.9 4.24A10.6 10.6 0 0 1 12 5c6.5 0 10 7 10 7a17.7 17.7 0 0 1-2.16 3.19M14.12 14.12A3 3 0 1 1 9.88 9.88"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
+  let saldoCents = null;
+  let saldoHidden = false;
+  try { saldoHidden = localStorage.getItem('ec_saldo_hide_' + me.id) === '1'; } catch {}
+  const renderSaldo = () => {
+    const txt = $('#saldoTxt');
+    if (txt) txt.textContent = saldoCents == null ? 'Saldo a receber: —' : (saldoHidden ? 'Saldo a receber: R$ ••••••' : `Saldo a receber: ${fmtBRL(saldoCents)}`);
+    const eye = $('#saldoEye');
+    if (eye) eye.innerHTML = saldoHidden ? EYE_OFF : EYE_OPEN;
+  };
+  renderSaldo();
+  $('#saldoEye').onclick = () => {
+    saldoHidden = !saldoHidden;
+    try { localStorage.setItem('ec_saldo_hide_' + me.id, saldoHidden ? '1' : '0'); } catch {}
+    renderSaldo();
+  };
   bindAvatar();
   const wp = $('#writePhrase');
   if (wp) wp.onclick = () => modalPhrase();
@@ -901,6 +918,7 @@ function modalEditSale(sale, sellers, onSaved) {
 async function viewAdmin(app) {
   app.innerHTML = `
     <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a><a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a></div></div>
+    <div id="kpiWrap"><div class="card"><p class="muted">Carregando…</p></div></div>
     ${periodPills(adminPeriod.key)}
     <div id="customRow" style="display:${adminPeriod.key === 'custom' ? 'block' : 'none'}" class="card">
       <div class="row"><div style="flex:1"><label>De</label><input type="date" id="fFrom" value="${adminPeriod.from || ''}"></div>
@@ -911,7 +929,7 @@ async function viewAdmin(app) {
       <select id="fSeller" style="flex:1;max-width:240px"><option value="">Todas as vendedoras</option></select>
       <select id="fChannel" style="flex:1;max-width:200px"><option value="">Todos os canais</option><option ${adminChannel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${adminChannel === 'CRM' ? 'selected' : ''}>CRM</option></select>
     </div>
-    <div id="adminBody"><div class="card"><p class="muted">Carregando…</p></div></div>`;
+    <div id="rankWrap"></div>`;
   bindPeriodPills((p) => {
     if (p.key === 'custom') { adminPeriod = { key: 'custom', from: adminPeriod.from, to: adminPeriod.to }; route(); return; }
     adminPeriod = p; route();
@@ -931,7 +949,8 @@ async function viewAdmin(app) {
   async function loadAdminBody() {
     const { from, to } = adminPeriod;
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) });
-    const body = $('#adminBody');
+    const kpi = $('#kpiWrap');
+    const rank = $('#rankWrap');
     const [summary, ranking] = await Promise.all([
       api(`/api/stats/summary?${qs}${adminSeller ? `&seller_id=${adminSeller}` : ''}`),
       api(`/api/stats/ranking?${qs}`),
@@ -940,9 +959,11 @@ async function viewAdmin(app) {
     const withChannel = adminChannel
       ? filtered.map((r) => ({ ...r, sales: adminChannel === 'WhatsApp' ? r.whatsapp : r.crm }))
       : filtered;
-    body.innerHTML = `
+    kpi.innerHTML = `
       <p class="muted" style="margin:12px 0">${esc(adminPeriod.label || '')} • ${from ? fmtDateBR(from) : '…'} a ${to ? fmtDateBR(to) : '…'}</p>
       ${kpiCards(summary)}
+    `;
+    rank.innerHTML = `
       <h3 class="section-title">Ranking</h3>
       ${withChannel.length ? `
       <div class="card" style="padding:0;overflow:hidden">
@@ -1015,12 +1036,18 @@ async function viewAllSales(app) {
   app.innerHTML = `<h2 style="margin:4px 0">Vendas</h2>
     <div class="card"><label>Buscar</label><input id="q" placeholder="Cliente, produto, cor…">
     <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
+      <select id="fSellerSales" style="flex:1"><option value="">Todas as vendedoras</option></select>
       <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option></select>
       <button class="btn btn-primary" id="go">Filtrar</button>
     </div></div>
     <div id="list" style="margin-top:12px"><div class="card"><p class="muted">Carregando…</p></div></div>`;
+  try {
+    const { sellers } = await api('/api/sellers');
+    $('#fSellerSales').innerHTML = `<option value="">Todas as vendedoras</option>` + sellers.map((s) => `<option value="${s.id}" ${String(adminSeller) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  } catch {}
   const load = async () => {
-    const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(adminSeller ? { seller_id: adminSeller } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
+    const sid = $('#fSellerSales').value || '';
+    const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sid ? { seller_id: sid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
     $('#list').innerHTML = sales.length
       ? sales.map((s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" data-del="${s.id}">Excluir</button>` : '')).join('')
@@ -1040,6 +1067,8 @@ async function viewAllSales(app) {
     }));
   };
   $('#go').onclick = load;
+  $('#fSellerSales').onchange = load;
+  $('#ch').onchange = load;
   await load();
 }
 

@@ -149,7 +149,9 @@ body.history-top #userBadge{margin-left:auto;font-weight:700}
 .swdot{width:26px;height:26px;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:8px;border:1px solid var(--line)}
 .seller-hi{font-size:20px;font-weight:800}
 .seller-motiv{text-align:center;font-size:23px;font-weight:800;margin:16px 0 14px;letter-spacing:-.01em}
-.saldo-line{text-align:center;color:#fff;font-size:14px;font-weight:700;margin:-6px 0 12px;opacity:.95}
+.saldo-line{display:flex;align-items:center;justify-content:center;gap:8px;color:#fff;font-size:14px;font-weight:700;margin:16px 0 4px;opacity:.95}
+.saldo-eye{background:transparent;border:none;color:#fff;cursor:pointer;display:grid;place-items:center;padding:10px;margin:-10px -10px -10px 0;min-width:44px;min-height:44px}
+.saldo-eye svg{width:20px;height:20px;display:block}
 .goal-pill{background:#fff;border-radius:24px;display:flex;color:var(--ink);overflow:hidden;box-shadow:var(--shadow);max-width:440px;width:100%;margin:0 auto;min-width:0}
 .goal-left{flex:1.5;padding:12px 8px;text-align:center}
 .goal-div{width:1px;background:var(--line);margin:12px 0}
