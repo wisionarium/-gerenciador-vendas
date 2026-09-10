@@ -904,12 +904,7 @@ async function viewMySales(app) {
   app.innerHTML = `
     <h2 style="margin:4px 0">Minhas vendas</h2>
     <p class="muted">Este mês • ${sales.length} registro(s)</p>
-    ${sales.length ? sales.map(saleCard).join('') : '<div class="card empty">Não há vendas registradas neste período.</div>'}
-    <button class="btn btn-accent btn-big" id="btnSale2">+ Registrar venda</button>`;
-  $('#btnSale2').onclick = async () => {
-    const { sellers } = await api('/api/sellers');
-    modalSale(sellers);
-  };
+    ${sales.length ? sales.map(saleCard).join('') : '<div class="card empty">Não há vendas registradas neste período.</div>'}`;
 }
 
 // ---------- modals ----------
@@ -931,6 +926,7 @@ function modalConfirmLogout() {
 }
 
 function modalCalls() {
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar chamadas.', 'err'); return; }
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Registrar chamadas</h3>
@@ -960,8 +956,9 @@ function modalCalls() {
 }
 
 function modalSale(sellers) {
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
   const me = store.user;
-  const preselected = me.role === 'seller' ? [me.id] : [];
+  const preselected = [];
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Nova venda</h3>
@@ -1136,8 +1133,14 @@ async function viewAdmin(app) {
   }
 }
 
-// menu do botão central: escolher o que registrar
+// menu do botão central: admin registra vendas/chamadas, vendedora só bate ponto
 function modalEscolhaRegistro() {
+  const isAdmin = store.user?.role === 'admin';
+  // trava extra: vendedora nem vê as opções de venda/chamada
+  if (!isAdmin) {
+    modalPonto(() => route());
+    return;
+  }
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">O que deseja registrar?</h3>
@@ -1145,23 +1148,17 @@ function modalEscolhaRegistro() {
     <button class="btn btn-accent btn-big" id="chSale">🛵 Registrar venda</button>
     <div style="height:10px"></div>
     <button class="btn btn-primary btn-big" id="chCalls">📞 Registrar chamadas</button>
-    ${store.user?.role === 'seller' ? `<div style="height:10px"></div><button class="btn btn-big" id="chPonto" style="border-radius:10px;background:#fff">🕒 Bater ponto</button>` : ''}
     <button class="btn btn-ghost btn-big" id="cancel">Cancelar</button>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  const chPonto = $('#chPonto');
-  if (chPonto) chPonto.onclick = () => modalPonto(() => route());
   $('#chSale').onclick = async () => {
     try {
       const { sellers } = await api('/api/sellers');
       modalSale(sellers);
     } catch (e) { toast(e.message, 'err'); }
   };
-  $('#chCalls').onclick = () => {
-    if (store.user.role === 'admin') modalCallsAdmin();
-    else modalCalls();
-  };
+  $('#chCalls').onclick = () => modalCallsAdmin();
 }
 
 function modalCallsAdmin() {

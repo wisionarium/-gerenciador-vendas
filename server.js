@@ -317,7 +317,7 @@ app.get('/api/calls', requireAuth, ah(async (req, res) => {
   res.json({ calls: rows });
 }));
 
-app.post('/api/calls', requireAuth, ah(async (req, res) => {
+app.post('/api/calls', requireAuth, requireAdmin, ah(async (req, res) => {
   let { date, quantity, seller_id } = req.body || {};
   date = date || todayISO();
   quantity = Number(quantity);
@@ -325,29 +325,18 @@ app.post('/api/calls', requireAuth, ah(async (req, res) => {
   if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 2000)
     return res.status(400).json({ error: 'Quantidade deve ser entre 1 e 2000.' });
 
-  let sellerId = req.user.id;
-  if (req.user.role === 'admin') {
-    if (seller_id) {
-      const s = await db.get("SELECT * FROM users WHERE id=? AND role='seller' AND active=1", seller_id);
-      if (!s) return res.status(400).json({ error: 'Vendedora inválida.' });
-      sellerId = s.id;
-    } else {
-      return res.status(400).json({ error: 'Selecione a vendedora.' });
-    }
-  } else if (req.user.role !== 'seller') {
-    return res.status(403).json({ error: 'Sem permissão.' });
-  }
+  if (!seller_id) return res.status(400).json({ error: 'Selecione a vendedora.' });
+  const s = await db.get("SELECT * FROM users WHERE id=? AND role='seller' AND active=1", seller_id);
+  if (!s) return res.status(400).json({ error: 'Vendedora inválida.' });
 
-  const r = await db.run('INSERT INTO call_records (seller_id, date, quantity) VALUES (?,?,?)', sellerId, date, quantity);
+  const r = await db.run('INSERT INTO call_records (seller_id, date, quantity) VALUES (?,?,?)', s.id, date, quantity);
   const row = await db.get('SELECT * FROM call_records WHERE id=?', r.lastInsertRowid);
   res.status(201).json({ call: row });
 }));
 
-app.delete('/api/calls/:id', requireAuth, ah(async (req, res) => {
+app.delete('/api/calls/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const row = await db.get('SELECT * FROM call_records WHERE id=?', req.params.id);
   if (!row) return res.status(404).json({ error: 'Registro não encontrado.' });
-  if (req.user.role !== 'admin' && row.seller_id !== req.user.id)
-    return res.status(403).json({ error: 'Você só pode excluir seus próprios registros.' });
   await db.run('DELETE FROM call_records WHERE id=?', row.id);
   res.json({ ok: true });
 }));
@@ -387,7 +376,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   res.json({ sales: await Promise.all(rows.map(saleWithParticipants)) });
 }));
 
-app.post('/api/sales', requireAuth, ah(async (req, res) => {
+app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   const { customer_name, product, color, channel, sale_date, participant_ids } = req.body || {};
   const date = sale_date || todayISO();
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
@@ -402,9 +391,6 @@ app.post('/api/sales', requireAuth, ah(async (req, res) => {
   const placeholders = pids.map(() => '?').join(',');
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
-
-  if (req.user.role !== 'admin' && !pids.includes(req.user.id))
-    return res.status(403).json({ error: 'Você precisa estar entre as participantes.' });
 
   // trava anti-duplicada: mesma data + mesmo cliente/produto/cor + mesmas participantes
   // 1 cadastro com 2 participantes já aparece no histórico das duas (0,5 cada / 1 no geral),
@@ -478,11 +464,9 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ sale: await saleWithParticipants(updated) });
 }));
 
-app.delete('/api/sales/:id', requireAuth, ah(async (req, res) => {
+app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
-  if (req.user.role !== 'admin' && sale.created_by !== req.user.id)
-    return res.status(403).json({ error: 'Você só pode excluir vendas criadas por você.' });
   await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id);
   await db.run('DELETE FROM sales WHERE id=?', sale.id);
   res.json({ ok: true });
