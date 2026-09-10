@@ -455,12 +455,35 @@ function modalPonto(onSaved, autostart) {
     <h3 style="margin:0">Bater ponto 🕒</h3>
     <p class="muted" style="font-size:13px">Aponte a câmera para o QR da loja. Vale para entrada e saída — a localização é usada <b>só agora</b>.</p>
     <button class="btn btn-big" id="scanBtn">📷 Escanear QR</button>
+    <div style="height:10px"></div>
+    <button class="btn btn-big" id="photoBtn">🖼️ Fotografar QR</button>
+    <input type="file" id="qrFile" accept="image/*" capture="environment" style="display:none">
     <div id="scanBox" style="display:none;margin-top:10px"><div id="qrReader" style="width:100%"></div><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000;display:none"></video>
     <p class="muted" id="scanStatus" style="font-size:12px">Aponte para o QR…</p></div>
     <button class="btn btn-ghost btn-big" type="button" id="cancel" style="margin-top:10px">Cancelar</button>
   </div></div>`;
   $('#cancel').onclick = () => { stopScan(); closeModal(); };
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') { stopScan(); closeModal(); } };
+  // plano B (iPhones com câmera ao vivo bloqueada): fotografa e decodifica a imagem
+  $('#photoBtn').onclick = () => $('#qrFile').click();
+  $('#qrFile').onchange = async () => {
+    const f = $('#qrFile').files[0];
+    if (!f) return;
+    const st = $('#scanStatus');
+    $('#scanBox').style.display = 'block';
+    try {
+      stopScan();
+      if (st) st.textContent = 'Lendo QR da foto…';
+      const tmp = new Html5Qrcode('qrReader');
+      const decoded = await tmp.scanFile(f, false);
+      try { tmp.clear(); } catch {}
+      punch(String(decoded).trim());
+    } catch {
+      if (st) st.textContent = 'Aponte para o QR…';
+      toast('Não identifiquei o QR na foto. Tente de novo com mais luz, de perto.', 'err');
+    }
+    $('#qrFile').value = '';
+  };
   let stream = null;
   let scanning = false;
   let done = false;
@@ -522,7 +545,7 @@ function modalPonto(onSaved, autostart) {
         $('#scanBtn').disabled = false;
         if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) { modalCameraHelp(); return; }
         const why = err && (err.name || err.message) ? ` (${err.name || ''} ${err.message || ''})`.trim().slice(0, 80) : '';
-        toast(`Não abriu a câmera${why}. Permita a câmera e tente de novo.`, 'err');
+        toast(`Câmera ao vivo indisponível${why}. Use "Fotografar QR" abaixo.`, 'err');
       }
       return;
     }
