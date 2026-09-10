@@ -109,7 +109,20 @@ function setNav() {
   });
   mark('#bottomNav a');
 }
-$('#logoutBtn').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
+$('#logoutBtn').onclick = () => { store.token = null; store.user = null; go('#/login'); };
+
+// navegação sem empilhar histórico: o gesto de "voltar" do iPhone não tem para onde ir,
+// a navbar (e os links internos) é o único jeito de trocar de tela
+function go(h) {
+  if (location.hash === h) return;
+  location.replace(h);
+}
+document.addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('a[href^="#/"]');
+  if (!a) return;
+  e.preventDefault();
+  go(a.getAttribute('href'));
+});
 
 // ---------- router ----------
 window.addEventListener('hashchange', route);
@@ -120,22 +133,22 @@ async function route() {
   document.body.classList.toggle('history-top', h === '#/vendedora/historico' || h === '#/vendedora/vendas' || h === '#/vendedora/config');
   const app = $('#app');
   const u = store.user;
-  if (!u && h !== '#/login') { location.hash = '#/login'; return; }
-  if (u && h === '#/login') { location.hash = u.role === 'admin' ? '#/admin' : '#/vendedora'; return; }
+  if (!u && h !== '#/login') { go('#/login'); return; }
+  if (u && h === '#/login') { go(u.role === 'admin' ? '#/admin' : '#/vendedora'); return; }
 
   try {
     if (h === '#/login' || h === '') return viewLogin(app);
     if (h.startsWith('#/vendedora')) {
       if (u.role !== 'seller' && u.role !== 'admin') throw new Error('Sem permissão.');
       if (h === '#/vendedora/config') {
-        if (u.role !== 'seller') { location.hash = '#/admin'; return; }
+        if (u.role !== 'seller') { go('#/admin'); return; }
         return viewConfig(app);
       }
       if (h === '#/vendedora/historico' || h === '#/vendedora/vendas') return viewHistory(app);
       return viewSeller(app);
     }
     if (h.startsWith('#/admin')) {
-      if (u.role !== 'admin') { location.hash = '#/vendedora'; return; }
+      if (u.role !== 'admin') { go('#/vendedora'); return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
       if (h === '#/admin/ponto') return viewPonto(app);
       if (h === '#/admin/comissoes') return viewComissoes(app);
@@ -184,7 +197,7 @@ function viewLogin(app) {
         body: JSON.stringify({ email: $('#email').value.trim(), password: $('#pass').value }),
       });
       store.token = token; store.user = user;
-      location.hash = user.role === 'admin' ? '#/admin' : '#/vendedora';
+      go(user.role === 'admin' ? '#/admin' : '#/vendedora');
     } catch (err) { toast(err.message, 'err'); }
   };
 }
@@ -640,7 +653,7 @@ async function viewConfig(app) {
       .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
       .catch((e) => toast(e.message, 'err'));
   };
-  $('#cfgLogout').onclick = () => { store.token = null; store.user = null; location.hash = '#/login'; };
+  $('#cfgLogout').onclick = () => { store.token = null; store.user = null; go('#/login'); };
   try {
     const { darks, lights, dark, light } = await api('/api/settings/theme');
     const paint = (gridId, map, current, colorOf) => {
@@ -1584,6 +1597,6 @@ if ('serviceWorker' in navigator) {
     } catch { store.token = null; store.user = null; }
   }
   refreshTheme();
-  if (!location.hash) location.hash = store.user ? (store.user.role === 'admin' ? '#/admin' : '#/vendedora') : '#/login';
+  if (!location.hash) go(store.user ? (store.user.role === 'admin' ? '#/admin' : '#/vendedora') : '#/login');
   route();
 })();
