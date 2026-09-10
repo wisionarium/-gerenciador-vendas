@@ -489,18 +489,20 @@ function modalPonto(onSaved, autostart) {
     } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
   };
   $('#scanBtn').onclick = async () => {
-    // checa permissão antes: orienta a marcar "Ao usar o app" (não "só desta vez")
-    try {
-      if (navigator.permissions && navigator.permissions.query) {
-        const st = await navigator.permissions.query({ name: 'camera' });
-        if (st.state === 'denied') { modalCameraHelp(); return; }
-        if (st.state === 'prompt') {
-          const go2 = await modalCameraAsk();
-          modalPonto(onSaved, go2);
-          return;
+    // na reabertura automática (pós-aviso) pula a checagem e vai direto ao sistema
+    if (!autostart) {
+      try {
+        if (navigator.permissions && navigator.permissions.query) {
+          const st = await navigator.permissions.query({ name: 'camera' });
+          if (st.state === 'denied') { modalCameraHelp(); return; }
+          if (st.state === 'prompt') {
+            const go2 = await modalCameraAsk();
+            modalPonto(onSaved, go2);
+            return;
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     // 1) tenta lib com decoder próprio (funciona no iPhone e Android)
     if (window.Html5Qrcode) {
       $('#scanBox').style.display = 'block';
@@ -1640,6 +1642,7 @@ fetchAppVersion().then((v) => { bootVersion = v; });
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js')
     .then((reg) => {
+      reg.update().catch(() => {});
       reg.addEventListener('updatefound', () => {
         const nw = reg.installing;
         if (nw) nw.addEventListener('statechange', () => {
