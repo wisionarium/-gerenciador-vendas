@@ -351,11 +351,11 @@ async function viewSeller(app) {
       <div class="seller-top">
         <div class="ava-wrap">
           <a class="ava" href="#/vendedora/config" title="Configurações">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</a>
-          <button class="ava-cam" id="avaCam" title="Trocar foto">📷</button>
+          <button class="ava-cam" id="avaCam" title="Trocar foto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1 2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <input type="file" id="avaInput" accept="image/*" style="display:none">
         </div>
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
-        <div class="saldo-top"><div class="saldo-top-lab">Saldo<button class="saldo-eye" id="saldoEye" title="Mostrar/ocultar saldo"></button></div><div class="saldo-top-val" id="saldoTxt">—</div></div>
+        <div class="saldo-top"><span id="saldoTxt">Saldo: —</span></div>
       </div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
       <div class="goal-pill">
@@ -383,24 +383,7 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
-  api('/api/commissions/me').then((r) => { saldoCents = r.pending_cents; renderSaldo(); }).catch(() => {});
-  const EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
-  const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.6 10.6 0 0 1 12 19c-6.5 0-10-7-10-7a17.6 17.6 0 0 1 4.06-4.94M9.9 4.24A10.6 10.6 0 0 1 12 5c6.5 0 10 7 10 7a17.7 17.7 0 0 1-2.16 3.19M14.12 14.12A3 3 0 1 1 9.88 9.88"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
-  let saldoCents = null;
-  let saldoHidden = false;
-  try { saldoHidden = localStorage.getItem('ec_saldo_hide_' + me.id) === '1'; } catch {}
-  const renderSaldo = () => {
-    const txt = $('#saldoTxt');
-    if (txt) txt.textContent = saldoCents == null ? '—' : (saldoHidden ? 'R$ ••••••' : fmtBRL(saldoCents));
-    const eye = $('#saldoEye');
-    if (eye) eye.innerHTML = saldoHidden ? EYE_OFF : EYE_OPEN;
-  };
-  renderSaldo();
-  $('#saldoEye').onclick = () => {
-    saldoHidden = !saldoHidden;
-    try { localStorage.setItem('ec_saldo_hide_' + me.id, saldoHidden ? '1' : '0'); } catch {}
-    renderSaldo();
-  };
+  api('/api/commissions/me').then((r) => { $('#saldoTxt').textContent = `Saldo: ${fmtBRL(r.pending_cents)}`; }).catch(() => {});
   bindAvatar();
   const wp = $('#writePhrase');
   if (wp) wp.onclick = () => modalPhrase();
