@@ -132,6 +132,22 @@ const SCHEMA = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_payout_seller ON payouts(seller_id)`,
+  // auditoria de vendas canceladas (a venda sai das listas/totais, o motivo fica registrado)
+  `CREATE TABLE IF NOT EXISTS canceled_sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL,
+    customer_name TEXT NOT NULL,
+    product TEXT NOT NULL,
+    color TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    sale_date TEXT NOT NULL,
+    participants TEXT NOT NULL DEFAULT '[]',
+    reason TEXT NOT NULL CHECK (reason IN ('desistencia','outros')),
+    note TEXT NOT NULL DEFAULT '',
+    canceled_by INTEGER REFERENCES users(id),
+    canceled_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_canceled_date ON canceled_sales(sale_date)`,
 ];
 
 let all;

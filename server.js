@@ -467,9 +467,47 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
 app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
-  await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id);
+  // limpa dependências de forma explícita (não depende de FK CASCADE,
+  // que não é garantido no modo remoto) e de forma resiliente a
+  // bancos criados antes da tabela commissions existir.
+  try { await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id); }
+  catch (e) { if (!/no such table/i.test(String(e.message))) throw e; }
+  await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
   await db.run('DELETE FROM sales WHERE id=?', sale.id);
   res.json({ ok: true });
+}));
+
+// cancelar venda (admin): registra o motivo em canceled_sales e remove a
+// venda das listas/totais (vendedoras, ranking, relatório, comissões).
+// reason: 'desistencia' | 'outros'. note: observação opcional (máx. 140).
+app.post('/api/sales/:id/cancel', requireAuth, requireAdmin, ah(async (req, res) => {
+  const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
+  if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
+  const { reason, note } = req.body || {};
+  if (!['desistencia', 'outros'].includes(reason))
+    return res.status(400).json({ error: 'Escolha o motivo: desistência ou outros.' });
+  const cleanNote = String(note || '').trim().slice(0, 140);
+  const full = await saleWithParticipants(sale);
+  const parts = (full.participants || []).map((p) => ({ seller_id: p.seller_id, seller_name: p.seller_name, credit: Number(p.credit) }));
+  await db.run(
+    'INSERT INTO canceled_sales (sale_id, customer_name, product, color, channel, sale_date, participants, reason, note, canceled_by) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    sale.id, sale.customer_name, sale.product, sale.color, sale.channel, sale.sale_date,
+    JSON.stringify(parts), reason, cleanNote, req.user.id
+  );
+  try { await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id); }
+  catch (e) { if (!/no such table/i.test(String(e.message))) throw e; }
+  await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
+  await db.run('DELETE FROM sales WHERE id=?', sale.id);
+  res.json({ ok: true });
+}));
+
+// histórico de vendas canceladas (admin, auditoria)
+app.get('/api/sales/canceled', requireAuth, requireAdmin, ah(async (req, res) => {
+  const rows = await db.all(
+    `SELECT c.*, u.name AS canceled_by_name FROM canceled_sales c
+     LEFT JOIN users u ON u.id=c.canceled_by ORDER BY c.id DESC LIMIT 200`
+  );
+  res.json({ canceled: rows.map((r) => ({ ...r, participants: JSON.parse(r.participants || '[]') })) });
 }));
 
 // ---------- COMISSÕES (R$25 individual / R$12,50 dividida, em centavos) ----------

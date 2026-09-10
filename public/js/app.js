@@ -1013,6 +1013,40 @@ function modalSale(sellers) {
   };
 }
 
+function modalCancelSale(sale, onSaved) {
+  const parts = (sale.participants || []).map((p) => esc(p.seller_name)).join(', ');
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">Cancelar venda #${sale.id}?</h3>
+    <p class="muted" style="font-size:13px"><b>${esc(sale.customer_name)}</b> • ${esc(sale.product)} • ${esc(sale.color)} • ${fmtDateBR(sale.sale_date)}${parts ? `<br>👥 ${parts}` : ''}</p>
+    <p class="muted" style="font-size:13px">A venda sai das listas, do ranking e das comissões. Essa ação não pode ser desfeita.</p>
+    <form id="fCancelSale">
+      <label>Motivo do cancelamento *</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal"><input type="radio" name="reason" value="desistencia" checked style="width:auto"> Desistência do cliente</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal"><input type="radio" name="reason" value="outros" style="width:auto"> Outros</label>
+      <label style="margin-top:8px">Observação (opcional)</label>
+      <input id="cNote" maxlength="140" placeholder="Ex: cliente pediu para aguardar">
+      <div style="height:12px"></div>
+      <button class="btn btn-primary btn-big" type="submit">Confirmar cancelamento</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Voltar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fCancelSale').onsubmit = async (e) => {
+    e.preventDefault();
+    const reason = ($('input[name="reason"]:checked') || {}).value;
+    if (!['desistencia', 'outros'].includes(reason)) return toast('Escolha o motivo do cancelamento.', 'err');
+    try {
+      await api(`/api/sales/${sale.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason, note: $('#cNote').value.trim() }),
+      });
+      closeModal(); toast('Venda cancelada.'); if (onSaved) onSaved();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
 function modalEditSale(sale, sellers, onSaved) {
   const selIds = (sale.participants || []).map((p) => Number(p.seller_id));
   $('#modalRoot').innerHTML = `
@@ -1205,12 +1239,12 @@ async function viewAllSales(app) {
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sid ? { seller_id: sid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
     $('#list').innerHTML = sales.length
-      ? sales.map((s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" data-del="${s.id}">Excluir</button>` : '')).join('')
+      ? sales.map((s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" data-del="${s.id}">Cancelar</button>` : '')).join('')
       : '<div class="card empty">Não há vendas registradas neste período.</div>';
-    $$('#list [data-del]').forEach((b) => (b.onclick = async () => {
-      if (!confirm('Excluir esta venda?')) return;
-      await api(`/api/sales/${b.dataset.del}`, { method: 'DELETE' });
-      toast('Venda excluída.'); load();
+    $$('#list [data-del]').forEach((b) => (b.onclick = () => {
+      const sale = sales.find((x) => String(x.id) === String(b.dataset.del));
+      if (!sale) return;
+      modalCancelSale(sale, load);
     }));
     $$('#list [data-edit]').forEach((b) => (b.onclick = async () => {
       const sale = sales.find((x) => String(x.id) === String(b.dataset.edit));
