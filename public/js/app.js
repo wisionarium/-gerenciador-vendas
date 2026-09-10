@@ -350,14 +350,13 @@ async function viewSeller(app) {
     <div class="seller-head">
       <div class="seller-top">
         <div class="ava-wrap">
-          <div class="ava">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</div>
+          <a class="ava" href="#/vendedora/config" title="Configurações">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</a>
           <button class="ava-cam" id="avaCam" title="Trocar foto">📷</button>
           <input type="file" id="avaInput" accept="image/*" style="display:none">
         </div>
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
-        <a class="seller-gear" href="#/vendedora/config" title="Configurações"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
+        <div class="saldo-top"><div class="saldo-top-lab">Saldo<button class="saldo-eye" id="saldoEye" title="Mostrar/ocultar saldo"></button></div><div class="saldo-top-val" id="saldoTxt">—</div></div>
       </div>
-      <div class="saldo-line"><span id="saldoTxt">Saldo a receber: —</span><button class="saldo-eye" id="saldoEye" title="Mostrar/ocultar saldo"></button></div>
       <div class="seller-motiv">${motivFor(monthSum.salesCredit, target)}</div>
       <div class="goal-pill">
         <div class="goal-left"><div class="goal-lab">Vendas deste mês:</div><div class="goal-num mono" id="goalMonth">0</div></div>
@@ -392,7 +391,7 @@ async function viewSeller(app) {
   try { saldoHidden = localStorage.getItem('ec_saldo_hide_' + me.id) === '1'; } catch {}
   const renderSaldo = () => {
     const txt = $('#saldoTxt');
-    if (txt) txt.textContent = saldoCents == null ? 'Saldo a receber: —' : (saldoHidden ? 'Saldo a receber: R$ ••••••' : `Saldo a receber: ${fmtBRL(saldoCents)}`);
+    if (txt) txt.textContent = saldoCents == null ? '—' : (saldoHidden ? 'R$ ••••••' : fmtBRL(saldoCents));
     const eye = $('#saldoEye');
     if (eye) eye.innerHTML = saldoHidden ? EYE_OFF : EYE_OPEN;
   };
