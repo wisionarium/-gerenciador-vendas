@@ -369,7 +369,7 @@ async function viewSeller(app) {
       <div class="ponto-strip" id="pontoStrip"><span>🕒 Carregando ponto…</span></div>
     </div>
     <div class="phrase"><div class="phrase-title">Frase do dia:</div>
-      ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : ''}
+      ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)} <button class="share-btn" id="sharePhrase" title="Compartilhar frase"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="10.7" x2="15.4" y2="6.3"/><line x1="8.6" y1="13.3" x2="15.4" y2="17.7"/></svg></button></div>` : ''}
       ${!phraseRes.author && phraseRes.canWrite ? `<button class="btn btn-accent" id="writePhrase">✍️ Hoje é seu dia! Escrever a frase</button>` : ''}
       ${!phraseRes.author && !phraseRes.canWrite && phraseRes.drawnSellerName ? `<div class="muted" style="font-size:12px;margin-top:8px">Aguardando ${esc(phraseRes.drawnSellerName.split(' ')[0])} escrever…</div>` : ''}
     </div>
@@ -400,6 +400,8 @@ async function viewSeller(app) {
   bindAvatar();
   const wp = $('#writePhrase');
   if (wp) wp.onclick = () => modalPhrase();
+  const sp = $('#sharePhrase');
+  if (sp) sp.onclick = () => modalSharePhrase(phraseRes.text, phraseRes.author);
   const loadList = async (k) => {
     const r = rangeFor(k);
     try {
@@ -637,6 +639,108 @@ function modalPhrase() {
       closeModal(); toast('Frase publicada! 💚'); route();
     } catch (err) { toast(err.message, 'err'); }
   };
+}
+
+// ---------- COMPARTILHAR frase do dia (arte para baixar) ----------
+const SHARE_THEMES = [
+  { name: 'Clássico', bg: '#f3ede4', rect: '#2f7d5b', text: '#ffffff', sub: '#334155', brand: '#123f2c' },
+  { name: 'Escuro', bg: '#0b3b2c', rect: '#cdf14d', text: '#0b3b2c', sub: '#e7f0e8', brand: '#cdf14d' },
+  { name: 'Rosa', bg: '#fdeef4', rect: '#8a1145', text: '#ffffff', sub: '#6b2140', brand: '#8a1145' },
+  { name: 'Areia', bg: '#faf5e9', rect: '#6f4a1f', text: '#ffffff', sub: '#57534e', brand: '#6f4a1f' },
+];
+
+function wrapText(ctx, text, maxW) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const t = cur ? cur + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; }
+    else cur = t;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function drawPhraseArt(canvas, text, author, th) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = th.bg;
+  ctx.fillRect(0, 0, W, H);
+  // @wisionarium topo direito com transparência
+  ctx.save();
+  ctx.globalAlpha = 0.45;
+  ctx.fillStyle = th.sub;
+  ctx.font = '600 30px "Open Sans", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('@WISIONARIUM', W - 60, 80);
+  ctx.restore();
+  // Sell Day à esquerda
+  ctx.fillStyle = th.brand;
+  ctx.textAlign = 'left';
+  ctx.font = '400 190px Allura, cursive';
+  ctx.fillText('Sell', 70, 640);
+  ctx.font = '400 230px "Yeseva One", serif';
+  ctx.fillText('DAY', 70, 860);
+  // frase dentro do retângulo verde (largura conforme texto)
+  ctx.font = '700 46px "Open Sans", sans-serif';
+  const maxW = 470;
+  const lines = wrapText(ctx, text, maxW);
+  const lh = 62;
+  const padV = 55, padH = 45;
+  const rw = maxW + padH * 2;
+  const rh = lines.length * lh + padV * 2 - 14;
+  const rx = W - rw - 60;
+  const ry = 500;
+  ctx.fillStyle = th.rect;
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, 28); ctx.fill(); }
+  else ctx.fillRect(rx, ry, rw, rh);
+  ctx.fillStyle = th.text;
+  ctx.textAlign = 'center';
+  lines.forEach((ln, i) => ctx.fillText(ln, rx + rw / 2, ry + padV + 34 + i * lh));
+  // nome da vendedora abaixo do retângulo
+  ctx.fillStyle = th.sub;
+  ctx.font = '400 34px "Open Sans", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('– ' + author, rx + rw, ry + rh + 60);
+}
+
+function modalSharePhrase(text, author) {
+  let themeIdx = 0;
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">Compartilhar frase 📤</h3>
+    <p class="muted" style="font-size:13px">Escolha as cores e baixe a imagem.</p>
+    <canvas id="shareCanvas" width="1080" height="1350" style="width:100%;border-radius:16px;border:1px solid var(--line)"></canvas>
+    <label>Cores</label>
+    <div class="check-list" id="themeList">
+      ${SHARE_THEMES.map((t, i) => `<div class="check ${i === 0 ? 'on' : ''}" data-i="${i}"><span class="swdot" style="background:linear-gradient(135deg, ${t.bg} 50%, ${t.rect} 50%)"></span>${esc(t.name)}</div>`).join('')}
+    </div>
+    <div style="height:12px"></div>
+    <button class="btn btn-accent btn-big" id="dlArt">⬇️ Baixar imagem</button>
+    <button class="btn btn-ghost btn-big" type="button" id="cancel">Fechar</button>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  const redraw = async () => {
+    try { await document.fonts.ready; } catch {}
+    drawPhraseArt($('#shareCanvas'), text, author, SHARE_THEMES[themeIdx]);
+  };
+  $('#themeList').onclick = (e) => {
+    const c = e.target.closest('.check'); if (!c) return;
+    themeIdx = Number(c.dataset.i);
+    $$('#themeList .check').forEach((x) => x.classList.toggle('on', x === c));
+    redraw();
+  };
+  $('#dlArt').onclick = () => {
+    const a = document.createElement('a');
+    a.download = 'frase-do-dia.png';
+    a.href = $('#shareCanvas').toDataURL('image/png');
+    a.click();
+    toast('Imagem baixada!');
+  };
+  redraw();
 }
 
 // ---------- CONFIGURAÇÕES da vendedora ----------
