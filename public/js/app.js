@@ -222,13 +222,21 @@ function viewLogin(app) {
 }
 
 // ---------- shared widgets ----------
-function kpiCards(s, prefix = '') {
+// whole=true: visão geral/setor — venda dividida conta como 1 (o 0,5 é só crédito da vendedora).
+// whole=false (padrão): visão da vendedora — mantém o crédito fracionado.
+function kpiCards(s, prefix = '', whole = false) {
+  const conv = whole ? (s.calls > 0 ? (s.records / s.calls) * 100 : null) : s.conversion;
+  const vSales = whole ? fmtInt(s.records) : fmtV(s.salesCredit);
+  const vWa = whole ? fmtInt(s.waRecords ?? s.whatsapp) : fmtV(s.whatsapp);
+  const vCrm = whole ? fmtInt(s.crmRecords ?? s.crm) : fmtV(s.crm);
+  const vPres = whole ? fmtInt(s.presRecords ?? s.presencial) : fmtV(s.presencial);
   return `
   <div class="grid-kpi">
-    <div class="card kpi"><div class="label">🛵 Vendas ${prefix}</div><div class="value mono">${fmtV(s.salesCredit)}</div><div class="sub">${fmtInt(s.records)} registro(s)</div></div>
+    <div class="card kpi"><div class="label">🛵 Vendas ${prefix}</div><div class="value mono">${vSales}</div><div class="sub">${fmtInt(s.records)} registro(s)</div></div>
     <div class="card kpi"><div class="label">📞 Chamadas ${prefix}</div><div class="value mono">${fmtInt(s.calls)}</div></div>
-    <div class="card kpi"><div class="label">💬 WhatsApp</div><div class="value mono">${fmtV(s.whatsapp)}</div></div>
-    <div class="card kpi"><div class="label">🖥️ CRM</div><div class="value mono">${fmtV(s.crm)}</div><div class="sub">Conversão: ${fmtPct(s.conversion)}</div></div>
+    <div class="card kpi"><div class="label">💬 WhatsApp</div><div class="value mono">${vWa}</div></div>
+    <div class="card kpi"><div class="label">🖥️ CRM</div><div class="value mono">${vCrm}</div><div class="sub">Conversão: ${fmtPct(conv)}</div></div>
+    <div class="card kpi"><div class="label">🏬 Presencial</div><div class="value mono">${vPres}</div></div>
   </div>`;
 }
 
@@ -1228,7 +1236,7 @@ async function viewAdmin(app) {
       : filtered;
     kpi.innerHTML = `
       <p class="muted" style="margin:12px 0">${esc(adminPeriod.label || '')} • ${from ? fmtDateBR(from) : '…'} a ${to ? fmtDateBR(to) : '…'}</p>
-      ${kpiCards(summary)}
+      ${kpiCards(summary, '', !adminSeller)}
     `;
     rank.innerHTML = `
       <h3 class="section-title">Ranking</h3>
@@ -1700,14 +1708,14 @@ async function viewReport(app) {
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
     const sectorTitle = sector && sector !== 'all' ? ` (${sectorLabel(sector).toUpperCase()})` : '';
     const msg =
-      `*RELATÓRIO COMERCIAL${sectorTitle} - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtV(summary.salesCredit)}\nWhatsApp: ${fmtV(summary.whatsapp)} | CRM: ${fmtV(summary.crm)}` +
+      `*RELATÓRIO COMERCIAL${sectorTitle} - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtInt(summary.records)}\nWhatsApp: ${fmtInt(summary.waRecords ?? 0)} | CRM: ${fmtInt(summary.crmRecords ?? 0)} | Presencial: ${fmtInt(summary.presRecords ?? 0)}` +
       details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)} - Chamadas ${fmtInt(d.calls)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
       <div class="card">
         <h3 style="margin:0">Relatório comercial</h3>
         <p class="muted">Data: ${fmtDateBR(date)} • ordem alfabética</p>
-        ${kpiCards(summary)}
+        ${kpiCards(summary, '', true)}
         ${details.map((d) => `
           <div class="sale-card">
             <div class="row" style="justify-content:space-between;align-items:center">

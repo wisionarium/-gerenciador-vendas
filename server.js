@@ -908,21 +908,71 @@ async function summarize(from, to, sellerId) {
   }
   const records = Number((await db.get(countSel, ...countParams)).t);
 
+  // vendas inteiras por canal (no geral, venda dividida conta como 1 — o 0,5 é só crédito da vendedora)
+  const chanCount = async (ch) => {
+    if (sellerId) {
+      const r = await db.get(
+        `SELECT COUNT(DISTINCT s.id) AS t FROM sales s JOIN sale_participants sp ON sp.sale_id=s.id AND sp.seller_id=? WHERE ${saleWhere} AND s.channel=?`,
+        sellerId, ...sp, ch
+      );
+      return Number(r.t);
+    }
+    const r = await db.get(`SELECT COUNT(DISTINCT s.id) AS t FROM sales s WHERE ${saleWhere} AND s.channel=?`, ...sp, ch);
+    return Number(r.t);
+  };
+  const waRecords = await chanCount('WhatsApp');
+  const crmRecords = await chanCount('CRM');
+  const presRecords = await chanCount('Presencial');
+
   const conversion = calls > 0 ? (credit / calls) * 100 : null;
-  return { calls, salesCredit: credit, whatsapp: wa, crm: crm, presencial, records, conversion };
+  return { calls, salesCredit: credit, whatsapp: wa, crm: crm, presencial, records, waRecords, crmRecords, presRecords, conversion };
 }
 
 app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, sector } = req.query;
   const sid = req.user.role === 'admin' ? (seller_id ? Number(seller_id) : null) : req.user.id;
   if (req.user.role === 'admin' && !seller_id && validSector(sector)) {
+    // agregado do setor: vendas contam inteiras e uma única vez
+    // (mesmo divididas entre 2 vendedoras do setor ou com outro setor).
     const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 AND COALESCE(sector,'online')=?", sector);
-    const parts = await Promise.all(sellers.map((s) => summarize(from || null, to || null, s.id)));
-    const sum = (k) => parts.reduce((a, p) => a + (Number(p[k]) || 0), 0);
-    const calls = sum('calls'), salesCredit = sum('salesCredit');
+    const sids = sellers.map((s) => s.id);
+    if (!sids.length) {
+      return res.json({ calls: 0, salesCredit: 0, whatsapp: 0, crm: 0, presencial: 0, records: 0, waRecords: 0, crmRecords: 0, presRecords: 0, conversion: null });
+    }
+    const ph = sids.map(() => '?').join(',');
+    const inSector = `s.id IN (SELECT DISTINCT sp2.sale_id FROM sale_participants sp2 WHERE sp2.seller_id IN (${ph}))`;
+    const dp = [];
+    let dw = inSector;
+    if (from) { dw += ' AND s.sale_date >= ?'; dp.push(from); }
+    if (to) { dw += ' AND s.sale_date <= ?'; dp.push(to); }
+    const cnt = async (ch) => {
+      const r = await db.get(
+        `SELECT COUNT(DISTINCT s.id) AS t FROM sales s WHERE ${dw}${ch ? ' AND s.channel=?' : ''}`,
+        ...sids, ...dp, ...(ch ? [ch] : [])
+      );
+      return Number(r.t);
+    };
+    const cp = [];
+    let cw = '1=1';
+    if (from) { cw += ' AND date >= ?'; cp.push(from); }
+    if (to) { cw += ' AND date <= ?'; cp.push(to); }
+    const callsRow = await db.get(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE seller_id IN (${ph}) AND ${cw}`, ...sids, ...cp);
+    const calls = Number(callsRow.t);
+    const credSum = async (ch) => {
+      const r = await db.get(
+        `SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE sp.seller_id IN (${ph})${from ? ' AND s.sale_date >= ?' : ''}${to ? ' AND s.sale_date <= ?' : ''}${ch ? ' AND s.channel=?' : ''}`,
+        ...sids, ...dp, ...(ch ? [ch] : [])
+      );
+      return Number(r.t);
+    };
+    const salesCredit = await credSum(null);
+    const records = await cnt(null);
     return res.json({
-      calls, salesCredit, whatsapp: sum('whatsapp'), crm: sum('crm'), presencial: sum('presencial'),
-      records: sum('records'), conversion: calls > 0 ? (salesCredit / calls) * 100 : null,
+      calls, salesCredit,
+      whatsapp: await credSum('WhatsApp'), crm: await credSum('CRM'), presencial: await credSum('Presencial'),
+      records,
+      waRecords: await cnt('WhatsApp'), crmRecords: await cnt('CRM'), presRecords: await cnt('Presencial'),
+      conversion: calls > 0 ? (records / calls) * 100 : null,
     });
   }
   res.json(await summarize(from || null, to || null, sid));
