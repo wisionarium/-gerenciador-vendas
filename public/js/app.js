@@ -201,7 +201,6 @@ function viewLogin(app) {
           <div style="height:14px"></div>
           <button class="btn btn-primary btn-big" type="submit">Entrar</button>
         </form>
-        <p class="muted" style="font-size:12px;margin-top:14px">Acesso demo — admin: <b>admin@equipe.com / admin123</b><br>Vendedora: <b>ana@equipe.com / ana123</b></p>
       </div>
     </div>`;
   $('#showPass').onclick = () => {
@@ -379,8 +378,7 @@ async function viewSeller(app) {
       <div class="seller-top">
         <div class="ava-wrap">
           <a class="ava" href="#/vendedora/config" title="Configurações">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</a>
-          <button class="ava-cam" id="avaCam" title="Trocar foto"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.2-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.03-.44-.4-.81-.85-.81h-3.1c-.45 0-.82.37-.85.81l-.38 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47.02-.59.22l-1.92 3.32c-.12.2-.06.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.2.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.38 2.54c.03.44.4.81.85.81h3.1c.45 0 .82-.37.85-.81l.38-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47-.02.59-.22l1.92-3.32c-.12-.2-.06-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></button>
-          <input type="file" id="avaInput" accept="image/*" style="display:none">
+          <span class="ava-cam" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.2-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.03-.44-.4-.81-.85-.81h-3.1c-.45 0-.82.37-.85.81l-.38 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47.02-.59.22l-1.92 3.32c-.12.2-.06.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.2.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.38 2.54c.03.44.4.81.85.81h3.1c.45 0 .82-.37.85-.81l.38-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47-.02.59-.22l1.92-3.32c-.12-.2-.06-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></span>
         </div>
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
         <button class="saldo-top" id="saldoBtn" title="Ocultar/mostrar saldo"><span id="saldoTxt">Saldo: —</span></button>
@@ -425,7 +423,6 @@ async function viewSeller(app) {
     try { localStorage.setItem('ec_saldo_hide_' + me.id, saldoHidden ? '1' : '0'); } catch {}
     renderSaldo();
   };
-  bindAvatar();
   const wp = $('#writePhrase');
   if (wp) wp.onclick = () => modalPhrase();
   const sp = $('#sharePhrase');
@@ -630,19 +627,6 @@ function processAvatar(file) {
     img.src = URL.createObjectURL(file);
   });
 }
-function bindAvatar() {
-  const inp = $('#avaInput');
-  if (!inp) return;
-  $('#avaCam').onclick = () => inp.click();
-  inp.onchange = () => {
-    const f = inp.files[0]; if (!f) return;
-    processAvatar(f)
-      .then((url) => api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) }))
-      .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
-      .catch((e) => toast(e.message, 'err'));
-  };
-}
-
 function modalPhrase() {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">

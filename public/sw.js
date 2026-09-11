@@ -1,4 +1,4 @@
-const CACHE = 'sellday-v16';
+const CACHE = 'sellday-v18';
 const CORE = ['/', '/index.html', '/version.json', '/css/styles.css', '/js/app.js', '/js/vendor/html5-qrcode.min.js', '/manifest.webmanifest', '/icons/logo.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
