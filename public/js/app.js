@@ -875,7 +875,6 @@ async function viewHistory(app) {
         <button data-k="hoje">Hoje</button>
       </div>
       <div class="search-row">
-        <select id="hChannel"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
         <input id="hQ" placeholder="Buscar cliente, produto…">
       </div>
     </div>
@@ -886,7 +885,6 @@ async function viewHistory(app) {
   const load = async () => {
     const r = key === 'mes' ? { ...monthRange(0), label: 'Mês' } : rangeFor(key);
     const qs = new URLSearchParams({ from: r.from, to: r.to });
-    if ($('#hChannel').value) qs.set('channel', $('#hChannel').value);
     if ($('#hQ').value.trim()) qs.set('q', $('#hQ').value.trim());
     try {
       const { sales } = await api(`/api/sales?${qs}`);
@@ -903,7 +901,6 @@ async function viewHistory(app) {
     $$('#hPills button').forEach((x) => x.classList.toggle('on', x === b));
     key = b.dataset.k; load();
   };
-  $('#hChannel').onchange = load;
   let deb = null;
   $('#hQ').oninput = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
   load();
