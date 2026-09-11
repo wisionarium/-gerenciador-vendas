@@ -321,7 +321,62 @@ const ready = (async () => {
   try { await run('ALTER TABLE canceled_sales ADD COLUMN is_bonus INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE canceled_sales ADD COLUMN bonus_cents INTEGER'); } catch {}
   await migrateTableChecks();
+  await autoArchive();
 })();
+
+// Arquivamento automático 90+ dias (sem confirmação): move vendas, chamadas
+// e canceladas antigas para o arquivo (somem das listas/totais, continuam
+// consultáveis). Pagamentos (payouts) nunca são tocados.
+const ARCHIVE_DAYS = 90;
+async function autoArchive() {
+  const cutoff = new Date(Date.now() - ARCHIVE_DAYS * 864e5).toISOString().slice(0, 10);
+  let nSales = 0, nCalls = 0, nCanceled = 0;
+  try {
+    const oldSales = await all('SELECT * FROM sales WHERE sale_date < ? ORDER BY sale_date LIMIT 2000', cutoff);
+    for (const sale of oldSales) {
+      const parts = await all(
+        'SELECT sp.*, u.name AS seller_name FROM sale_participants sp JOIN users u ON u.id=sp.seller_id WHERE sp.sale_id=?',
+        sale.id
+      );
+      let comms = [];
+      try { comms = await all('SELECT seller_id, month, amount_cents FROM commissions WHERE sale_id=?', sale.id); } catch {}
+      await run(
+        'INSERT INTO archived_sales (sale_id, customer_name, product, color, channel, sale_date, is_bonus, bonus_cents, participants, commissions, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        sale.id, sale.customer_name, sale.product, sale.color, sale.channel, sale.sale_date,
+        sale.is_bonus ? 1 : 0, sale.bonus_cents || null,
+        JSON.stringify(parts.map((p) => ({ seller_id: p.seller_id, seller_name: p.seller_name, credit: Number(p.credit) }))),
+        JSON.stringify(comms.map((c) => ({ seller_id: c.seller_id, month: c.month, amount_cents: Number(c.amount_cents) }))),
+        sale.created_by, sale.created_at
+      );
+      try { await run('DELETE FROM commissions WHERE sale_id=?', sale.id); }
+      catch (e) { if (!/no such table/i.test(String(e.message))) throw e; }
+      await run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
+      await run('DELETE FROM sales WHERE id=?', sale.id);
+      nSales++;
+    }
+    const oldCalls = await all(
+      'SELECT cr.*, u.name AS seller_name FROM call_records cr LEFT JOIN users u ON u.id=cr.seller_id WHERE cr.date < ? LIMIT 2000', cutoff
+    );
+    for (const c of oldCalls) {
+      await run('INSERT INTO archived_calls (call_id, seller_id, seller_name, date, quantity) VALUES (?,?,?,?,?)',
+        c.id, c.seller_id, c.seller_name || '', c.date, c.quantity);
+      await run('DELETE FROM call_records WHERE id=?', c.id);
+      nCalls++;
+    }
+    const oldCanc = await all('SELECT * FROM canceled_sales WHERE sale_date < ? LIMIT 2000', cutoff);
+    for (const x of oldCanc) {
+      await run(
+        'INSERT INTO archived_canceled (sale_id, customer_name, product, color, channel, sale_date, participants, reason, note, is_bonus, bonus_cents, canceled_by, canceled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        x.sale_id, x.customer_name, x.product, x.color, x.channel, x.sale_date, x.participants || '[]',
+        x.reason || 'outros', x.note || '', x.is_bonus ? 1 : 0, x.bonus_cents || null, x.canceled_by || null, x.canceled_at || null
+      );
+      await run('DELETE FROM canceled_sales WHERE id=?', x.id);
+      nCanceled++;
+    }
+  } catch (e) { console.log('[db] Arquivo automático pulado:', e.message); return; }
+  if (nSales || nCalls || nCanceled)
+    console.log(`[db] Arquivo automático: ${nSales} venda(s), ${nCalls} chamada(s), ${nCanceled} cancelada(s) (antes de ${cutoff}).`);
+}
 
 // Rebuild idempotente de CHECKs antigos (canal 'Presencial' e comissões flexíveis).
 // Funciona no SQLite local e no Turso (só DDL/DML padrão).

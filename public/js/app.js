@@ -227,15 +227,14 @@ function viewLogin(app) {
 function kpiCards(s, prefix = '', whole = false) {
   const conv = whole ? (s.calls > 0 ? (s.records / s.calls) * 100 : null) : s.conversion;
   const vSales = whole ? fmtInt(s.records) : fmtV(s.salesCredit);
-  const vWa = whole ? fmtInt(s.waRecords ?? s.whatsapp) : fmtV(s.whatsapp);
-  const vCrm = whole ? fmtInt(s.crmRecords ?? s.crm) : fmtV(s.crm);
+  // Online = WhatsApp + CRM (vendas feitas online)
+  const vOn = whole ? fmtInt((s.waRecords ?? 0) + (s.crmRecords ?? 0)) : fmtV((s.whatsapp || 0) + (s.crm || 0));
   const vPres = whole ? fmtInt(s.presRecords ?? s.presencial) : fmtV(s.presencial);
   return `
   <div class="grid-kpi">
     <div class="card kpi"><div class="label">🛵 Vendas ${prefix}</div><div class="value mono">${vSales}</div><div class="sub">${fmtInt(s.records)} registro(s)</div></div>
     <div class="card kpi"><div class="label">📞 Chamadas ${prefix}</div><div class="value mono">${fmtInt(s.calls)}</div></div>
-    <div class="card kpi"><div class="label">💬 WhatsApp</div><div class="value mono">${vWa}</div></div>
-    <div class="card kpi"><div class="label">🖥️ CRM</div><div class="value mono">${vCrm}</div><div class="sub">Conversão: ${fmtPct(conv)}</div></div>
+    <div class="card kpi"><div class="label">🌐 Online</div><div class="value mono">${vOn}</div><div class="sub">Conversão: ${fmtPct(conv)}</div></div>
     <div class="card kpi"><div class="label">🏬 Presencial</div><div class="value mono">${vPres}</div></div>
   </div>`;
 }
@@ -1189,9 +1188,7 @@ async function viewAdmin(app) {
       <select id="fSeller" style="flex:1;max-width:240px"><option value="">Todas as vendedoras</option></select>
       <select id="fChannel" style="flex:1;max-width:200px"><option value="">Todos os canais</option><option ${adminChannel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${adminChannel === 'CRM' ? 'selected' : ''}>CRM</option><option ${adminChannel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
     </div>
-    <div id="rankWrap"></div>
-    <h3 class="section-title">Manutenção 🗃️</h3>
-    <div id="maintWrap"><div class="card"><p class="muted">Carregando…</p></div></div>`;
+    <div id="rankWrap"></div>`;
   $('#sectorPills').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     adminSector = b.dataset.s; adminSeller = '';
@@ -1250,61 +1247,7 @@ async function viewAdmin(app) {
       </div>` : '<div class="card empty">Não há dados neste período.</div>'}
     `;
     bindCompactList(rank);
-    loadMaint();
   }
-
-  async function loadMaint() {
-    const box = $('#maintWrap');
-    if (!box) return;
-    try {
-      const st = await api('/api/maintenance/status');
-      const total = st.sales + st.calls + st.canceled;
-      box.innerHTML = `
-      <div class="card">
-        ${total > 0
-          ? `<p style="margin:0 0 8px">⚠️ <b>${st.sales} venda(s)</b>, ${st.calls} chamada(s) e ${st.canceled} cancelada(s) com +${st.days} dias <span class="muted">(antes de ${fmtDateBR(st.cutoff)})</span></p>`
-          : `<p class="muted" style="margin:0 0 8px">✅ Nada com +${st.days} dias para arquivar. Arquivadas: <b>${st.archived_sales}</b> venda(s).</p>`}
-        <div class="row">
-          ${total > 0 ? `<button class="btn btn-accent" id="doArchive">Arquivar +${st.days} dias</button>` : ''}
-          <a class="btn" href="#/admin/arquivo" style="text-decoration:none">Ver arquivo</a>
-        </div>
-        <p class="muted" style="font-size:12px;margin:8px 0 0">Arquivar tira das listas e totais, mas mantém tudo consultável. Pagamentos nunca são tocados.</p>
-      </div>`;
-      const btn = $('#doArchive');
-      if (btn) btn.onclick = () => modalArchive(st, () => { loadAdminBody(); });
-    } catch (e) {
-      box.innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
-    }
-  }
-}
-
-function modalArchive(st, reload) {
-  $('#modalRoot').innerHTML = `
-  <div class="modal-bg anim-up" id="mbg"><div class="modal">
-    <h3 style="margin:0">Arquivar registros +${st.days} dias?</h3>
-    <p class="muted" style="font-size:13px">Serão movidos para o arquivo (somem das listas, ranking, relatórios e comissões, mas continuam consultáveis em “Ver arquivo”):</p>
-    <p style="font-size:14px">🛵 <b>${st.sales} venda(s)</b><br>📞 ${st.calls} chamada(s)<br>🚫 ${st.canceled} cancelada(s)</p>
-    <p class="muted" style="font-size:13px">Pagamentos registrados <b>não</b> são alterados. Essa ação não pode ser desfeita.</p>
-    <button class="btn btn-accent btn-big" id="archYes">Sim, arquivar</button>
-    <div style="height:10px"></div>
-    <button class="btn btn-ghost btn-big" id="cancel">Voltar</button>
-  </div></div>`;
-  $('#cancel').onclick = closeModal;
-  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  $('#archYes').onclick = async () => {
-    $('#archYes').disabled = true;
-    $('#archYes').textContent = 'Arquivando…';
-    try {
-      const r = await api('/api/maintenance/archive', { method: 'POST' });
-      closeModal();
-      toast(`Arquivadas ${r.archived.sales} venda(s), ${r.archived.calls} chamada(s).`);
-      if (reload) reload();
-    } catch (err) {
-      $('#archYes').disabled = false;
-      $('#archYes').textContent = 'Sim, arquivar';
-      toast(err.message, 'err');
-    }
-  };
 }
 
 async function viewArchive(app) {
