@@ -153,6 +153,57 @@ const SCHEMA = [
     canceled_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_canceled_date ON canceled_sales(sale_date)`,
+  // arquivo 90+ dias (consulta só-leitura; payouts nunca são arquivados)
+  `CREATE TABLE IF NOT EXISTS archived_sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL,
+    customer_name TEXT NOT NULL,
+    product TEXT NOT NULL,
+    color TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    sale_date TEXT NOT NULL,
+    is_bonus INTEGER NOT NULL DEFAULT 0,
+    bonus_cents INTEGER,
+    participants TEXT NOT NULL DEFAULT '[]',
+    commissions TEXT NOT NULL DEFAULT '[]',
+    created_by INTEGER,
+    created_at TEXT,
+    archived_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_arch_sales_date ON archived_sales(sale_date)`,
+  `CREATE TABLE IF NOT EXISTS archived_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id INTEGER NOT NULL,
+    seller_id INTEGER NOT NULL,
+    seller_name TEXT,
+    date TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    archived_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_arch_calls_date ON archived_calls(date)`,
+  `CREATE TABLE IF NOT EXISTS archived_canceled (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL,
+    customer_name TEXT NOT NULL,
+    product TEXT NOT NULL,
+    color TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    sale_date TEXT NOT NULL,
+    participants TEXT NOT NULL DEFAULT '[]',
+    reason TEXT NOT NULL DEFAULT 'outros',
+    note TEXT NOT NULL DEFAULT '',
+    is_bonus INTEGER NOT NULL DEFAULT 0,
+    bonus_cents INTEGER,
+    canceled_by INTEGER,
+    canceled_at TEXT,
+    archived_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_arch_canceled_date ON archived_canceled(sale_date)`,
+  // datas que o admin mandou NÃO tratar como feriado (veta a detecção automática)
+  `CREATE TABLE IF NOT EXISTS holiday_skips (
+    date TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 let all;

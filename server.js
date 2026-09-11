@@ -546,6 +546,81 @@ app.get('/api/sales/canceled', requireAuth, requireAdmin, ah(async (req, res) =>
   res.json({ canceled: rows.map((r) => ({ ...r, participants: JSON.parse(r.participants || '[]') })) });
 }));
 
+// ---------- MANUTENÇÃO: arquivo 90+ dias (manual, só admin) ----------
+// Arquiva (não apaga): vendas, chamadas e canceladas somem das listas/totais
+// mas ficam consultáveis. Pagamentos (payouts) nunca são tocados.
+const ARCHIVE_DAYS = 90;
+const archiveCutoff = () => new Date(Date.now() - ARCHIVE_DAYS * 864e5).toISOString().slice(0, 10);
+
+app.get('/api/maintenance/status', requireAuth, requireAdmin, ah(async (req, res) => {
+  const cutoff = archiveCutoff();
+  const s = await db.get('SELECT COUNT(*) AS c FROM sales WHERE sale_date < ?', cutoff);
+  const c = await db.get('SELECT COUNT(*) AS c FROM call_records WHERE date < ?', cutoff);
+  const x = await db.get('SELECT COUNT(*) AS c FROM canceled_sales WHERE sale_date < ?', cutoff);
+  const a = await db.get('SELECT COUNT(*) AS c FROM archived_sales');
+  res.json({
+    cutoff, days: ARCHIVE_DAYS,
+    sales: Number(s.c), calls: Number(c.c), canceled: Number(x.c),
+    archived_sales: Number(a.c),
+  });
+}));
+
+app.post('/api/maintenance/archive', requireAuth, requireAdmin, ah(async (req, res) => {
+  const cutoff = archiveCutoff();
+  const BATCH = 2000;
+  let nSales = 0, nCalls = 0, nCanceled = 0;
+  const oldSales = await db.all('SELECT * FROM sales WHERE sale_date < ? ORDER BY sale_date LIMIT ?', cutoff, BATCH);
+  for (const sale of oldSales) {
+    const full = await saleWithParticipants(sale);
+    const parts = (full.participants || []).map((p) => ({ seller_id: p.seller_id, seller_name: p.seller_name, credit: Number(p.credit) }));
+    const comms = await db.all('SELECT seller_id, month, amount_cents FROM commissions WHERE sale_id=?', sale.id);
+    await db.run(
+      'INSERT INTO archived_sales (sale_id, customer_name, product, color, channel, sale_date, is_bonus, bonus_cents, participants, commissions, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      sale.id, sale.customer_name, sale.product, sale.color, sale.channel, sale.sale_date,
+      sale.is_bonus ? 1 : 0, sale.bonus_cents || null, JSON.stringify(parts), JSON.stringify(comms.map((c) => ({ ...c, amount_cents: Number(c.amount_cents) }))),
+      sale.created_by, sale.created_at
+    );
+    try { await db.run('DELETE FROM commissions WHERE sale_id=?', sale.id); }
+    catch (e) { if (!/no such table/i.test(String(e.message))) throw e; }
+    await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
+    await db.run('DELETE FROM sales WHERE id=?', sale.id);
+    nSales++;
+  }
+  const oldCalls = await db.all(
+    'SELECT cr.*, u.name AS seller_name FROM call_records cr LEFT JOIN users u ON u.id=cr.seller_id WHERE cr.date < ? LIMIT ?', cutoff, BATCH
+  );
+  for (const c of oldCalls) {
+    await db.run('INSERT INTO archived_calls (call_id, seller_id, seller_name, date, quantity) VALUES (?,?,?,?,?)',
+      c.id, c.seller_id, c.seller_name || '', c.date, c.quantity);
+    await db.run('DELETE FROM call_records WHERE id=?', c.id);
+    nCalls++;
+  }
+  const oldCanc = await db.all('SELECT * FROM canceled_sales WHERE sale_date < ? LIMIT ?', cutoff, BATCH);
+  for (const x of oldCanc) {
+    await db.run(
+      'INSERT INTO archived_canceled (sale_id, customer_name, product, color, channel, sale_date, participants, reason, note, is_bonus, bonus_cents, canceled_by, canceled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      x.sale_id, x.customer_name, x.product, x.color, x.channel, x.sale_date, x.participants || '[]',
+      x.reason || 'outros', x.note || '', x.is_bonus ? 1 : 0, x.bonus_cents || null, x.canceled_by || null, x.canceled_at || null
+    );
+    await db.run('DELETE FROM canceled_sales WHERE id=?', x.id);
+    nCanceled++;
+  }
+  res.json({ ok: true, cutoff, truncated: oldSales.length >= BATCH || oldCalls.length >= BATCH, archived: { sales: nSales, calls: nCalls, canceled: nCanceled } });
+}));
+
+// consulta ao arquivo (admin, só leitura)
+app.get('/api/maintenance/archive', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { q, from, to } = req.query;
+  const conds = [];
+  const params = [];
+  if (q) { conds.push('(customer_name LIKE ? OR product LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
+  if (from) { conds.push('sale_date >= ?'); params.push(from); }
+  if (to) { conds.push('sale_date <= ?'); params.push(to); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const rows = await db.all(`SELECT * FROM archived_sales ${where} ORDER BY sale_date DESC, id DESC LIMIT 200`, ...params);
+  res.json({ sales: rows.map((r) => ({ ...r, participants: JSON.parse(r.participants || '[]'), commissions: JSON.parse(r.commissions || '[]') })) });
+}));
+
 // ---------- COMISSÕES (online 25/12,50 • presencial 35/17,50 • bônus = valor exclusivo) ----------
 // parts: [{seller_id, amount_cents}]
 async function syncCommissions(saleId, parts, month) {
@@ -758,27 +833,35 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
 app.get('/api/ponto/dia', requireAuth, requireAdmin, ah(async (req, res) => {
   const date = req.query.date || todayISO();
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
-  const hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
+  let hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
   const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
-  const rows = await Promise.all(sellers.map(async (s) => {
+  const buildRows = async (isHol) => Promise.all(sellers.map(async (s) => {
     const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', s.id, date);
     return {
       seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null,
-      punch: p ? punchCalc(p, !!hol) : null,
+      punch: p ? punchCalc(p, isHol) : null,
     };
   }));
-  // heurística feriado: seg–sáb (não feriado ainda) com maioria saindo 12:30–13:30
-  let possible_holiday = false;
+  let rows = await buildRows(!!hol);
+  // feriado automático: seg–sáb (ainda não marcado, sem veto do admin) com
+  // maioria saindo 12:30–13:30 → marca sozinho (idempotente).
+  let auto_holiday = false;
   const dow = new Date(date + 'T12:00:00Z').getUTCDay();
-  if (!hol && dow !== 0) {
+  const skipped = await db.get('SELECT 1 AS x FROM holiday_skips WHERE date=?', date).catch(() => null);
+  if (!hol && dow !== 0 && !skipped) {
     const outs = rows.map((r) => r.punch?.check_out_at).filter(Boolean).map(spMinOfISO).filter((m) => m != null);
     const inWindow = outs.filter((m) => m >= 750 && m <= 810).length; // 12:30–13:30 SP
     const base = rows.filter((r) => r.punch).length;
-    if ((inWindow >= 3 || (base >= 3 && inWindow / base >= 0.6))) possible_holiday = true;
+    if ((inWindow >= 3 || (base >= 3 && inWindow / base >= 0.6))) {
+      await db.run('INSERT INTO holidays (date, label) VALUES (?,?) ON CONFLICT(date) DO NOTHING', date, 'Feriado (auto)');
+      hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
+      auto_holiday = true;
+      rows = await buildRows(true);
+    }
   }
   const present = rows.filter((r) => r.punch).length;
-  const pending = rows.filter((r) => r.punch && !r.punch.check_out_at).length;
-  res.json({ date, is_holiday: !!hol, holiday: hol || null, possible_holiday, present, pending, rows });
+  const absent = rows.length - present;
+  res.json({ date, is_holiday: !!hol, holiday: hol || null, auto_holiday, present, absent, rows });
 }));
 
 // feriados (admin)
@@ -794,10 +877,13 @@ app.post('/api/ponto/feriados', requireAuth, requireAdmin, ah(async (req, res) =
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   await db.run('INSERT INTO holidays (date, label) VALUES (?,?) ON CONFLICT(date) DO UPDATE SET label=excluded.label',
     date, String(label || 'Feriado').slice(0, 80));
+  try { await db.run('DELETE FROM holiday_skips WHERE date=?', date); } catch {}
   res.status(201).json({ holiday: await db.get('SELECT * FROM holidays WHERE date=?', date) });
 }));
 app.delete('/api/ponto/feriados/:date', requireAuth, requireAdmin, ah(async (req, res) => {
   await db.run('DELETE FROM holidays WHERE date=?', req.params.date);
+  // veta a detecção automática de remarcar sozinha (admin mandou não ser feriado)
+  try { await db.run('INSERT INTO holiday_skips (date) VALUES (?) ON CONFLICT(date) DO NOTHING', req.params.date); } catch {}
   res.json({ ok: true });
 }));
 
