@@ -465,38 +465,46 @@ async function migrateTableChecks() {
     try { return await fn(); }
     finally { if (!isRemote) { try { await run('PRAGMA foreign_keys=ON'); } catch {} } }
   };
-  // users: aceita perfil 'manager' (rebuild preservando dados)
+  // users: perfis 'manager' e 'staff' (rebuild preservando dados)
+  const rebuildUsersTable = async () => {
+    // saneamento prévio: NULLs que violariam o NOT NULL da tabela nova
+    try { await run('UPDATE users SET active=1 WHERE active IS NULL'); } catch {}
+    try { await run("UPDATE users SET role='seller' WHERE role IS NULL OR role NOT IN ('admin','seller','manager','staff')"); } catch {}
+    await noFK(async () => {
+      try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
+      await run(`CREATE TABLE users_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin','manager','seller','staff')) DEFAULT 'seller',
+      sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
+      store_id INTEGER,
+      avatar_url TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, active, created_at)
+      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, active, created_at FROM users`);
+      await run('DROP TABLE users');
+      await run('ALTER TABLE users_new RENAME TO users');
+      try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
+    });
+  };
   try {
     const st = await once('users-manager-role',
       async () => !(await tableSQL('users')).includes('manager'),
-      async () => {
-        // saneamento prévio: NULLs que violariam o NOT NULL da tabela nova
-        try { await run('UPDATE users SET active=1 WHERE active IS NULL'); } catch {}
-        try { await run("UPDATE users SET role='seller' WHERE role IS NULL OR role NOT IN ('admin','seller','manager')"); } catch {}
-        await noFK(async () => {
-          try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
-          await run(`CREATE TABLE users_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          email TEXT NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL,
-          role TEXT NOT NULL CHECK (role IN ('admin','manager','seller')) DEFAULT 'seller',
-          sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
-          store_id INTEGER,
-          avatar_url TEXT,
-          active INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )`);
-        await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, active, created_at)
-          SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, active, created_at FROM users`);
-          await run('DROP TABLE users');
-          await run('ALTER TABLE users_new RENAME TO users');
-          try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
-        });
-      }
+      rebuildUsersTable
     );
     if (st === 'applied') console.log('[db] Migração: perfil gerente aplicada.');
   } catch (e) { console.log('[db] Migração gerente pulada:', e.message); }
+  try {
+    const st = await once('users-staff-role',
+      async () => !(await tableSQL('users')).includes('staff'),
+      rebuildUsersTable
+    );
+    if (st === 'applied') console.log('[db] Migração: perfil funcionário aplicada.');
+  } catch (e) { console.log('[db] Migração funcionário pulada:', e.message); }
   // sales: aceita canal 'Presencial'
   try {
     const st = await once('sales-presencial-channel',

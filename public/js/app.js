@@ -107,7 +107,7 @@ function setNav() {
   const badge = $('#userBadge');
   const logout = $('#logoutBtn');
   if (!u) { nav.style.display = 'none'; badge.textContent = ''; logout.style.display = 'none'; return; }
-  const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'manager' ? `Gerente • ${u.store_name || ''}` : 'Vendedora';
+  const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'manager' ? `Gerente • ${u.store_name || ''}` : u.role === 'staff' ? `Equipe • ${u.store_name || ''}` : 'Vendedora';
   badge.textContent = `${u.name} • ${roleLabel}`;
   logout.style.display = '';
   nav.style.display = '';
@@ -126,6 +126,10 @@ function setNav() {
       ${fab}
       <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
       <a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
+  } else if (u.role === 'staff') {
+    nav.innerHTML = `
+      <a href="#/funcionario" title="Início">${ICONS.home}</a>
+      ${fab}`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" title="Início">${ICONS.home}</a>
@@ -167,10 +171,14 @@ async function route() {
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { go('#/login'); return; }
-  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : '#/admin'); return; }
+  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : u.role === 'staff' ? '#/funcionario' : '#/admin'); return; }
 
   try {
     if (h === '#/login' || h === '') return viewLogin(app);
+    if (h === '#/funcionario') {
+      if (u.role !== 'staff' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora' : '#/login'); return; }
+      return viewStaff(app);
+    }
     if (h.startsWith('#/vendedora')) {
       if (u.role !== 'seller' && u.role !== 'admin') throw new Error('Sem permissão.');
       if (h === '#/vendedora/config') {
@@ -181,7 +189,7 @@ async function route() {
       return viewSeller(app);
     }
     if (h.startsWith('#/admin')) {
-      if (u.role !== 'admin' && u.role !== 'manager') { go('#/vendedora'); return; }
+      if (u.role !== 'admin' && u.role !== 'manager') { go(u.role === 'staff' ? '#/funcionario' : '#/vendedora'); return; }
       // gerente: tudo da loja, menos Equipe, Comissões e Arquivo
       if (u.role === 'manager' && (h === '#/admin/vendedoras' || h === '#/admin/comissoes' || h === '#/admin/arquivo')) { go('#/admin'); return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
@@ -233,7 +241,7 @@ function viewLogin(app) {
       });
       store.token = token; store.user = user;
       // força re-render mesmo se o hash já for o destino (troca de conta na mesma rota)
-      const dest = user.role === 'seller' ? '#/vendedora' : '#/admin';
+      const dest = user.role === 'seller' ? '#/vendedora' : user.role === 'staff' ? '#/funcionario' : '#/admin';
       if (location.hash === dest) route();
       else go(dest);
     } catch (err) { toast(err.message, 'err'); }
@@ -888,6 +896,62 @@ async function viewConfig(app) {
   } catch (e) {
     $('#darkGrid').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
+}
+
+// ---------- HOME do funcionário (só ponto) ----------
+async function viewStaff(app) {
+  const me = store.user;
+  const t = todayISO();
+  const mk = t.slice(0, 7);
+  app.innerHTML = `<div class="card"><p class="muted">Carregando…</p></div>`;
+  const [hoje, mes, phraseRes] = await Promise.all([
+    api('/api/ponto/hoje').catch(() => ({ punch: null })),
+    api(`/api/ponto/eu?month=${mk}`).catch(() => ({ punches: [] })),
+    api('/api/phrases/today').catch(() => ({ text: '' })),
+  ]);
+  const totalExtra = (mes.punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
+  const fmtDurLocal = (min) => `${Math.floor(min / 60)}h ${min % 60}min`;
+  const p = hoje.punch;
+  app.innerHTML = `
+    <div class="seller-head">
+      <div class="seller-top">
+        <div class="ava-wrap">
+          <button class="ava" id="staffAva" title="Trocar foto" style="cursor:pointer">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</button>
+          <input type="file" id="staffAvaInput" accept="image/*" style="display:none">
+        </div>
+        <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
+        <span>${storeTag(me.store_name)}</span>
+      </div>
+      <div class="card" style="margin-top:12px;text-align:center">
+        <div class="muted" style="font-size:12px">HOJE • ${p ? fmtDateBR(t) : 'sem registro ainda'}</div>
+        <div class="mono" style="font-size:30px;font-weight:800">${p ? `${p.in_hhmm || '—'} → ${p.out_hhmm || '—'}` : '— → —'}</div>
+        ${p?.worked_label ? `<div class="muted" style="font-size:13px">Trabalhado: ${esc(p.worked_label)}${p.extra_min > 0 ? ` • Extra: <b>+${esc(p.extra_label)}</b>` : ''}</div>` : '<div class="muted" style="font-size:13px">Toque no + para bater o ponto</div>'}
+      </div>
+      <div class="card" style="background:var(--brand-soft);text-align:center;margin-top:12px">
+        <div class="muted" style="font-size:12px">Extras acumulados no mês</div>
+        <div class="mono" style="font-size:30px;font-weight:800">${fmtDurLocal(totalExtra)}</div>
+      </div>
+    </div>
+    <div class="phrase"><div class="phrase-title">Frase do dia:</div>
+      ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : `<div class="muted" style="font-size:12px">Ainda não publicada hoje.</div>`}
+    </div>
+    <h3 class="section-title">Meu mês</h3>
+    <div id="staffList">${(mes.punches || []).length ? compactListHTML(mes.punches, (x) => `
+      <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
+        <span><b>${fmtDateBR(x.date)}</b>${x.is_holiday ? ' 🎉' : ''}<br><span class="mono" style="font-size:14px">${x.in_hhmm || '—'} → ${x.out_hhmm || '—'}</span></span>
+        <span class="mono" style="font-size:13px">${x.extra_min > 0 ? `＋${esc(x.extra_label)}` : esc(x.worked_label || '—')}</span>
+      </div></div>`, 8) : '<div class="card empty">Nenhum ponto neste mês.</div>'}</div>
+    <div class="foot">Desenvolvido pela Wisionarium</div>
+  `;
+  bindCompactList($('#staffList'));
+  $('#staffAva').onclick = () => $('#staffAvaInput').click();
+  $('#staffAvaInput').onchange = () => {
+    const f = $('#staffAvaInput').files[0]; if (!f) return;
+    processAvatar(f)
+      .then((url) => api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) }))
+      .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
+      .catch((e) => toast(e.message, 'err'));
+  };
 }
 
 // ---------- HISTÓRICO da vendedora (ícone papel) ----------
@@ -1549,6 +1613,7 @@ async function tabPontoLoja(body) {
   } catch (e) { $('#qrBox').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
 }
   // dia
+let pontoKind = '';
 async function tabPontoDia(body, t) {
   const isManager = store.user?.role === 'manager';
   let stores = [];
@@ -1563,15 +1628,26 @@ async function tabPontoDia(body, t) {
         ${isManager ? '' : `<div style="flex:1"><label>Loja</label><select id="pStore"><option value="">Todas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>`}
         <button class="btn btn-primary" id="pGo">Ver dia</button>
       </div>
+      <div class="mini-pills" id="pKind" style="margin-top:10px">
+        <button data-k="" class="${!pontoKind ? 'on' : ''}">Todos</button>
+        <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
+        <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
+      </div>
       <div id="pDay" style="margin-top:12px"><p class="muted">Carregando…</p></div>
     </div>`;
+  $('#pKind').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    pontoKind = b.dataset.k;
+    $$('#pKind button').forEach((x) => x.classList.toggle('on', x === b));
+    loadDay();
+  };
   const loadDay = async () => {
     const date = $('#pDate').value || t;
     const stid = $('#pStore')?.value || '';
     const box = $('#pDay');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
-      const d = await api(`/api/ponto/dia?date=${date}${stid ? `&store_id=${stid}` : ''}`);
+      const d = await api(`/api/ponto/dia?date=${date}${stid ? `&store_id=${stid}` : ''}${pontoKind ? `&kind=${pontoKind}` : ''}`);
       const present = d.rows.filter((r) => r.punch);
       const absent = d.rows.filter((r) => !r.punch);
       const rowHTML = (r) => {
@@ -1580,7 +1656,7 @@ async function tabPontoDia(body, t) {
         const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
         return `
           <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-            <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${elsewhere}<br>
+            <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${elsewhere}<br>
             <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
             <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
           </div></div>`;
@@ -1626,14 +1702,25 @@ async function tabPontoExtras(body, t) {
         <div style="flex:1"><label>Mês</label><input type="month" id="pMonth" value="${t.slice(0, 7)}"></div>
         <button class="btn btn-primary" id="pMonthGo">Ver mês</button>
       </div>
+      <div class="mini-pills" id="pMonthKind" style="margin-top:10px">
+        <button data-k="" class="${!pontoKind ? 'on' : ''}">Todos</button>
+        <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
+        <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
+      </div>
       <div id="pMonthBody" style="margin-top:12px"><p class="muted">Carregando…</p></div>
     </div>`;
+  $('#pMonthKind').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    pontoKind = b.dataset.k;
+    $$('#pMonthKind button').forEach((x) => x.classList.toggle('on', x === b));
+    loadMonth();
+  };
   const loadMonth = async () => {
     const month = $('#pMonth').value || t.slice(0, 7);
     const box = $('#pMonthBody');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
-      const r = await api(`/api/ponto/resumo?month=${month}`);
+      const r = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}`);
       const msg = `*HORAS EXTRAS — ${month.slice(5, 7)}/${month.slice(0, 4)}*\nTotal: ${r.total_extra_label}\n` +
         r.rows.map((x) => `• ${x.name}: ${x.extra_label}`).join('\n');
       const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
@@ -1646,7 +1733,7 @@ async function tabPontoExtras(body, t) {
           <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
             <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
             <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
-            <span><b>${esc(x.name)}</b> ${sectorTag(x.sector)}</span></span>
+            <span><b>${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}</span></span>
             <b class="mono" style="font-size:17px">${x.extra_label}</b>
           </div></div>`, 8)}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
@@ -1670,7 +1757,7 @@ async function tabPontoExtras(body, t) {
 // PDF simples de horas extras (totais por vendedora) via impressão do sistema
 function printExtrasPDF(month, r) {
   const [y, m] = month.split('-');
-  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
+  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Horas Extras — ${m}/${y}</title><style>
     body{font-family:sans-serif;padding:40px;color:#111} h1{font-size:22px;margin:0} p{color:#555;font-size:13px}
@@ -2004,7 +2091,7 @@ async function viewTeam(app) {
       const { users } = await api('/api/users');
     const people = users.filter((u) => u.role !== 'admin');
     const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
-      <td>${s.role === 'manager' ? '<span class="chip lime" style="font-size:10px">Gerente</span>' : `<span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span>`}<br>${storeTag(s.store_name)}</td>
+      <td>${s.role === 'manager' ? '<span class="chip lime" style="font-size:10px">Gerente</span>' : s.role === 'staff' ? '<span class="chip" style="font-size:10px">Funcionário</span>' : `<span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span>`}<br>${storeTag(s.store_name)}</td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
       <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button></td></tr>`;
     const teamHead = '<table><thead><tr><th>Nome</th><th>Perfil / Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
@@ -2086,13 +2173,13 @@ async function modalUser(u, reload) {
   const isSeller = !u || u.role === 'seller';
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
-    <h3 style="margin:0">${u ? (u.role === 'manager' ? 'Editar gerente' : 'Editar vendedora') : 'Nova pessoa'}</h3>
+    <h3 style="margin:0">${u ? (u.role === 'manager' ? 'Editar gerente' : u.role === 'staff' ? 'Editar funcionário' : 'Editar vendedora') : 'Nova pessoa'}</h3>
     <form id="fUser">
       <label>Nome *</label><input id="uName" required value="${esc(u?.name || '')}">
       <label>E-mail *</label><input id="uEmail" type="email" required value="${esc(u?.email || '')}">
       <label>${u ? 'Nova senha (opcional)' : 'Senha *'}</label><input id="uPass" type="password" ${u ? '' : 'required'} placeholder="mín. 4 caracteres">
       <label>Perfil *</label>
-      <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option></select>
+      <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option><option value="staff" ${u?.role === 'staff' ? 'selected' : ''}>Funcionário (só ponto)</option></select>
       <div id="sellerFields" style="display:${isSeller ? 'block' : 'none'}">
         <label>Setor *</label>
         <select id="uSector"><option value="online" ${(u?.sector || 'online') === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${u?.sector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
@@ -2100,6 +2187,7 @@ async function modalUser(u, reload) {
       <label>Loja *</label>
       <select id="uStore">${stores.map((s) => `<option value="${s.id}" ${Number(u?.store_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
+      <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
       <div style="height:12px"></div>
       <button class="btn btn-primary btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -2107,9 +2195,10 @@ async function modalUser(u, reload) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#uRole').onchange = () => {
-    const mgr = $('#uRole').value === 'manager';
-    $('#sellerFields').style.display = mgr ? 'none' : 'block';
-    $('#mgrHint').style.display = mgr ? 'block' : 'none';
+    const role = $('#uRole').value;
+    $('#sellerFields').style.display = role === 'seller' ? 'block' : 'none';
+    $('#mgrHint').style.display = role === 'manager' ? 'block' : 'none';
+    $('#staffHint').style.display = role === 'staff' ? 'block' : 'none';
   };
   $('#fUser').onsubmit = async (e) => {
     e.preventDefault();
@@ -2117,7 +2206,7 @@ async function modalUser(u, reload) {
       const role = $('#uRole').value;
       const payload = {
         name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role,
-        sector: role === 'manager' ? 'online' : $('#uSector').value,
+        sector: role === 'seller' ? $('#uSector').value : 'online',
         store_id: Number($('#uStore').value),
         ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
       };
