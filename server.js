@@ -144,8 +144,7 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
   const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
   const sectorParam = validSector(sector) ? [sector] : [];
   const sel = 'SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id';
-  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
-  if (req.user.role === 'admin') {
+  if (req.user.role === 'admin' || req.user.role === 'manager') {
     const rows = await db.all(`${sel} WHERE u.role='seller'${sectorFilter} ORDER BY u.name`, ...sectorParam);
     return res.json({ sellers: rows.map(toPublicUser) });
   }
@@ -155,10 +154,10 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
 
 // ---------- LOJAS ----------
 app.get('/api/stores', requireAuth, ah(async (req, res) => {
-  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   let rows = [];
   try { rows = await db.all('SELECT * FROM stores WHERE active=1 ORDER BY id'); }
   catch { return res.json({ stores: [] }); }
+  if (req.user.role === 'manager') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
   if (req.user.role === 'seller') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
   res.json({ stores: rows });
 }));
@@ -493,7 +492,6 @@ async function saleWithParticipants(sale) {
 
 app.get('/api/sales', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, channel, product, q, store_id } = req.query;
-  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const conds = [];
@@ -509,7 +507,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   if (seller_id) {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(Number(seller_id));
-  } else if (req.user.role !== 'admin') {
+  } else if (req.user.role !== 'admin' && req.user.role !== 'manager') {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(req.user.id);
   }
@@ -521,7 +519,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   res.json({ sales: await Promise.all(rows.map(saleWithParticipants)) });
 }));
 
-app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
+app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
   const { customer_name, product, color, channel, sale_date, participant_ids, store_id } = req.body || {};
   const date = sale_date || todayISO();
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
@@ -594,7 +592,7 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   res.status(201).json({ sale: await saleWithParticipants(sale) });
 }));
 
-app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   const scope = scopedStoreId(req, sale.store_id);
@@ -649,7 +647,7 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ sale: await saleWithParticipants(updated) });
 }));
 
-app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+app.delete('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   const scope = scopedStoreId(req, sale.store_id);
@@ -667,7 +665,7 @@ app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
 // cancelar venda (admin): registra o motivo em canceled_sales e remove a
 // venda das listas/totais (vendedoras, ranking, relatório, comissões).
 // reason: 'desistencia' | 'outros'. note: observação opcional (máx. 140).
-app.post('/api/sales/:id/cancel', requireAuth, requireAdmin, ah(async (req, res) => {
+app.post('/api/sales/:id/cancel', requireAuth, requireManager, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   const scope = scopedStoreId(req, sale.store_id);
@@ -1090,10 +1088,23 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   let hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
-  const sellers = await db.all(
+  let sellers = await db.all(
     `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
   );
+  if (scope.storeId != null) {
+    // visitantes: bateram o QR desta loja no dia mas são de outra loja
+    const homeIds = new Set(sellers.map((s) => s.id));
+    const visitors = await db.all(
+      `SELECT DISTINCT u.*, s.name AS store_name FROM users u
+       JOIN punches p ON p.seller_id=u.id AND p.date=? AND p.store_id=?
+       LEFT JOIN stores s ON s.id=u.store_id
+       WHERE u.role='seller' AND u.active=1 ORDER BY u.name`,
+      date, scope.storeId
+    );
+    for (const v of visitors) if (!homeIds.has(v.id)) { homeIds.add(v.id); sellers.push(v); }
+    sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+  }
   const storeNames = {};
   const punchStore = async (p) => {
     if (!p || !p.store_id) return 'Sede';
@@ -1162,21 +1173,38 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido.' });
   const scope = scopedStoreId(req, req.query.store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
-  const sellers = await db.all(
-    `SELECT * FROM users WHERE role='seller' AND active=1${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY name`,
+  let sellers = await db.all(
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
   );
+  if (scope.storeId != null) {
+    // visitantes com batidas nesta loja no mês
+    const homeIds = new Set(sellers.map((s) => s.id));
+    const visitors = await db.all(
+      `SELECT DISTINCT u.*, st.name AS store_name FROM users u
+       JOIN punches p ON p.seller_id=u.id AND p.date LIKE ? AND p.store_id=?
+       LEFT JOIN stores st ON st.id=u.store_id
+       WHERE u.role='seller' AND u.active=1 ORDER BY u.name`,
+      `${month}%`, scope.storeId
+    );
+    for (const v of visitors) if (!homeIds.has(v.id)) { homeIds.add(v.id); sellers.push(v); }
+    sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+  }
   const hols = await db.all('SELECT date FROM holidays WHERE date LIKE ?', `${month}%`);
   const holSet = new Set(hols.map((h) => h.date));
   const rows = await Promise.all(sellers.map(async (s) => {
-    const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date', s.id, `${month}%`);
+    // extras contam onde bateu o ponto (filtro por loja quando escopado)
+    const ps = await db.all(
+      `SELECT * FROM punches WHERE seller_id=? AND date LIKE ?${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY date`,
+      s.id, `${month}%`, ...(scope.storeId != null ? [scope.storeId] : [])
+    );
     let extra = 0, worked = 0, days = 0;
     for (const p of ps) {
       const c = punchCalc(p, holSet.has(p.date));
       if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
     }
     return {
-      seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null,
+      seller_id: s.id, name: s.name, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
     };
@@ -1303,14 +1331,20 @@ async function summarize(from, to, sellerId, storeId) {
 
 app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, sector, store_id } = req.query;
-  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const storeId = scope.storeId;
   let sid = null;
   if (req.user.role === 'seller') sid = req.user.id;
-  else if (seller_id) sid = Number(seller_id);
-  if (req.user.role === 'admin' && !sid && validSector(sector)) {
+  else if (seller_id) {
+    sid = Number(seller_id);
+    if (req.user.role === 'manager') {
+      const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", sid);
+      if (!t || Number(t.store_id) !== Number(req.user.store_id))
+        return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+    }
+  }
+  if ((req.user.role === 'admin' || req.user.role === 'manager') && !sid && validSector(sector)) {
     // agregado do setor (+ loja): vendas contam inteiras e uma única vez
     // (mesmo divididas entre 2 vendedoras do setor ou com outro setor).
     const sellers = await db.all(
@@ -1361,16 +1395,33 @@ app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   res.json(await summarize(from || null, to || null, sid, storeId));
 }));
 
-app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => {
+app.get('/api/stats/ranking', requireAuth, requireManager, ah(async (req, res) => {
   const { from, to, sector, store_id } = req.query;
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const sectorFilter = validSector(sector) ? ' AND COALESCE(u.sector,\'online\')=?' : '';
-  const storeFilter = scope.storeId != null ? ' AND u.store_id=?' : '';
-  const sellers = await db.all(
-    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${sectorFilter}${storeFilter} ORDER BY u.name`,
-    ...(validSector(sector) ? [sector] : []), ...(scope.storeId != null ? [scope.storeId] : [])
-  );
+  const sectorParam = validSector(sector) ? [sector] : [];
+  let sellers;
+  if (scope.storeId != null) {
+    // elenco da loja = todo mundo que VENDEU nela no período (inclui visitantes de outra loja)
+    const dateConds = [];
+    const dateParams = [];
+    if (from) { dateConds.push('sl.sale_date >= ?'); dateParams.push(from); }
+    if (to) { dateConds.push('sl.sale_date <= ?'); dateParams.push(to); }
+    sellers = await db.all(
+      `SELECT DISTINCT u.*, s.name AS store_name FROM users u
+       JOIN sale_participants sp ON sp.seller_id=u.id
+       JOIN sales sl ON sl.id=sp.sale_id AND sl.store_id=?
+       LEFT JOIN stores s ON s.id=u.store_id
+       WHERE u.role='seller' AND u.active=1${sectorFilter}${dateConds.length ? ' AND ' + dateConds.join(' AND ') : ''} ORDER BY u.name`,
+      scope.storeId, ...sectorParam, ...dateParams
+    );
+  } else {
+    sellers = await db.all(
+      `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${sectorFilter} ORDER BY u.name`,
+      ...sectorParam
+    );
+  }
   const rows = await Promise.all(sellers.map(async (s) => {
     const st = await summarize(from || null, to || null, s.id, scope.storeId);
     return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_id: s.store_id, store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, presencial: st.presencial, conversion: st.conversion };
@@ -1381,9 +1432,13 @@ app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => 
 
 app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   const targetId = Number(req.params.id);
-  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
-  if (req.user.role !== 'admin' && targetId !== req.user.id)
+  if (req.user.role !== 'admin' && req.user.role !== 'manager' && targetId !== req.user.id)
     return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role === 'manager') {
+    const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", targetId);
+    if (!t || Number(t.store_id) !== Number(req.user.store_id))
+      return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  }
   const { from, to, cfrom, cto } = req.query;
   const current = await summarize(from || null, to || null, targetId);
   const compare = (cfrom || cto) ? await summarize(cfrom || null, cto || null, targetId) : null;
@@ -1405,11 +1460,21 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   if (from) { cw += ' AND date >= ?'; p2.push(from); }
   if (to) { cw += ' AND date <= ?'; p2.push(to); }
   const dailyCalls = await db.all(`SELECT date, SUM(quantity) AS calls FROM call_records WHERE ${cw} GROUP BY date ORDER BY date`, ...p2);
-  const seller = await db.get('SELECT * FROM users WHERE id=?', targetId);
+  const seller = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', targetId);
   if (!seller) return res.status(404).json({ error: 'Vendedora não encontrada.' });
+  // por loja: onde vendeu no período (calculado, sem campo novo)
+  let byStore = [];
+  try {
+    const stores = await db.all('SELECT * FROM stores WHERE active=1 ORDER BY id');
+    byStore = (await Promise.all(stores.map(async (st) => {
+      const stt = await summarize(from || null, to || null, targetId, st.id);
+      return { store_id: st.id, store_name: st.name, sales: stt.salesCredit, records: stt.records };
+    }))).filter((r) => r.records > 0);
+  } catch {}
   res.json({
     seller: toPublicUser(seller),
     current,
+    byStore,
     compare,
     deltas: compare ? {
       sales: pct(current.salesCredit, compare.salesCredit),
@@ -1423,7 +1488,7 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   });
 }));
 
-app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
+app.get('/api/report/daily', requireAuth, requireManager, ah(async (req, res) => {
   const date = req.query.date || todayISO();
   const { sector, store_id } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
@@ -1432,10 +1497,24 @@ app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
   const sectorFilter = validSector(sector) ? ' AND COALESCE(u.sector,\'online\')=?' : '';
   const storeFilter = scope.storeId != null ? ' AND u.store_id=?' : '';
   const extraParams = [...(validSector(sector) ? [sector] : []), ...(scope.storeId != null ? [scope.storeId] : [])];
-  const sellers = await db.all(
+  let sellers = await db.all(
     `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${sectorFilter}${storeFilter} ORDER BY u.name`,
     ...extraParams
   );
+  if (scope.storeId != null) {
+    // visitantes: venderam na loja no dia mas são de outra loja
+    const homeIds = new Set(sellers.map((s) => s.id));
+    const visitors = await db.all(
+      `SELECT DISTINCT u.*, s.name AS store_name FROM users u
+       JOIN sale_participants sp ON sp.seller_id=u.id
+       JOIN sales sl ON sl.id=sp.sale_id AND sl.sale_date=? AND sl.store_id=?
+       LEFT JOIN stores s ON s.id=u.store_id
+       WHERE u.role='seller' AND u.active=1${sectorFilter} ORDER BY u.name`,
+      date, scope.storeId, ...(validSector(sector) ? [sector] : [])
+    );
+    for (const v of visitors) if (!homeIds.has(v.id)) { homeIds.add(v.id); sellers.push(v); }
+    sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+  }
   const allRows = await Promise.all(sellers.map(async (s) => {
     const st = await summarize(date, date, s.id, scope.storeId);
     return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_name: s.store_name || 'Sede', calls: st.calls, sales: st.salesCredit };

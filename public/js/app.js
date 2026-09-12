@@ -120,7 +120,12 @@ function setNav() {
       <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
       <a href="#/admin/vendedoras" title="Equipe">${ICONS.team}</a>`;
   } else if (u.role === 'manager') {
-    nav.innerHTML = `<a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
+    nav.innerHTML = `
+      <a href="#/admin" title="Início">${ICONS.home}</a>
+      <a href="#/admin/vendas" title="Vendas">${ICONS.tag}</a>
+      ${fab}
+      <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
+      <a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" title="Início">${ICONS.home}</a>
@@ -162,7 +167,7 @@ async function route() {
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { go('#/login'); return; }
-  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : u.role === 'manager' ? '#/admin/ponto' : '#/admin'); return; }
+  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : '#/admin'); return; }
 
   try {
     if (h === '#/login' || h === '') return viewLogin(app);
@@ -177,8 +182,8 @@ async function route() {
     }
     if (h.startsWith('#/admin')) {
       if (u.role !== 'admin' && u.role !== 'manager') { go('#/vendedora'); return; }
-      // gerente: só ponto (qualquer outra rota volta para o ponto, sem erro na tela)
-      if (u.role === 'manager' && h !== '#/admin/ponto') { go('#/admin/ponto'); return; }
+      // gerente: tudo da loja, menos Equipe, Comissões e Arquivo
+      if (u.role === 'manager' && (h === '#/admin/vendedoras' || h === '#/admin/comissoes' || h === '#/admin/arquivo')) { go('#/admin'); return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
       if (h === '#/admin/arquivo') return viewArchive(app);
       if (h === '#/admin/ponto') return viewPonto(app);
@@ -228,7 +233,7 @@ function viewLogin(app) {
       });
       store.token = token; store.user = user;
       // força re-render mesmo se o hash já for o destino (troca de conta na mesma rota)
-      const dest = user.role === 'seller' ? '#/vendedora' : user.role === 'manager' ? '#/admin/ponto' : '#/admin';
+      const dest = user.role === 'seller' ? '#/vendedora' : '#/admin';
       if (location.hash === dest) route();
       else go(dest);
     } catch (err) { toast(err.message, 'err'); }
@@ -989,7 +994,7 @@ function modalCalls() {
 }
 
 function modalSale(sellers, stores) {
-  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
+  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
   const me = store.user;
   const lockedStore = me.role === 'manager' ? (stores || []).find((s) => Number(s.id) === Number(me.store_id)) : null;
   const saleStores = lockedStore ? [lockedStore] : (stores || []);
@@ -1011,7 +1016,7 @@ function modalSale(sellers, stores) {
       <details class="tray" id="pTray">
         <summary id="pTraySum">Selecionar participantes…</summary>
         <div class="check-list" id="plist">
-          ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}</div>`).join('')}
+          ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)} ${s.store_name && s.store_name !== 'Sede' ? storeTag(s.store_name) : ''}</div>`).join('')}
         </div>
       </details>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:10px"><input type="checkbox" id="sBonus" style="width:auto"> ⭐ Valor exclusivo (bônus de modelo especial)</label>
@@ -1079,7 +1084,7 @@ function modalSale(sellers, stores) {
 }
 
 function modalCancelSale(sale, onSaved) {
-  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode cancelar vendas.', 'err'); return; }
+  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode cancelar vendas.', 'err'); return; }
   const parts = (sale.participants || []).map((p) => esc(p.seller_name)).join(', ');
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
@@ -1114,7 +1119,7 @@ function modalCancelSale(sale, onSaved) {
 }
 
 function modalEditSale(sale, sellers, stores, onSaved) {
-  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode editar vendas.', 'err'); return; }
+  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode editar vendas.', 'err'); return; }
   const selIds = (sale.participants || []).map((p) => Number(p.seller_id));
   const wasBonus = !!sale.is_bonus;
   const wasBonusReais = sale.bonus_cents != null ? (Number(sale.bonus_cents) / 100).toFixed(2) : '';
@@ -1138,7 +1143,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
       <details class="tray" id="eTray">
         <summary id="eTraySum">Selecionar participantes…</summary>
         <div class="check-list" id="eplist">
-          ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}</div>`).join('')}
+          ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)} ${s.store_name && s.store_name !== 'Sede' ? storeTag(s.store_name) : ''}</div>`).join('')}
         </div>
       </details>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:10px"><input type="checkbox" id="eBonus" style="width:auto" ${wasBonus ? 'checked' : ''}> ⭐ Valor exclusivo (bônus de modelo especial)</label>
@@ -1216,7 +1221,7 @@ async function viewAdmin(app) {
   let stores = [];
   try { stores = (await api('/api/stores')).stores; } catch {}
   app.innerHTML = `
-    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral${isManager ? ` <span class="muted" style="font-size:13px">• ${esc(store.user.store_name || '')}</span>` : ''}</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a><a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a></div></div>
+    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral${isManager ? ` <span class="muted" style="font-size:13px">• ${esc(store.user.store_name || '')}</span>` : ''}</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a>${isManager ? '' : '<a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a>'}</div></div>
     <div id="kpiWrap"><div class="card"><p class="muted">Carregando…</p></div></div>
     ${isManager ? '' : `<div class="mini-pills" id="storePills">
       <button data-st="" class="${!adminStore ? 'on' : ''}">Todas</button>
@@ -1287,7 +1292,7 @@ async function viewAdmin(app) {
     `;
     const rankRow = (r, i) => `<tr>
       <td>${i + 1}</td>
-      <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span><b>${esc(r.name)}</b> ${sectorTag(r.sector)} ${!adminStore ? storeTag(r.store_name) : ''}</span></span></a></td>
+          <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span><b>${esc(r.name)}</b> ${sectorTag(r.sector)} ${storeTag(r.store_name)}</span></span></a></td>
       <td class="mono">${fmtInt(r.calls)}</td><td class="mono"><b>${fmtV(r.sales)}</b></td><td class="mono">${fmtPct(r.conversion)}</td>
     </tr>`;
     const rankHead = '<table><thead><tr><th>#</th><th>Vendedora</th><th>Chamadas</th><th>Vendas</th><th>Conv.</th></tr></thead><tbody>';
@@ -1340,8 +1345,13 @@ async function viewArchive(app) {
 
 // menu do botão central: admin registra vendas/chamadas, vendedora só bate ponto
 function modalEscolhaRegistro() {
-  // só admin cadastra vendas/chamadas; gerente é só-ponto; vendedora só bate ponto
-  if (store.user?.role === 'manager') { toast('Acesso restrito ao ponto.', 'err'); go('#/admin/ponto'); return; }
+  // gerente registra vendas (sem chamadas, sem comissões); vendedora só bate ponto
+  if (store.user?.role === 'manager') {
+    api('/api/sellers').then(({ sellers }) => {
+      modalSale(sellers || [], [{ id: store.user.store_id, name: store.user.store_name || 'Minha loja' }]);
+    }).catch((e) => toast(e.message, 'err'));
+    return;
+  }
   if (store.user?.role !== 'admin') {
     modalPonto(() => route());
     return;
@@ -1870,8 +1880,15 @@ async function viewSellerDetail(app, id) {
   const max = Math.max(0.1, ...d.daily.map((x) => x.sales));
   app.innerHTML = `
     <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
-    <h2 style="margin:6px 0">${esc(d.seller.name)} ${sectorTag(d.seller.sector)}</h2>
+    <h2 style="margin:6px 0">${esc(d.seller.name)} ${sectorTag(d.seller.sector)} ${storeTag(d.seller.store_name)}</h2>
     ${kpiCardsDetail(d.current, d.seller)}
+    ${(d.byStore || []).length > 1 ? `
+    <div class="card" style="margin-top:12px">
+      <b>Por loja (mês)</b>
+      <table><tbody>
+        ${(d.byStore || []).map((b) => `<tr><td>${storeTag(b.store_name)}</td><td class="mono"><b>${fmtV(b.sales)}</b> vendas</td><td class="mono">${b.records} registro(s)</td></tr>`).join('')}
+      </tbody></table>
+    </div>` : ''}
     <div class="card" style="margin-top:12px">
       <b>Comparação com mês anterior</b>
       <table><thead><tr><th></th><th>Atual</th><th>Anterior</th><th>Δ</th></tr></thead><tbody>
@@ -1905,13 +1922,30 @@ async function viewReport(app) {
       <button data-s="presencial" class="${reportSector === 'presencial' ? 'on' : ''}">Presencial</button>
     </div>
     <div style="height:10px"></div><button class="btn btn-primary" id="rGo">Gerar</button></div><div id="rBody" style="margin-top:12px"></div>`;
+  // filial é tudo presencial: sem pílulas Online/Presencial (só em Todas/Sede)
+  const syncSectorPills = () => {
+    let branch = false;
+    if (isManager) branch = (store.user.store_name || 'Sede') !== 'Sede';
+    else if (reportStore) {
+      const s = stores.find((x) => String(x.id) === String(reportStore));
+      branch = !!s && s.name !== 'Sede';
+    }
+    if (branch && reportSector) {
+      reportSector = '';
+      $$('#repSector button').forEach((x) => x.classList.toggle('on', x.dataset.s === ''));
+    }
+    const el = $('#repSector');
+    if (el) el.style.display = branch ? 'none' : '';
+  };
   const repStoreEl = $('#repStore');
   if (repStoreEl) repStoreEl.onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     reportStore = b.dataset.st;
     $$('#repStore button').forEach((x) => x.classList.toggle('on', x === b));
+    syncSectorPills();
     load();
   };
+  syncSectorPills();
   $('#repSector').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     reportSector = b.dataset.s;
@@ -1938,7 +1972,7 @@ async function viewReport(app) {
               <span><b>${esc(d.name)}</b> ${sectorTag(d.sector)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
               <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
             </div>
-            ${d.sales.length ? `<div style="margin-top:4px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : s.channel === 'Presencial' ? 'ch-pres' : 'ch-crm'}">${esc(s.channel)}</b></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
+            ${d.sales.length ? `<div style="margin-top:4px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : s.channel === 'Presencial' ? 'ch-pres' : 'ch-crm'}">${esc(s.channel)}</b>${s.store_name && s.store_name !== (d.store_name || 'Sede') ? ` ${storeTag(s.store_name)}` : ''}</div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
           </div>`, 5)}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
