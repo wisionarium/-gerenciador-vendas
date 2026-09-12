@@ -1612,9 +1612,10 @@ async function tabPontoLoja(body) {
             <span class="muted" style="font-size:12px">${s.lat != null && s.lng != null ? `📍 Local definido ✓ • raio ${s.radius_m}m` : '📍 Local ainda não definido'}</span>
           </div>
         </div>
+        ${s.lat != null && s.lng != null ? `<div style="margin-top:6px;font-size:13px"><span class="mono">${Number(s.lat).toFixed(6)}, ${Number(s.lng).toFixed(6)}</span> • <a href="https://maps.google.com/?q=${s.lat},${s.lng}" target="_blank" rel="noopener">Ver no mapa</a></div>` : ''}
         <div class="row" style="margin-top:10px">
           <button class="btn" data-printqr="${s.id}">🖨️ Imprimir QR</button>
-          <button class="btn btn-ghost" data-geostore="${s.id}">📍 Definir localização</button>
+          <button class="btn btn-ghost" data-geostore="${s.id}">📍 Ajustar localização</button>
         </div>
         <div id="geo-${s.id}" style="margin-top:8px"></div>
       </div>`).join('');
@@ -1632,15 +1633,96 @@ async function tabPontoLoja(body) {
       if (gs) {
         const s = byId[gs.dataset.geostore];
         const box = $(`#geo-${s.id}`);
-        box.innerHTML = `<p class="muted" style="font-size:13px">Obtendo sua posição (fique na entrada da loja)…</p>`;
+        box.innerHTML = `
+          <div class="card" style="background:var(--brand-soft);margin:0">
+            <b style="font-size:13px">1) GPS aqui na loja</b><br>
+            <span class="muted" style="font-size:12px">Fique na entrada, com céu visível.</span>
+            <div style="height:6px"></div>
+            <button class="btn" data-geogps="${s.id}">Usar minha posição</button>
+            <div id="geogps-${s.id}" style="margin-top:6px;font-size:13px"></div>
+            <div style="height:10px"></div>
+            <b style="font-size:13px">2) Buscar pelo CEP</b>
+            <div class="row" style="flex-wrap:nowrap;margin-top:4px">
+              <input id="geocz-${s.id}" inputmode="numeric" placeholder="Ex: 25900-000" style="flex:1">
+              <button class="btn" data-geosearch="${s.id}">Buscar</button>
+            </div>
+            <div id="geores-${s.id}" style="margin-top:6px;font-size:13px"></div>
+            <div style="height:10px"></div>
+            <b style="font-size:13px">3) Manual (do Google Maps)</b>
+            <div class="row" style="margin-top:4px">
+              <div style="flex:1"><input id="geolat-${s.id}" inputmode="decimal" placeholder="Latitude"></div>
+              <div style="flex:1"><input id="geolng-${s.id}" inputmode="decimal" placeholder="Longitude"></div>
+              <div style="flex:0 1 90px"><input id="georad-${s.id}" type="number" min="30" max="2000" value="${s.radius_m ?? 150}" title="Raio (m)"></div>
+            </div>
+            <div style="height:6px"></div>
+            <button class="btn btn-accent" data-geosave="${s.id}">Salvar localização</button>
+          </div>`;
+        return;
+      }
+      const gps = e.target.closest('[data-geogps]');
+      if (gps) {
+        const s = byId[gps.dataset.geogps];
+        const out = $(`#geogps-${s.id}`);
+        out.innerHTML = `<span class="muted">Obtendo posição…</span>`;
         try {
           const pos = await getGeo();
+          const acc = Math.round(pos.coords.accuracy || 0);
           const lat = Number(pos.coords.latitude.toFixed(6));
           const lng = Number(pos.coords.longitude.toFixed(6));
-          await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat, lng, radius_m: s.radius_m ?? 150 }) });
+          out.innerHTML = `📍 <span class="mono">${lat}, ${lng}</span> <span class="muted">(precisão ±${acc}m)</span><br>
+            ${acc > 150 ? `<b style="color:var(--red)">Sinal fraco — saia para a calçada e tente de novo antes de salvar.</b><br>` : `<span style="color:var(--brand)">Sinal bom ✓</span><br>`}
+            <a href="https://maps.google.com/?q=${lat},${lng}" target="_blank" rel="noopener">Ver no mapa</a>
+            <div style="height:6px"></div>
+            <button class="btn btn-accent" data-geousesave="${s.id}" data-lat="${lat}" data-lng="${lng}">Salvar este ponto</button>`;
+        } catch (err) { out.innerHTML = `<span style="color:var(--red)">${esc(err.message)}</span>`; }
+        return;
+      }
+      const usesave = e.target.closest('[data-geousesave]');
+      if (usesave) {
+        const s = byId[usesave.dataset.geousesave];
+        try {
+          await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat: Number(usesave.dataset.lat), lng: Number(usesave.dataset.lng), radius_m: s.radius_m ?? 150 }) });
           toast(`Localização da ${s.name} salva!`);
           tabPontoLoja(body);
-        } catch (err) { box.innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+        } catch (err) { toast(err.message, 'err'); }
+        return;
+      }
+      const sch = e.target.closest('[data-geosearch]');
+      if (sch) {
+        const s = byId[sch.dataset.geosearch];
+        const out = $(`#geores-${s.id}`);
+        const cep = String($(`#geocz-${s.id}`).value || '').replace(/\D/g, '');
+        if (cep.length !== 8) { out.innerHTML = `<span style="color:var(--red)">Digite os 8 números do CEP.</span>`; return; }
+        out.innerHTML = `<span class="muted">Buscando CEP…</span>`;
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&countrycodes=br&postalcode=${cep}&limit=1`, { headers: { Accept: 'application/json' } });
+          const j = await r.json();
+          if (!j.length) { out.innerHTML = `<span style="color:var(--red)">CEP não encontrado. Confira o número ou use o modo manual.</span>`; return; }
+          const lat = Number(Number(j[0].lat).toFixed(6));
+          const lng = Number(Number(j[0].lon).toFixed(6));
+          out.innerHTML = `📍 ${esc(j[0].display_name.split(',').slice(0, 3).join(','))}<br>
+            <span class="mono">${lat}, ${lng}</span> • <a href="https://maps.google.com/?q=${lat},${lng}" target="_blank" rel="noopener">Ver no mapa</a><br>
+            <span class="muted" style="font-size:12px">Confira no mapa se é a rua da loja antes de salvar.</span>
+            <div style="height:6px"></div>
+            <button class="btn btn-accent" data-geousesave="${s.id}" data-lat="${lat}" data-lng="${lng}">Usar este ponto</button>`;
+        } catch (err) { out.innerHTML = `<span style="color:var(--red)">Sem internet para buscar o CEP. Tente o GPS ou o modo manual.</span>`; }
+        return;
+      }
+      const sv = e.target.closest('[data-geosave]');
+      if (sv) {
+        const s = byId[sv.dataset.geosave];
+        const lat = Number(String($(`#geolat-${s.id}`).value || '').replace(',', '.'));
+        const lng = Number(String($(`#geolng-${s.id}`).value || '').replace(',', '.'));
+        const rad = Number($(`#georad-${s.id}`).value || s.radius_m || 150);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+          toast('Coordenadas inválidas. Confira latitude (-90 a 90) e longitude (-180 a 180).', 'err');
+          return;
+        }
+        try {
+          await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat, lng, radius_m: rad }) });
+          toast(`Localização da ${s.name} salva!`);
+          tabPontoLoja(body);
+        } catch (err) { toast(err.message, 'err'); }
       }
     };
   } catch (e) { $('#qrBox').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
