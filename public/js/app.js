@@ -120,12 +120,7 @@ function setNav() {
       <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
       <a href="#/admin/vendedoras" title="Equipe">${ICONS.team}</a>`;
   } else if (u.role === 'manager') {
-    nav.innerHTML = `
-      <a href="#/admin" title="Início">${ICONS.home}</a>
-      <a href="#/admin/vendas" title="Vendas">${ICONS.tag}</a>
-      ${fab}
-      <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
-      <a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
+    nav.innerHTML = `<a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" title="Início">${ICONS.home}</a>
@@ -167,7 +162,7 @@ async function route() {
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { go('#/login'); return; }
-  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : '#/admin'); return; }
+  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : u.role === 'manager' ? '#/admin/ponto' : '#/admin'); return; }
 
   try {
     if (h === '#/login' || h === '') return viewLogin(app);
@@ -182,8 +177,8 @@ async function route() {
     }
     if (h.startsWith('#/admin')) {
       if (u.role !== 'admin' && u.role !== 'manager') { go('#/vendedora'); return; }
-      if (h === '#/admin/vendedoras' && u.role !== 'admin') { go('#/admin'); return; }
-      if (h === '#/admin/arquivo' && u.role !== 'admin') { go('#/admin'); return; }
+      // gerente: só ponto (qualquer outra rota volta para o ponto, sem erro na tela)
+      if (u.role === 'manager' && h !== '#/admin/ponto') { go('#/admin/ponto'); return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
       if (h === '#/admin/arquivo') return viewArchive(app);
       if (h === '#/admin/ponto') return viewPonto(app);
@@ -232,7 +227,10 @@ function viewLogin(app) {
         body: JSON.stringify({ email: $('#email').value.trim(), password: $('#pass').value }),
       });
       store.token = token; store.user = user;
-      go(user.role === 'admin' ? '#/admin' : '#/vendedora');
+      // força re-render mesmo se o hash já for o destino (troca de conta na mesma rota)
+      const dest = user.role === 'seller' ? '#/vendedora' : user.role === 'manager' ? '#/admin/ponto' : '#/admin';
+      if (location.hash === dest) route();
+      else go(dest);
     } catch (err) { toast(err.message, 'err'); }
   };
 }
@@ -957,11 +955,11 @@ function modalConfirmLogout() {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  $('#logoutYes').onclick = () => { store.token = null; store.user = null; closeModal(); go('#/login'); };
+  $('#logoutYes').onclick = () => { store.token = null; store.user = null; closeModal(); if (location.hash === '#/login') route(); else go('#/login'); };
 }
 
 function modalCalls() {
-  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode registrar chamadas.', 'err'); return; }
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar chamadas.', 'err'); return; }
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Registrar chamadas</h3>
@@ -991,7 +989,7 @@ function modalCalls() {
 }
 
 function modalSale(sellers, stores) {
-  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
   const me = store.user;
   const lockedStore = me.role === 'manager' ? (stores || []).find((s) => Number(s.id) === Number(me.store_id)) : null;
   const saleStores = lockedStore ? [lockedStore] : (stores || []);
@@ -1081,6 +1079,7 @@ function modalSale(sellers, stores) {
 }
 
 function modalCancelSale(sale, onSaved) {
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode cancelar vendas.', 'err'); return; }
   const parts = (sale.participants || []).map((p) => esc(p.seller_name)).join(', ');
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
@@ -1115,6 +1114,7 @@ function modalCancelSale(sale, onSaved) {
 }
 
 function modalEditSale(sale, sellers, stores, onSaved) {
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode editar vendas.', 'err'); return; }
   const selIds = (sale.participants || []).map((p) => Number(p.seller_id));
   const wasBonus = !!sale.is_bonus;
   const wasBonusReais = sale.bonus_cents != null ? (Number(sale.bonus_cents) / 100).toFixed(2) : '';
@@ -1340,9 +1340,9 @@ async function viewArchive(app) {
 
 // menu do botão central: admin registra vendas/chamadas, vendedora só bate ponto
 function modalEscolhaRegistro() {
-  const canSell = store.user?.role === 'admin' || store.user?.role === 'manager';
-  // trava extra: vendedora nem vê as opções de venda/chamada
-  if (!canSell) {
+  // só admin cadastra vendas/chamadas; gerente é só-ponto; vendedora só bate ponto
+  if (store.user?.role === 'manager') { toast('Acesso restrito ao ponto.', 'err'); go('#/admin/ponto'); return; }
+  if (store.user?.role !== 'admin') {
     modalPonto(() => route());
     return;
   }
@@ -1367,6 +1367,7 @@ function modalEscolhaRegistro() {
 }
 
 function modalCallsAdmin() {
+  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar chamadas.', 'err'); return; }
   api('/api/sellers').then(({ sellers }) => {
     $('#modalRoot').innerHTML = `
     <div class="modal-bg" id="mbg"><div class="modal">
@@ -1672,23 +1673,25 @@ function printExtrasPDF(month, r) {
 }
 
 async function tabPontoFeriados(body) {
+  const readOnly = store.user?.role === 'manager';
   body.innerHTML = `
     <div class="card">
-      <p class="muted" style="font-size:13px;margin-top:0">🤖 Dias com saída geral ~13h são marcados <b>automaticamente</b> como feriado. Abaixo dá para adicionar manual ou remover se marcar errado.</p>
-      <form id="fHol" class="row" style="flex-wrap:nowrap;align-items:end">
+      <p class="muted" style="font-size:13px;margin-top:0">🤖 Dias com saída geral ~13h são marcados <b>automaticamente</b> como feriado.${readOnly ? '' : ' Abaixo dá para adicionar manual ou remover se marcar errado.'}</p>
+      ${readOnly ? '' : `<form id="fHol" class="row" style="flex-wrap:nowrap;align-items:end">
         <div style="flex:1"><label>Data</label><input type="date" id="hDate" required></div>
         <div style="flex:2"><label>Rótulo</label><input id="hLabel" placeholder="Ex: Natal" value="Feriado"></div>
         <button class="btn btn-primary" type="submit">Marcar</button>
-      </form>
+      </form>`}
       <div id="hList" style="margin-top:12px"></div>
     </div>`;
   const loadHols = async () => {
     try {
       const { holidays } = await api('/api/ponto/feriados');
       $('#hList').innerHTML = holidays.length
-        ? `<div>${compactListHTML(holidays, (h) => `<span class="chip" style="margin:0 6px 6px 0">${fmtDateBR(h.date)} • ${esc(h.label)} <button data-hdel="${h.date}" style="border:none;background:none;cursor:pointer;font-weight:800" title="Remover">×</button></span>`, 12)}</div>`
+        ? `<div>${compactListHTML(holidays, (h) => `<span class="chip" style="margin:0 6px 6px 0">${fmtDateBR(h.date)} • ${esc(h.label)}${readOnly ? '' : ` <button data-hdel="${h.date}" style="border:none;background:none;cursor:pointer;font-weight:800" title="Remover">×</button>`}</span>`, 12)}</div>`
         : '<div class="empty">Nenhum feriado marcado.</div>';
       bindCompactList($('#hList'));
+      if (readOnly) return;
       $('#hList').onclick = async (e) => {
         const b = e.target.closest('[data-hdel]');
         if (!b) return;
@@ -1698,7 +1701,8 @@ async function tabPontoFeriados(body) {
       };
     } catch (e) { $('#hList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
-  $('#fHol').onsubmit = async (e) => {
+  const fHol = $('#fHol');
+  if (fHol) fHol.onsubmit = async (e) => {
     e.preventDefault();
     try {
       await api('/api/ponto/feriados', { method: 'POST', body: JSON.stringify({ date: $('#hDate').value, label: $('#hLabel').value || 'Feriado' }) });

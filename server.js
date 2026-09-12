@@ -144,7 +144,8 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
   const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
   const sectorParam = validSector(sector) ? [sector] : [];
   const sel = 'SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id';
-  if (req.user.role === 'admin' || req.user.role === 'manager') {
+  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
+  if (req.user.role === 'admin') {
     const rows = await db.all(`${sel} WHERE u.role='seller'${sectorFilter} ORDER BY u.name`, ...sectorParam);
     return res.json({ sellers: rows.map(toPublicUser) });
   }
@@ -154,10 +155,10 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
 
 // ---------- LOJAS ----------
 app.get('/api/stores', requireAuth, ah(async (req, res) => {
+  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   let rows = [];
   try { rows = await db.all('SELECT * FROM stores WHERE active=1 ORDER BY id'); }
   catch { return res.json({ stores: [] }); }
-  if (req.user.role === 'manager') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
   if (req.user.role === 'seller') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
   res.json({ stores: rows });
 }));
@@ -427,17 +428,15 @@ app.delete('/api/phrases/:id', requireAuth, requireAdmin, ah(async (req, res) =>
 // ---------- CALLS ----------
 app.get('/api/calls', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id } = req.query;
+  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   let where = '1=1';
   const params = [];
-  if (req.user.role !== 'admin' && req.user.role !== 'manager') {
+  if (req.user.role !== 'admin') {
     where += ' AND c.seller_id = ?';
     params.push(req.user.id);
   } else if (seller_id) {
     where += ' AND c.seller_id = ?';
     params.push(seller_id);
-  } else if (req.user.role === 'manager') {
-    where += ' AND c.seller_id IN (SELECT id FROM users WHERE store_id = ?)';
-    params.push(req.user.store_id);
   }
   if (from && isValidDate(from)) { where += ' AND c.date >= ?'; params.push(from); }
   if (to && isValidDate(to)) { where += ' AND c.date <= ?'; params.push(to); }
@@ -448,7 +447,7 @@ app.get('/api/calls', requireAuth, ah(async (req, res) => {
   res.json({ calls: rows });
 }));
 
-app.post('/api/calls', requireAuth, requireManager, ah(async (req, res) => {
+app.post('/api/calls', requireAuth, requireAdmin, ah(async (req, res) => {
   let { date, quantity, seller_id } = req.body || {};
   date = date || todayISO();
   quantity = Number(quantity);
@@ -467,7 +466,7 @@ app.post('/api/calls', requireAuth, requireManager, ah(async (req, res) => {
   res.status(201).json({ call: row });
 }));
 
-app.delete('/api/calls/:id', requireAuth, requireManager, ah(async (req, res) => {
+app.delete('/api/calls/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const row = await db.get(
     'SELECT c.*, u.store_id AS seller_store FROM call_records c JOIN users u ON u.id=c.seller_id WHERE c.id=?', req.params.id
   );
@@ -494,6 +493,7 @@ async function saleWithParticipants(sale) {
 
 app.get('/api/sales', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, channel, product, q, store_id } = req.query;
+  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const conds = [];
@@ -509,7 +509,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   if (seller_id) {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(Number(seller_id));
-  } else if (req.user.role !== 'admin' && req.user.role !== 'manager') {
+  } else if (req.user.role !== 'admin') {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(req.user.id);
   }
@@ -521,7 +521,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   res.json({ sales: await Promise.all(rows.map(saleWithParticipants)) });
 }));
 
-app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
+app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   const { customer_name, product, color, channel, sale_date, participant_ids, store_id } = req.body || {};
   const date = sale_date || todayISO();
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
@@ -594,7 +594,7 @@ app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
   res.status(201).json({ sale: await saleWithParticipants(sale) });
 }));
 
-app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
+app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   const scope = scopedStoreId(req, sale.store_id);
@@ -649,7 +649,7 @@ app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ sale: await saleWithParticipants(updated) });
 }));
 
-app.delete('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
+app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   const scope = scopedStoreId(req, sale.store_id);
@@ -667,7 +667,7 @@ app.delete('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) =>
 // cancelar venda (admin): registra o motivo em canceled_sales e remove a
 // venda das listas/totais (vendedoras, ranking, relatório, comissões).
 // reason: 'desistencia' | 'outros'. note: observação opcional (máx. 140).
-app.post('/api/sales/:id/cancel', requireAuth, requireManager, ah(async (req, res) => {
+app.post('/api/sales/:id/cancel', requireAuth, requireAdmin, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
   const scope = scopedStoreId(req, sale.store_id);
@@ -865,7 +865,7 @@ app.get('/api/commissions/me', requireAuth, ah(async (req, res) => {
 }));
 
 // resumo por vendedora (admin)
-app.get('/api/commissions/summary', requireAuth, requireManager, ah(async (req, res) => {
+app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, res) => {
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
   const { sector, store_id } = req.query;
   const scope = scopedStoreId(req, store_id);
@@ -891,7 +891,7 @@ app.get('/api/commissions/summary', requireAuth, requireManager, ah(async (req, 
 }));
 
 // histórico de pagamentos (admin)
-app.get('/api/commissions/payouts', requireAuth, requireManager, ah(async (req, res) => {
+app.get('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
   const { month, seller_id } = req.query;
   const conds = [];
   const params = [];
@@ -908,7 +908,7 @@ app.get('/api/commissions/payouts', requireAuth, requireManager, ah(async (req, 
 }));
 
 // registrar pagamento (admin)
-app.post('/api/commissions/payouts', requireAuth, requireManager, ah(async (req, res) => {
+app.post('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
   const { seller_id, amount_cents, month } = req.body || {};
   const seller = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", Number(seller_id));
   if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
@@ -1133,8 +1133,8 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ date, is_holiday: !!hol, holiday: hol || null, auto_holiday, present, absent, rows });
 }));
 
-// feriados (admin)
-app.get('/api/ponto/feriados', requireAuth, requireAdmin, ah(async (req, res) => {
+// feriados (leitura p/ gerente; escrita só admin)
+app.get('/api/ponto/feriados', requireAuth, requireManager, ah(async (req, res) => {
   const { month } = req.query;
   if (month && /^\d{4}-\d{2}$/.test(month)) {
     return res.json({ holidays: await db.all('SELECT * FROM holidays WHERE date LIKE ? ORDER BY date', `${month}%`) });
@@ -1303,20 +1303,14 @@ async function summarize(from, to, sellerId, storeId) {
 
 app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, sector, store_id } = req.query;
+  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const storeId = scope.storeId;
   let sid = null;
   if (req.user.role === 'seller') sid = req.user.id;
-  else if (seller_id) {
-    sid = Number(seller_id);
-    if (req.user.role === 'manager') {
-      const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", sid);
-      if (!t || Number(t.store_id) !== Number(req.user.store_id))
-        return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
-    }
-  }
-  if ((req.user.role === 'admin' || req.user.role === 'manager') && !sid && validSector(sector)) {
+  else if (seller_id) sid = Number(seller_id);
+  if (req.user.role === 'admin' && !sid && validSector(sector)) {
     // agregado do setor (+ loja): vendas contam inteiras e uma única vez
     // (mesmo divididas entre 2 vendedoras do setor ou com outro setor).
     const sellers = await db.all(
@@ -1367,7 +1361,7 @@ app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   res.json(await summarize(from || null, to || null, sid, storeId));
 }));
 
-app.get('/api/stats/ranking', requireAuth, requireManager, ah(async (req, res) => {
+app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => {
   const { from, to, sector, store_id } = req.query;
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
@@ -1387,13 +1381,9 @@ app.get('/api/stats/ranking', requireAuth, requireManager, ah(async (req, res) =
 
 app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   const targetId = Number(req.params.id);
-  if (req.user.role !== 'admin' && req.user.role !== 'manager' && targetId !== req.user.id)
+  if (req.user.role === 'manager') return res.status(403).json({ error: 'Acesso restrito ao ponto.' });
+  if (req.user.role !== 'admin' && targetId !== req.user.id)
     return res.status(403).json({ error: 'Sem permissão.' });
-  if (req.user.role === 'manager') {
-    const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", targetId);
-    if (!t || Number(t.store_id) !== Number(req.user.store_id))
-      return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
-  }
   const { from, to, cfrom, cto } = req.query;
   const current = await summarize(from || null, to || null, targetId);
   const compare = (cfrom || cto) ? await summarize(cfrom || null, cto || null, targetId) : null;
@@ -1433,7 +1423,7 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   });
 }));
 
-app.get('/api/report/daily', requireAuth, requireManager, ah(async (req, res) => {
+app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
   const date = req.query.date || todayISO();
   const { sector, store_id } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
