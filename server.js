@@ -322,7 +322,7 @@ function mergedTheme(darkId, lightId) {
 }
 
 app.get('/api/settings/theme', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Sem permissão.' });
   const row = await db.get('SELECT * FROM seller_settings WHERE seller_id=?', req.user.id);
   const dark = (row && (row.theme_dark || (row.preset ? 'verde' : null))) || 'verde';
   const light = (row && (row.theme_light || (row.preset ? 'classico' : null))) || 'classico';
@@ -330,7 +330,7 @@ app.get('/api/settings/theme', requireAuth, ah(async (req, res) => {
 }));
 
 app.put('/api/settings/theme', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Sem permissão.' });
   const { dark, light } = req.body || {};
   if (!THEME_DARKS[dark]) return res.status(400).json({ error: 'Cor escura inválida.' });
   if (!THEME_LIGHTS[light]) return res.status(400).json({ error: 'Cor clara inválida.' });

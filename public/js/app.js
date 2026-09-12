@@ -129,7 +129,8 @@ function setNav() {
   } else if (u.role === 'staff') {
     nav.innerHTML = `
       <a href="#/funcionario" title="Início">${ICONS.home}</a>
-      ${fab}`;
+      ${fab}
+      <a href="#/funcionario/historico" title="Histórico">${ICONS.doc}</a>`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" title="Início">${ICONS.home}</a>
@@ -166,8 +167,8 @@ window.addEventListener('hashchange', route);
 async function route() {
   setNav();
   const h = location.hash || '#/login';
-  document.body.classList.toggle('seller-home', h === '#/vendedora');
-  document.body.classList.toggle('history-top', h === '#/vendedora/historico' || h === '#/vendedora/vendas' || h === '#/vendedora/config');
+  document.body.classList.toggle('seller-home', h === '#/vendedora' || h === '#/funcionario');
+  document.body.classList.toggle('history-top', h === '#/vendedora/historico' || h === '#/vendedora/vendas' || h === '#/vendedora/config' || h === '#/funcionario/historico' || h === '#/funcionario/config');
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { go('#/login'); return; }
@@ -178,6 +179,14 @@ async function route() {
     if (h === '#/funcionario') {
       if (u.role !== 'staff' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora' : '#/login'); return; }
       return viewStaff(app);
+    }
+    if (h === '#/funcionario/config') {
+      if (u.role !== 'staff') { go(u.role === 'seller' ? '#/vendedora/config' : '#/login'); return; }
+      return viewConfig(app, '#/funcionario');
+    }
+    if (h === '#/funcionario/historico') {
+      if (u.role !== 'staff' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora/historico' : '#/login'); return; }
+      return viewStaffHistory(app);
     }
     if (h.startsWith('#/vendedora')) {
       if (u.role !== 'seller' && u.role !== 'admin') throw new Error('Sem permissão.');
@@ -625,14 +634,14 @@ function applyThemeVars(t) {
 }
 try {
   const su = store.user;
-  if (su && su.role === 'seller') {
+  if (su && (su.role === 'seller' || su.role === 'staff')) {
     const cached = JSON.parse(localStorage.getItem('ec_theme_' + su.id) || 'null');
     if (cached) applyThemeVars(cached);
   }
 } catch { /* sem tema em cache */ }
 async function refreshTheme() {
   try {
-    if (store.user?.role !== 'seller') return;
+    if (store.user?.role !== 'seller' && store.user?.role !== 'staff') return;
     const { theme } = await api('/api/settings/theme');
     if (theme) {
       applyThemeVars(theme);
@@ -824,10 +833,10 @@ function modalSharePhrase(text, author) {
 }
 
 // ---------- CONFIGURAÇÕES da vendedora ----------
-async function viewConfig(app) {
+async function viewConfig(app, back = '#/vendedora') {
   const me = store.user;
   app.innerHTML = `
-    <a href="#/vendedora" class="muted" style="font-size:13px">← Voltar</a>
+    <a href="${back}" class="muted" style="font-size:13px">← Voltar</a>
     <h2 style="margin:6px 0">Configurações</h2>
     <div class="card">
       <div class="row" style="align-items:center;flex-wrap:nowrap">
@@ -898,7 +907,15 @@ async function viewConfig(app) {
   }
 }
 
-// ---------- HOME do funcionário (só ponto) ----------
+// ---------- HOME do funcionário (só ponto, padrão vendedora) ----------
+function staffPunchRow(x, showDate = true) {
+  return `
+  <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBR(x.date)}` : fmtDateBR(x.date)}</span><br>
+    <span style="font-size:13px">Entrada: ${x.in_hhmm || '—'} • Saída: ${x.out_hhmm || '—'}</span></span>
+    <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}</span>
+  </div></div>`;
+}
 async function viewStaff(app) {
   const me = store.user;
   const t = todayISO();
@@ -912,46 +929,62 @@ async function viewStaff(app) {
   const totalExtra = (mes.punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
   const fmtDurLocal = (min) => `${Math.floor(min / 60)}h ${min % 60}min`;
   const p = hoje.punch;
+  const recent = (mes.punches || []).slice(0, 5);
   app.innerHTML = `
     <div class="seller-head">
       <div class="seller-top">
         <div class="ava-wrap">
-          <button class="ava" id="staffAva" title="Trocar foto" style="cursor:pointer">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</button>
-          <input type="file" id="staffAvaInput" accept="image/*" style="display:none">
+          <a class="ava" href="#/funcionario/config" title="Configurações">${me.avatar_url ? `<img src="${me.avatar_url}" alt="Foto de perfil">` : esc((me.name || '?')[0].toUpperCase())}</a>
+          <span class="ava-cam" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.2-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.03-.44-.4-.81-.85-.81h-3.1c-.45 0-.82.37-.85.81l-.38 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47.02-.59.22l-1.92 3.32c-.12.2-.06.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.2.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.38 2.54c.03.44.4.81.85.81h3.1c.45 0 .82-.37.85-.81l.38-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47-.02.59-.22l1.92-3.32c-.12-.2-.06-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></span>
         </div>
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
-        <span>${storeTag(me.store_name)}</span>
       </div>
-      <div class="card" style="margin-top:12px;text-align:center">
-        <div class="muted" style="font-size:12px">HOJE • ${p ? fmtDateBR(t) : 'sem registro ainda'}</div>
-        <div class="mono" style="font-size:30px;font-weight:800">${p ? `${p.in_hhmm || '—'} → ${p.out_hhmm || '—'}` : '— → —'}</div>
-        ${p?.worked_label ? `<div class="muted" style="font-size:13px">Trabalhado: ${esc(p.worked_label)}${p.extra_min > 0 ? ` • Extra: <b>+${esc(p.extra_label)}</b>` : ''}</div>` : '<div class="muted" style="font-size:13px">Toque no + para bater o ponto</div>'}
-      </div>
-      <div class="card" style="background:var(--brand-soft);text-align:center;margin-top:12px">
-        <div class="muted" style="font-size:12px">Extras acumulados no mês</div>
-        <div class="mono" style="font-size:30px;font-weight:800">${fmtDurLocal(totalExtra)}</div>
+      <div style="text-align:center;color:#fff;font-size:17px;font-weight:700;margin-top:10px">${p ? `Hoje: ${p.in_hhmm || '--:--'} - Saída: ${p.out_hhmm || '--:--'}` : 'Hoje: sem registro ainda'}</div>
+      <div class="card" style="background:#fff;text-align:center;margin:12px 4px 0;border:none">
+        <div class="muted" style="font-size:12px">Hora extra total:</div>
+        <div class="mono" style="font-size:26px;font-weight:800">${fmtDurLocal(totalExtra)}</div>
       </div>
     </div>
     <div class="phrase"><div class="phrase-title">Frase do dia:</div>
       ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : `<div class="muted" style="font-size:12px">Ainda não publicada hoje.</div>`}
     </div>
-    <h3 class="section-title">Meu mês</h3>
-    <div id="staffList">${(mes.punches || []).length ? compactListHTML(mes.punches, (x) => `
-      <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
-        <span><b>${fmtDateBR(x.date)}</b>${x.is_holiday ? ' 🎉' : ''}<br><span class="mono" style="font-size:14px">${x.in_hhmm || '—'} → ${x.out_hhmm || '—'}</span></span>
-        <span class="mono" style="font-size:13px">${x.extra_min > 0 ? `＋${esc(x.extra_label)}` : esc(x.worked_label || '—')}</span>
-      </div></div>`, 8) : '<div class="card empty">Nenhum ponto neste mês.</div>'}</div>
+    <div class="mini-pills"><button class="on" style="pointer-events:none">Recente</button></div>
+    <div id="staffRecent">${recent.length ? recent.map((x) => staffPunchRow(x, false)).join('') : '<div class="card empty">Nenhum ponto recente.</div>'}</div>
     <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
-  bindCompactList($('#staffList'));
-  $('#staffAva').onclick = () => $('#staffAvaInput').click();
-  $('#staffAvaInput').onchange = () => {
-    const f = $('#staffAvaInput').files[0]; if (!f) return;
-    processAvatar(f)
-      .then((url) => api('/api/me/avatar', { method: 'PUT', body: JSON.stringify({ avatar: url }) }))
-      .then(({ user }) => { store.user = user; toast('Foto atualizada!'); route(); })
-      .catch((e) => toast(e.message, 'err'));
+}
+
+// ---------- HISTÓRICO do funcionário (só seletor de mês) ----------
+async function viewStaffHistory(app) {
+  const t = todayISO();
+  app.innerHTML = `
+    <h2 style="margin:4px 0">Meu histórico</h2>
+    <div class="card">
+      <div class="row" style="flex-wrap:nowrap;align-items:end">
+        <div style="flex:1"><label>Mês</label><input type="month" id="shMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}"></div>
+        <button class="btn btn-primary" id="shGo">Ver mês</button>
+      </div>
+      <div id="shTotal" style="margin-top:12px"></div>
+      <div id="shList" style="margin-top:8px"><p class="muted">Carregando…</p></div>
+    </div>
+    <div class="foot">Desenvolvido pela Wisionarium</div>`;
+  const load = async () => {
+    const month = $('#shMonth').value || t.slice(0, 7);
+    const box = $('#shList');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const { punches } = await api(`/api/ponto/eu?month=${month}`);
+      const total = (punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
+      $('#shTotal').innerHTML = `<p class="muted" style="font-size:13px;margin:0">Extra no mês: <b class="mono">${Math.floor(total / 60)}h ${total % 60}min</b> • ${punches.length} dia(s)</p>`;
+      box.innerHTML = punches.length
+        ? compactListHTML(punches, (x) => staffPunchRow(x), 10)
+        : '<div class="card empty">Nenhum ponto neste mês.</div>';
+      bindCompactList(box);
+    } catch (e) { box.innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
   };
+  $('#shGo').onclick = load;
+  $('#shMonth').onchange = load;
+  await load();
 }
 
 // ---------- HISTÓRICO da vendedora (ícone papel) ----------
@@ -2298,6 +2331,6 @@ if ('serviceWorker' in navigator) {
     } catch { store.token = null; store.user = null; }
   }
   refreshTheme();
-  if (!location.hash) go(store.user ? (store.user.role === 'admin' ? '#/admin' : '#/vendedora') : '#/login');
+  if (!location.hash) go(!store.user ? '#/login' : store.user.role === 'seller' ? '#/vendedora' : store.user.role === 'staff' ? '#/funcionario' : '#/admin');
   route();
 })();
