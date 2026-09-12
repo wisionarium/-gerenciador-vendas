@@ -1576,6 +1576,7 @@ async function tabPontoDia(body, t) {
           </div></div>`;
       };
       box.innerHTML = `
+        ${!d.rows.length ? `<div class="card empty">Nenhuma vendedora vinculada a esta loja ainda.<br><span class="muted" style="font-size:12px">O admin geral cadastra em Equipe → Nova pessoa → Vendedora → Loja.</span></div>` : ''}
         <p class="muted" style="font-size:13px">✅ Presentes: <b>${d.present}</b> • ⬜ Ausentes: <b>${d.absent}</b></p>
         ${d.is_holiday ? `<p class="muted" style="font-size:13px">🎉 Feriado (${esc(d.holiday.label)}) — padrão 5h${d.auto_holiday ? ' • <span style="color:var(--brand)">detectado automaticamente 🤖</span>' : ''}</p>` : ''}
         ${compactListHTML(present, rowHTML, 8)}
