@@ -34,14 +34,17 @@ const fmtDateBR = (iso) => { if (!iso) return '—'; const [y, m, d] = iso.split
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
 const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
-// prévia da comissão (espelha a regra do backend): base por setor ou bônus exclusivo; metade se dividida
-function previewCommission(sellers, pids, bonusCents) {
+// prévia da comissão (espelha a regra do backend): base por loja+setor ou bônus; metade se dividida
+function previewCommission(sellers, pids, bonusCents, storeName) {
   if (!pids.length) return null;
   const sectors = pids.map((id) => {
     const s = (sellers || []).find((x) => Number(x.id) === Number(id));
     return (s && s.sector) || 'online';
   });
-  const base = bonusCents != null ? bonusCents : (sectors.every((s) => s === 'presencial') ? 3500 : 2500);
+  let base;
+  if (bonusCents != null) base = bonusCents;
+  else if (storeName && storeName !== 'Sede') base = 2500;
+  else base = sectors.every((s) => s === 'presencial') ? 3500 : 2500;
   const each = pids.length === 1 ? base : Math.round(base / 2);
   return { base, each, count: pids.length, isBonus: bonusCents != null };
 }
@@ -80,6 +83,8 @@ let adminChannel = '';
 let adminSeller = '';
 
 let adminSector = '';
+
+let adminStore = '';
 function toast(msg, type = 'ok') {
   const box = $('#alertBox');
   box.innerHTML = `<div class="alert ${type === 'ok' ? 'alert-ok' : 'alert-err'}">${esc(msg)}</div>`;
@@ -101,7 +106,8 @@ function setNav() {
   const badge = $('#userBadge');
   const logout = $('#logoutBtn');
   if (!u) { nav.style.display = 'none'; badge.textContent = ''; logout.style.display = 'none'; return; }
-  badge.textContent = `${u.name} • ${u.role === 'admin' ? 'Admin' : 'Vendedora'}`;
+  const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'manager' ? `Gerente • ${u.store_name || ''}` : 'Vendedora';
+  badge.textContent = `${u.name} • ${roleLabel}`;
   logout.style.display = '';
   nav.style.display = '';
   const fab = `<button class="fab" id="fabSale" aria-label="Nova venda">+</button>`;
@@ -112,6 +118,12 @@ function setNav() {
       ${fab}
       <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
       <a href="#/admin/vendedoras" title="Equipe">${ICONS.team}</a>`;
+  } else if (u.role === 'manager') {
+    nav.innerHTML = `
+      <a href="#/admin" title="Início">${ICONS.home}</a>
+      <a href="#/admin/vendas" title="Vendas">${ICONS.tag}</a>
+      ${fab}
+      <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" title="Início">${ICONS.home}</a>
@@ -153,7 +165,7 @@ async function route() {
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { go('#/login'); return; }
-  if (u && h === '#/login') { go(u.role === 'admin' ? '#/admin' : '#/vendedora'); return; }
+  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : '#/admin'); return; }
 
   try {
     if (h === '#/login' || h === '') return viewLogin(app);
@@ -167,7 +179,9 @@ async function route() {
       return viewSeller(app);
     }
     if (h.startsWith('#/admin')) {
-      if (u.role !== 'admin') { go('#/vendedora'); return; }
+      if (u.role !== 'admin' && u.role !== 'manager') { go('#/vendedora'); return; }
+      if (h === '#/admin/vendedoras' && u.role !== 'admin') { go('#/admin'); return; }
+      if (h === '#/admin/arquivo' && u.role !== 'admin') { go('#/admin'); return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
       if (h === '#/admin/arquivo') return viewArchive(app);
       if (h === '#/admin/ponto') return viewPonto(app);
@@ -278,7 +292,7 @@ function saleCard(s, delBtn = '') {
   <div class="sale-card" style="padding:10px 12px">
     <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
       <b>${esc(s.customer_name)}${s.is_bonus ? ' ⭐' : ''}</b>
-      <span style="white-space:nowrap"><span class="chip ${chanChip(s.channel)}">${esc(s.channel)}</span>${s.is_bonus && s.bonus_cents != null ? ` <span class="chip" title="Bônus exclusivo">🎁 ${fmtBRL(s.bonus_cents)}</span>` : ''}</span>
+      <span style="white-space:nowrap">${s.store_name && s.store_name !== 'Sede' ? `${storeTag(s.store_name)} ` : ''}<span class="chip ${chanChip(s.channel)}">${esc(s.channel)}</span>${s.is_bonus && s.bonus_cents != null ? ` <span class="chip" title="Bônus exclusivo">🎁 ${fmtBRL(s.bonus_cents)}</span>` : ''}</span>
     </div>
     <div class="muted" style="font-size:12.5px;margin-top:2px">${esc(s.product)} • ${esc(s.color)} • ${fmtDateBR(s.sale_date)} • 👥 ${parts}</div>
     ${delBtn ? `<div class="sale-foot" style="margin-top:4px">${delBtn}</div>` : ''}
@@ -945,7 +959,7 @@ function modalConfirmLogout() {
 }
 
 function modalCalls() {
-  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar chamadas.', 'err'); return; }
+  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode registrar chamadas.', 'err'); return; }
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Registrar chamadas</h3>
@@ -974,9 +988,11 @@ function modalCalls() {
   };
 }
 
-function modalSale(sellers) {
-  if (store.user?.role !== 'admin') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
+function modalSale(sellers, stores) {
+  if (store.user?.role !== 'admin' && store.user?.role !== 'manager') { toast('Apenas o administrador pode registrar vendas.', 'err'); return; }
   const me = store.user;
+  const lockedStore = me.role === 'manager' ? (stores || []).find((s) => Number(s.id) === Number(me.store_id)) : null;
+  const saleStores = lockedStore ? [lockedStore] : (stores || []);
   const preselected = [];
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
@@ -986,6 +1002,8 @@ function modalSale(sellers) {
       <label>Cliente *</label><input id="sClient" required placeholder="Nome do cliente">
       <label>Produto *</label><input id="sProduct" required placeholder="Ex: Scooter X">
       <label>Cor *</label><input id="sColor" required placeholder="Ex: Preta">
+      <label>Loja *</label>
+      <select id="sStore">${saleStores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
       <label>Canal *</label>
       <select id="sChannel"><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
       <label>Data</label><input type="date" id="sDate" value="${todayISO()}" max="${todayISO()}">
@@ -1010,13 +1028,18 @@ function modalSale(sellers) {
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   const sBonusCents = () => ($('#sBonus').checked ? parseBonusReais($('#sBonusVal').value) : null);
+  const sStoreName = () => {
+    const opt = $('#sStore').selectedOptions?.[0];
+    return opt ? opt.textContent.trim() : 'Sede';
+  };
   const refreshSalePreview = () => {
     const pids = $$('#plist .check.on').map((c) => Number(c.dataset.id));
-    const pv = previewCommission(sellers, pids, sBonusCents());
+    const pv = previewCommission(sellers, pids, sBonusCents(), sStoreName());
     $('#sPreview').innerHTML = !pv
       ? '<p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p>'
-      : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base)} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
+      : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base) + ' • ' + esc(sStoreName())} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
   };
+  $('#sStore').onchange = refreshSalePreview;
   $('#sBonus').onchange = () => { $('#sBonusBox').style.display = $('#sBonus').checked ? 'block' : 'none'; refreshSalePreview(); };
   $('#sBonusVal').oninput = refreshSalePreview;
   $('#plist').onclick = (e) => {
@@ -1044,6 +1067,7 @@ function modalSale(sellers) {
           color: $('#sColor').value.trim(),
           channel: $('#sChannel').value,
           sale_date: $('#sDate').value || todayISO(),
+          store_id: Number($('#sStore').value),
           participant_ids: pids,
           is_bonus: isBonus,
           bonus_value: isBonus ? Number(String($('#sBonusVal').value).replace(',', '.')) : undefined,
@@ -1088,10 +1112,13 @@ function modalCancelSale(sale, onSaved) {
   };
 }
 
-function modalEditSale(sale, sellers, onSaved) {
+function modalEditSale(sale, sellers, stores, onSaved) {
   const selIds = (sale.participants || []).map((p) => Number(p.seller_id));
   const wasBonus = !!sale.is_bonus;
   const wasBonusReais = sale.bonus_cents != null ? (Number(sale.bonus_cents) / 100).toFixed(2) : '';
+  const me = store.user;
+  const lockedStore = me.role === 'manager' ? (stores || []).find((s) => Number(s.id) === Number(me.store_id)) : null;
+  const editStores = lockedStore ? [lockedStore] : (stores || []);
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Editar venda #${sale.id}</h3>
@@ -1100,6 +1127,8 @@ function modalEditSale(sale, sellers, onSaved) {
       <label>Cliente *</label><input id="eClient" required value="${esc(sale.customer_name)}">
       <label>Produto *</label><input id="eProduct" required value="${esc(sale.product)}">
       <label>Cor *</label><input id="eColor" required value="${esc(sale.color)}">
+      <label>Loja *</label>
+      <select id="eStore">${editStores.map((s) => `<option value="${s.id}" ${Number(sale.store_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       <label>Canal *</label>
       <select id="eChannel"><option ${sale.channel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${sale.channel === 'CRM' ? 'selected' : ''}>CRM</option><option ${sale.channel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
       <label>Data</label><input type="date" id="eDate" value="${esc(sale.sale_date)}" max="${todayISO()}">
@@ -1124,13 +1153,18 @@ function modalEditSale(sale, sellers, onSaved) {
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   const eBonusCents = () => ($('#eBonus').checked ? parseBonusReais($('#eBonusVal').value) : null);
+  const eStoreName = () => {
+    const opt = $('#eStore').selectedOptions?.[0];
+    return opt ? opt.textContent.trim() : 'Sede';
+  };
   const refreshEditPreview = () => {
     const pids = $$('#eplist .check.on').map((c) => Number(c.dataset.id));
-    const pv = previewCommission(sellers, pids, eBonusCents());
+    const pv = previewCommission(sellers, pids, eBonusCents(), eStoreName());
     $('#ePreview').innerHTML = !pv
       ? '<p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p>'
-      : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base)} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
+      : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base) + ' • ' + esc(eStoreName())} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
   };
+  $('#eStore').onchange = refreshEditPreview;
   $('#eBonus').onchange = () => { $('#eBonusBox').style.display = $('#eBonus').checked ? 'block' : 'none'; refreshEditPreview(); };
   $('#eBonusVal').oninput = refreshEditPreview;
   $('#eplist').onclick = (e) => {
@@ -1158,6 +1192,7 @@ function modalEditSale(sale, sellers, onSaved) {
           color: $('#eColor').value.trim(),
           channel: $('#eChannel').value,
           sale_date: $('#eDate').value || sale.sale_date,
+          store_id: Number($('#eStore').value),
           participant_ids: pids,
           is_bonus: isBonus,
           bonus_value: isBonus ? Number(String($('#eBonusVal').value).replace(',', '.')) : undefined,
@@ -1168,11 +1203,23 @@ function modalEditSale(sale, sellers, onSaved) {
   };
 }
 
+const storeTag = (name) => !name || name === 'Sede'
+  ? `<span class="chip wa" style="font-size:10px;padding:1px 8px">Sede</span>`
+  : `<span class="chip lime" style="font-size:10px;padding:1px 8px">${esc(name)}</span>`;
+
 // ---------- ADMIN ----------
 async function viewAdmin(app) {
+  const isManager = store.user?.role === 'manager';
+  if (isManager) adminStore = String(store.user.store_id || '');
+  let stores = [];
+  try { stores = (await api('/api/stores')).stores; } catch {}
   app.innerHTML = `
-    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a><a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a></div></div>
+    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral${isManager ? ` <span class="muted" style="font-size:13px">• ${esc(store.user.store_name || '')}</span>` : ''}</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a><a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a></div></div>
     <div id="kpiWrap"><div class="card"><p class="muted">Carregando…</p></div></div>
+    ${isManager ? '' : `<div class="mini-pills" id="storePills">
+      <button data-st="" class="${!adminStore ? 'on' : ''}">Todas</button>
+      ${stores.map((s) => `<button data-st="${s.id}" class="${String(adminStore) === String(s.id) ? 'on' : ''}">${esc(s.name)}</button>`).join('')}
+    </div>`}
     <div class="mini-pills" id="sectorPills">
       <button data-s="" class="${!adminSector ? 'on' : ''}">Todos</button>
       <button data-s="online" class="${adminSector === 'online' ? 'on' : ''}">Online</button>
@@ -1189,6 +1236,12 @@ async function viewAdmin(app) {
       <select id="fChannel" style="flex:1;max-width:200px"><option value="">Todos os canais</option><option ${adminChannel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${adminChannel === 'CRM' ? 'selected' : ''}>CRM</option><option ${adminChannel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
     </div>
     <div id="rankWrap"></div>`;
+  const storePills = $('#storePills');
+  if (storePills) storePills.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    adminStore = b.dataset.st; adminSeller = '';
+    route();
+  };
   $('#sectorPills').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     adminSector = b.dataset.s; adminSeller = '';
@@ -1214,11 +1267,12 @@ async function viewAdmin(app) {
     const { from, to } = adminPeriod;
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) });
     const sectorQs = adminSector ? `&sector=${adminSector}` : '';
+    const storeQs = adminStore ? `&store_id=${adminStore}` : '';
     const kpi = $('#kpiWrap');
     const rank = $('#rankWrap');
     const [summary, ranking] = await Promise.all([
-      api(`/api/stats/summary?${qs}${adminSeller ? `&seller_id=${adminSeller}` : sectorQs}`),
-      api(`/api/stats/ranking?${qs}${sectorQs}`),
+      api(`/api/stats/summary?${qs}${adminSeller ? `&seller_id=${adminSeller}` : sectorQs + storeQs}`),
+      api(`/api/stats/ranking?${qs}${sectorQs}${storeQs}`),
     ]);
     const filtered = adminSeller ? ranking.ranking.filter((r) => String(r.seller_id) === String(adminSeller)) : ranking.ranking;
     const chanVal = (r) => (adminChannel === 'WhatsApp' ? r.whatsapp : adminChannel === 'CRM' ? r.crm : r.presencial);
@@ -1231,7 +1285,7 @@ async function viewAdmin(app) {
     `;
     const rankRow = (r, i) => `<tr>
       <td>${i + 1}</td>
-      <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}</span></span></a></td>
+      <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span><b>${esc(r.name)}</b> ${sectorTag(r.sector)} ${!adminStore ? storeTag(r.store_name) : ''}</span></span></a></td>
       <td class="mono">${fmtInt(r.calls)}</td><td class="mono"><b>${fmtV(r.sales)}</b></td><td class="mono">${fmtPct(r.conversion)}</td>
     </tr>`;
     const rankHead = '<table><thead><tr><th>#</th><th>Vendedora</th><th>Chamadas</th><th>Vendas</th><th>Conv.</th></tr></thead><tbody>';
@@ -1284,9 +1338,9 @@ async function viewArchive(app) {
 
 // menu do botão central: admin registra vendas/chamadas, vendedora só bate ponto
 function modalEscolhaRegistro() {
-  const isAdmin = store.user?.role === 'admin';
+  const canSell = store.user?.role === 'admin' || store.user?.role === 'manager';
   // trava extra: vendedora nem vê as opções de venda/chamada
-  if (!isAdmin) {
+  if (!canSell) {
     modalPonto(() => route());
     return;
   }
@@ -1303,8 +1357,8 @@ function modalEscolhaRegistro() {
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   $('#chSale').onclick = async () => {
     try {
-      const { sellers } = await api('/api/sellers');
-      modalSale(sellers);
+      const [{ sellers }, { stores }] = await Promise.all([api('/api/sellers'), api('/api/stores')]);
+      modalSale(sellers, stores);
     } catch (e) { toast(e.message, 'err'); }
   };
   $('#chCalls').onclick = () => modalCallsAdmin();
@@ -1337,10 +1391,14 @@ function modalCallsAdmin() {
 
 async function viewAllSales(app) {
   const { from, to } = adminPeriod;
-  app.innerHTML = `<h2 style="margin:4px 0">Vendas</h2>
+  const isManager = store.user?.role === 'manager';
+  let stores = [];
+  try { stores = (await api('/api/stores')).stores; } catch {}
+  app.innerHTML = `<h2 style="margin:4px 0">Vendas${isManager ? ` <span class="muted" style="font-size:13px">• ${esc(store.user.store_name || '')}</span>` : ''}</h2>
     <div class="card"><label>Buscar</label><input id="q" placeholder="Cliente, produto, cor…">
     <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
       <select id="fSellerSales" style="flex:1"><option value="">Todas as vendedoras</option></select>
+      ${isManager ? '' : `<select id="fStoreSales" style="flex:1"><option value="">Todas as lojas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`}
       <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
       <button class="btn btn-primary" id="go">Filtrar</button>
     </div></div>
@@ -1351,10 +1409,11 @@ async function viewAllSales(app) {
   } catch {}
   const load = async () => {
     const sid = $('#fSellerSales').value || '';
-    const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sid ? { seller_id: sid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
+    const stid = $('#fStoreSales')?.value || '';
+    const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sid ? { seller_id: sid } : {}), ...(stid ? { store_id: stid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
     $('#list').innerHTML = sales.length
-      ? compactListHTML(sales, (s) => saleCard(s, store.user.role === 'admin' ? `<button class="btn btn-ghost" style="font-size:12px;padding:6px 10px" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" style="font-size:12px;padding:6px 10px" data-del="${s.id}">Cancelar</button>` : ''), 8)
+      ? compactListHTML(sales, (s) => saleCard(s, `<button class="btn btn-ghost" style="font-size:12px;padding:6px 10px" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" style="font-size:12px;padding:6px 10px" data-del="${s.id}">Cancelar</button>`), 8)
       : '<div class="card empty">Não há vendas registradas neste período.</div>';
     bindCompactList($('#list'));
     $$('#list [data-del]').forEach((b) => (b.onclick = () => {
@@ -1366,14 +1425,16 @@ async function viewAllSales(app) {
       const sale = sales.find((x) => String(x.id) === String(b.dataset.edit));
       if (!sale) return;
       try {
-        const { sellers } = await api('/api/sellers');
-        modalEditSale(sale, sellers, load);
+        const [{ sellers }, { stores }] = await Promise.all([api('/api/sellers'), api('/api/stores')]);
+        modalEditSale(sale, sellers, stores, load);
       } catch (e) { toast(e.message, 'err'); }
     }));
   };
   $('#go').onclick = load;
   $('#fSellerSales').onchange = load;
   $('#ch').onchange = load;
+  const fsSales = $('#fStoreSales');
+  if (fsSales) fsSales.onchange = load;
   await load();
 }
 
@@ -1428,78 +1489,82 @@ async function viewPonto(app) {
 }
 
 async function tabPontoLoja(body) {
-  body.innerHTML = `<div class="card"><div id="qrBox"><p class="muted">Carregando…</p></div>
-    <div style="height:8px"></div><button class="btn btn-big" id="printQr">🖨️ Imprimir QR</button></div>
-    <div class="card" style="margin-top:12px"><b>Loja e localização</b><div id="cfgBox" style="margin-top:8px"><p class="muted">Carregando…</p></div></div>`;
+  body.innerHTML = `<div id="qrBox"><p class="muted">Carregando lojas…</p></div>`;
   try {
-    const { qr_code, qrImage, store_name } = await api('/api/ponto/qr');
-    $('#qrBox').innerHTML = `
-      <div class="row" style="align-items:center;flex-wrap:nowrap">
-        <img src="${qrImage}" alt="QR do ponto" style="width:96px;height:96px;border-radius:12px">
-        <div><b>${esc(store_name)}</b><div class="mono" style="font-weight:800;letter-spacing:.06em">${esc(qr_code)}</div>
-        <span class="muted" style="font-size:12px">Já impresso e colado na parede.</span></div>
-      </div>`;
-    $('#printQr').onclick = () => {
-      const w = window.open('', '_blank');
-      w.document.write(`<html><head><title>QR Ponto — ${esc(store_name)}</title></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h1>${esc(store_name)} — Ponto</h1><img src="${qrImage}" style="width:320px;height:320px"><h2 style="letter-spacing:.1em">${esc(qr_code)}</h2><p>Escaneie ao chegar e ao sair. A localização é verificada.</p><script>onload=()=>{print();}<\/script></body></html>`);
-      w.document.close();
+    const { stores } = await api('/api/stores/qr');
+    if (!stores.length) { $('#qrBox').innerHTML = '<div class="card empty">Nenhuma loja cadastrada.</div>'; return; }
+    $('#qrBox').innerHTML = stores.map((s) => `
+      <div class="card" style="margin-bottom:12px">
+        <div class="row" style="align-items:center;flex-wrap:nowrap">
+          <img src="${s.qrImage}" alt="QR ${esc(s.name)}" style="width:96px;height:96px;border-radius:12px">
+          <div style="flex:1"><b>${esc(s.name)}</b>
+            <div class="mono" style="font-weight:800;letter-spacing:.06em">${esc(s.qr_code)}</div>
+            <span class="muted" style="font-size:12px">${s.lat != null && s.lng != null ? `📍 Local definido ✓ • raio ${s.radius_m}m` : '📍 Local ainda não definido'}</span>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" data-printqr="${s.id}">🖨️ Imprimir QR</button>
+          <button class="btn btn-ghost" data-geostore="${s.id}">📍 Definir localização</button>
+        </div>
+        <div id="geo-${s.id}" style="margin-top:8px"></div>
+      </div>`).join('');
+    const byId = Object.fromEntries(stores.map((s) => [s.id, s]));
+    $('#qrBox').onclick = async (e) => {
+      const pr = e.target.closest('[data-printqr]');
+      if (pr) {
+        const s = byId[pr.dataset.printqr];
+        const w = window.open('', '_blank');
+        w.document.write(`<html><head><title>QR Ponto — ${esc(s.name)}</title></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h1>${esc(s.name)} — Ponto</h1><img src="${s.qrImage}" style="width:320px;height:320px"><h2 style="letter-spacing:.1em">${esc(s.qr_code)}</h2><p>Escaneie ao chegar e ao sair. A localização é verificada (raio ${s.radius_m}m).</p><script>onload=()=>{print();}<\/script></body></html>`);
+        w.document.close();
+        return;
+      }
+      const gs = e.target.closest('[data-geostore]');
+      if (gs) {
+        const s = byId[gs.dataset.geostore];
+        const box = $(`#geo-${s.id}`);
+        box.innerHTML = `<p class="muted" style="font-size:13px">Obtendo sua posição (fique na entrada da loja)…</p>`;
+        try {
+          const pos = await getGeo();
+          const lat = Number(pos.coords.latitude.toFixed(6));
+          const lng = Number(pos.coords.longitude.toFixed(6));
+          await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat, lng, radius_m: s.radius_m ?? 150 }) });
+          toast(`Localização da ${s.name} salva!`);
+          tabPontoLoja(body);
+        } catch (err) { box.innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+      }
     };
-  } catch (e) { $('#qrBox').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-  try {
-    const { config } = await api('/api/ponto/config');
-    $('#cfgBox').innerHTML = `
-      <label>Nome da loja</label><input id="cName" value="${esc(config.store_name || '')}">
-      <p class="muted" id="cGeoStatus" style="font-size:13px">${config.lat != null && config.lng != null ? '📍 Localização definida ✓' : '📍 Localização ainda não definida'}</p>
-      <div class="row"><button class="btn" type="button" id="useGeo">📍 Usar minha posição</button>
-      <button class="btn btn-accent" id="saveCfg">Salvar</button></div>`;
-    let pendingLat = config.lat ?? null;
-    let pendingLng = config.lng ?? null;
-    $('#useGeo').onclick = async () => {
-      const btn = $('#useGeo');
-      btn.disabled = true;
-      btn.textContent = 'Obtendo localização…';
-      try {
-        const pos = await getGeo();
-        pendingLat = Number(pos.coords.latitude.toFixed(6));
-        pendingLng = Number(pos.coords.longitude.toFixed(6));
-        $('#cGeoStatus').textContent = '📍 Localização capturada ✓ (salve para confirmar)';
-        toast('Posição capturada! Toque em Salvar.');
-      } catch (e) { toast(e.message, 'err'); }
-      btn.disabled = false;
-      btn.textContent = '📍 Usar minha posição';
-    };
-    $('#saveCfg').onclick = async () => {
-      try {
-        await api('/api/ponto/config', { method: 'PUT', body: JSON.stringify({ store_name: $('#cName').value, lat: pendingLat, lng: pendingLng, radius_m: config.radius_m ?? 150 }) });
-        toast('Loja salva!');
-      } catch (e) { toast(e.message, 'err'); }
-    };
-  } catch (e) { $('#cfgBox').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { $('#qrBox').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
 }
   // dia
 async function tabPontoDia(body, t) {
+  const isManager = store.user?.role === 'manager';
+  let stores = [];
+  try { stores = (await api('/api/stores')).stores; } catch {}
   body.innerHTML = `
     <div class="card">
       <div class="row" style="flex-wrap:nowrap;align-items:end">
         <div style="flex:1"><label>Data</label><input type="date" id="pDate" value="${t}" max="${t}"></div>
+        ${isManager ? '' : `<div style="flex:1"><label>Loja</label><select id="pStore"><option value="">Todas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>`}
         <button class="btn btn-primary" id="pGo">Ver dia</button>
       </div>
       <div id="pDay" style="margin-top:12px"><p class="muted">Carregando…</p></div>
     </div>`;
   const loadDay = async () => {
     const date = $('#pDate').value || t;
+    const stid = $('#pStore')?.value || '';
     const box = $('#pDay');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
-      const d = await api(`/api/ponto/dia?date=${date}`);
+      const d = await api(`/api/ponto/dia?date=${date}${stid ? `&store_id=${stid}` : ''}`);
       const present = d.rows.filter((r) => r.punch);
       const absent = d.rows.filter((r) => !r.punch);
       const rowHTML = (r) => {
         const ava = `<span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
         const extra = r.punch && r.punch.extra_min > 0 ? ` <span class="chip lime">＋${esc(r.punch.extra_label)}</span>` : '';
+        const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
         return `
           <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-            <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}<br>
+            <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${elsewhere}<br>
             <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
             <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
           </div></div>`;
@@ -1532,6 +1597,8 @@ async function tabPontoDia(body, t) {
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
   $('#pGo').onclick = loadDay;
+  const pStoreEl = $('#pStore');
+  if (pStoreEl) pStoreEl.onchange = loadDay;
   await loadDay();
 }
   // mês
@@ -1708,6 +1775,7 @@ async function viewComissoes(app) {
     <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
   let commSector = '';
+  let commStore = store.user?.role === 'manager' ? String(store.user.store_id || '') : '';
   $('#commSector').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     commSector = b.dataset.s;
@@ -1719,12 +1787,12 @@ async function viewComissoes(app) {
     const box = $('#cBody');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
-      const s = await api(`/api/commissions/summary?month=${month}${commSector ? `&sector=${commSector}` : ''}`);
+      const s = await api(`/api/commissions/summary?month=${month}${commSector ? `&sector=${commSector}` : ''}${commStore ? `&store_id=${commStore}` : ''}`);
       box.innerHTML = `
         <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Pendente geral: <b class="mono">${fmtBRL(s.total_pending_cents)}</b></p>
         ${compactListHTML(s.rows, (r) => `
           <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
-            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
+            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name && r.store_name !== 'Sede' ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
             <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
           </div>
           <div class="muted" style="font-size:13px;margin-top:2px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
@@ -1809,15 +1877,31 @@ async function viewSellerDetail(app, id) {
 }
 
 let reportSector = '';
+let reportStore = '';
 async function viewReport(app) {
   const t = todayISO();
+  const isManager = store.user?.role === 'manager';
+  if (isManager) reportStore = String(store.user.store_id || '');
+  let stores = [];
+  try { stores = (await api('/api/stores')).stores; } catch {}
   app.innerHTML = `<h2 style="margin:4px 0">Relatório do dia</h2><div class="card"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}">
+    ${isManager ? '' : `<div class="mini-pills" id="repStore" style="margin-top:10px">
+      <button data-st="" class="${!reportStore ? 'on' : ''}">Todas</button>
+      ${stores.map((s) => `<button data-st="${s.id}" class="${String(reportStore) === String(s.id) ? 'on' : ''}">${esc(s.name)}</button>`).join('')}
+    </div>`}
     <div class="mini-pills" id="repSector" style="margin-top:10px">
       <button data-s="" class="${!reportSector ? 'on' : ''}">Todos</button>
       <button data-s="online" class="${reportSector === 'online' ? 'on' : ''}">Online</button>
       <button data-s="presencial" class="${reportSector === 'presencial' ? 'on' : ''}">Presencial</button>
     </div>
     <div style="height:10px"></div><button class="btn btn-primary" id="rGo">Gerar</button></div><div id="rBody" style="margin-top:12px"></div>`;
+  const repStoreEl = $('#repStore');
+  if (repStoreEl) repStoreEl.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    reportStore = b.dataset.st;
+    $$('#repStore button').forEach((x) => x.classList.toggle('on', x === b));
+    load();
+  };
   $('#repSector').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     reportSector = b.dataset.s;
@@ -1826,9 +1910,9 @@ async function viewReport(app) {
   };
   const load = async () => {
     const date = $('#rDate').value || t;
-    const { summary, details, sector } = await api(`/api/report/daily?date=${date}${reportSector ? `&sector=${reportSector}` : ''}`);
+    const { summary, details, sector, store } = await api(`/api/report/daily?date=${date}${reportSector ? `&sector=${reportSector}` : ''}${reportStore ? `&store_id=${reportStore}` : ''}`);
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
-    const sectorTitle = sector && sector !== 'all' ? ` (${sectorLabel(sector).toUpperCase()})` : '';
+    const sectorTitle = `${sector && sector !== 'all' ? ` (${sectorLabel(sector).toUpperCase()})` : ''}${store ? ` [${store.toUpperCase()}]` : ''}`;
     const msg =
       `*RELATÓRIO COMERCIAL${sectorTitle} - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtInt(summary.records)}\nWhatsApp: ${fmtInt(summary.waRecords ?? 0)} | CRM: ${fmtInt(summary.crmRecords ?? 0)} | Presencial: ${fmtInt(summary.presRecords ?? 0)}` +
       details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)} - Chamadas ${fmtInt(d.calls)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
@@ -1870,22 +1954,22 @@ async function viewReport(app) {
 }
 
 async function viewTeam(app) {
-  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova vendedora</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div>`;
+  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova pessoa</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div>`;
   const load = async () => {
     try {
       const { users } = await api('/api/users');
-    const sellers = users.filter((u) => u.role === 'seller');
+    const people = users.filter((u) => u.role !== 'admin');
     const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
-      <td><span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span></td>
+      <td>${s.role === 'manager' ? '<span class="chip lime" style="font-size:10px">Gerente</span>' : `<span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span>`}<br>${storeTag(s.store_name)}</td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
       <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button></td></tr>`;
-    const teamHead = '<table><thead><tr><th>Nome</th><th>Setor</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
-    const teamRest = sellers.slice(8);
-    $('#teamBody').innerHTML = sellers.length ? `<div class="card" style="padding:0;overflow:hidden">
-      ${teamHead}${sellers.slice(0, 8).map(teamRow).join('')}</tbody></table>
+    const teamHead = '<table><thead><tr><th>Nome</th><th>Perfil / Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
+    const teamRest = people.slice(8);
+    $('#teamBody').innerHTML = people.length ? `<div class="card" style="padding:0;overflow:hidden">
+      ${teamHead}${people.slice(0, 8).map(teamRow).join('')}</tbody></table>
       ${teamRest.length ? `<div data-rest style="display:none"><table><tbody>${teamRest.map(teamRow).join('')}</tbody></table></div>
       <div style="padding:10px"><button class="btn btn-ghost btn-big" data-more>Ver mais (${teamRest.length})</button></div>` : ''}
-      </div>` : '<div class="card empty">Nenhuma vendedora cadastrada.</div>';
+      </div>` : '<div class="card empty">Ninguém cadastrado.</div>';
     bindCompactList($('#teamBody'));
     $$('#teamBody [data-toggle]').forEach((b) => (b.onclick = async () => {
       const id = b.dataset.toggle;
@@ -1952,26 +2036,47 @@ async function loadPhrases() {
   render();
 }
 
-function modalUser(u, reload) {
+async function modalUser(u, reload) {
+  let stores = [];
+  try { stores = (await api('/api/stores')).stores; } catch {}
+  const isSeller = !u || u.role === 'seller';
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
-    <h3 style="margin:0">${u ? 'Editar vendedora' : 'Nova vendedora'}</h3>
+    <h3 style="margin:0">${u ? (u.role === 'manager' ? 'Editar gerente' : 'Editar vendedora') : 'Nova pessoa'}</h3>
     <form id="fUser">
       <label>Nome *</label><input id="uName" required value="${esc(u?.name || '')}">
       <label>E-mail *</label><input id="uEmail" type="email" required value="${esc(u?.email || '')}">
       <label>${u ? 'Nova senha (opcional)' : 'Senha *'}</label><input id="uPass" type="password" ${u ? '' : 'required'} placeholder="mín. 4 caracteres">
-      <label>Setor *</label>
-      <select id="uSector"><option value="online" ${(u?.sector || 'online') === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${u?.sector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
+      <label>Perfil *</label>
+      <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option></select>
+      <div id="sellerFields" style="display:${isSeller ? 'block' : 'none'}">
+        <label>Setor *</label>
+        <select id="uSector"><option value="online" ${(u?.sector || 'online') === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${u?.sector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
+      </div>
+      <label>Loja *</label>
+      <select id="uStore">${stores.map((s) => `<option value="${s.id}" ${Number(u?.store_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <div style="height:12px"></div>
       <button class="btn btn-primary btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
+  $('#uRole').onchange = () => {
+    const mgr = $('#uRole').value === 'manager';
+    $('#sellerFields').style.display = mgr ? 'none' : 'block';
+    $('#mgrHint').style.display = mgr ? 'block' : 'none';
+  };
   $('#fUser').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const payload = { name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role: 'seller', sector: $('#uSector').value, ...( $('#uPass').value ? { password: $('#uPass').value } : {}) };
+      const role = $('#uRole').value;
+      const payload = {
+        name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role,
+        sector: role === 'manager' ? 'online' : $('#uSector').value,
+        store_id: Number($('#uStore').value),
+        ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
+      };
       if (u) await api(`/api/users/${u.id}`, { method: 'PUT', body: JSON.stringify(payload) });
       else await api('/api/users', { method: 'POST', body: JSON.stringify({ ...payload, password: $('#uPass').value }) });
       closeModal(); toast('Salvo com sucesso!'); reload();

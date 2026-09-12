@@ -17,8 +17,21 @@ const SCHEMA = [
     name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin','seller')) DEFAULT 'seller',
+    role TEXT NOT NULL CHECK (role IN ('admin','manager','seller')) DEFAULT 'seller',
     sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
+    store_id INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  // lojas: sede + filiais (QR, geolocalização e raio próprios)
+  `CREATE TABLE IF NOT EXISTS stores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    short TEXT NOT NULL DEFAULT '',
+    qr_code TEXT NOT NULL UNIQUE,
+    lat REAL,
+    lng REAL,
+    radius_m INTEGER NOT NULL DEFAULT 150,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -39,6 +52,7 @@ const SCHEMA = [
     channel TEXT NOT NULL CHECK (channel IN ('WhatsApp','CRM','Presencial')),
     created_by INTEGER NOT NULL REFERENCES users(id),
     sale_date TEXT NOT NULL,
+    store_id INTEGER,
     is_bonus INTEGER NOT NULL DEFAULT 0,
     bonus_cents INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -99,6 +113,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS punches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    store_id INTEGER,
     date TEXT NOT NULL,
     check_in_at TEXT,
     check_in_lat REAL,
@@ -252,17 +267,19 @@ function creditForParticipants(count) {
   throw new Error('Venda deve ter de 1 a 3 participantes.');
 }
 
-// ---- Comissão por setor + bônus de modelo especial ----
-// sectors: setores ('online'/'presencial') das participantes da venda
+// ---- Comissão por loja + setor + bônus de modelo especial ----
+// storeName: 'Sede' | filial (Magé/Guapimirim) | null (antigas = Sede)
 // bonusCents: base exclusiva em centavos (modelo especial) ou null
-// - todos presencial → base 3500; se há qualquer online → base 2500
+// - filial → base 2500 (qualquer setor)
+// - Sede: todos presencial → 3500; se há qualquer online → 2500
 // - individual recebe a base cheia; dividida (2–3) recebe metade
-function commissionBaseCents(sectors, bonusCents) {
+function commissionBaseCents(sectors, bonusCents, storeName) {
   if (bonusCents != null) return Math.round(Number(bonusCents));
+  if (storeName && storeName !== 'Sede') return 2500;
   const allPres = Array.isArray(sectors) && sectors.length > 0 && sectors.every((s) => s === 'presencial');
   return allPres ? 3500 : 2500;
 }
-function commissionCents(sectors, count, bonusCents) {
+function commissionCents(sectors, count, bonusCents, storeName) {
   if (count !== 1 && count !== 2 && count !== 3) throw new Error('Venda deve ter de 1 a 3 participantes.');
   let bonus = null;
   if (bonusCents != null && bonusCents !== '') {
@@ -270,7 +287,7 @@ function commissionCents(sectors, count, bonusCents) {
     if (!Number.isFinite(bonus) || bonus <= 0 || bonus > 100000)
       throw new Error('Bônus deve ser entre R$ 0,01 e R$ 1.000,00.');
   }
-  const base = commissionBaseCents(sectors, bonus);
+  const base = commissionBaseCents(sectors, bonus, storeName);
   return count === 1 ? base : Math.round(base / 2);
 }
 
@@ -315,12 +332,24 @@ const ready = (async () => {
   // setor: vendedoras antigas viram 'online'
   try { await run("ALTER TABLE users ADD COLUMN sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial'))"); } catch {}
   try { await run("UPDATE users SET sector='online' WHERE sector IS NULL OR sector NOT IN ('online','presencial')"); } catch {}
-  // bônus na venda + auditoria de canceladas
+  // loja do usuário/venda/ponto
+  try { await run('ALTER TABLE users ADD COLUMN store_id INTEGER'); } catch {}
+  try { await run('ALTER TABLE sales ADD COLUMN store_id INTEGER'); } catch {}
+  try { await run('ALTER TABLE punches ADD COLUMN store_id INTEGER'); } catch {}
+  // bônus na venda + auditoria de canceladas (ANTES dos rebuilds, que copiam essas colunas)
   try { await run('ALTER TABLE sales ADD COLUMN is_bonus INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE sales ADD COLUMN bonus_cents INTEGER'); } catch {}
   try { await run('ALTER TABLE canceled_sales ADD COLUMN is_bonus INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE canceled_sales ADD COLUMN bonus_cents INTEGER'); } catch {}
   await migrateTableChecks();
+  await seedStores();
+  try {
+    const sede = await get("SELECT id FROM stores WHERE name='Sede' LIMIT 1");
+    if (sede) {
+      await run('UPDATE users SET store_id=? WHERE store_id IS NULL', sede.id);
+      await run('UPDATE sales SET store_id=? WHERE store_id IS NULL', sede.id);
+    }
+  } catch {}
   await autoArchive();
 })();
 
@@ -391,11 +420,39 @@ async function migrateTableChecks() {
     try { return await fn(); }
     finally { try { await run('PRAGMA foreign_keys=ON'); } catch {} }
   };
+  // users: aceita perfil 'manager' (rebuild preservando dados)
+  try {
+    const sql = await tableSQL('users');
+    if (sql && sql.includes("'admin','seller'") && !sql.includes('manager')) {
+      await noFK(async () => {
+        try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
+        await run(`CREATE TABLE users_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('admin','manager','seller')) DEFAULT 'seller',
+          sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
+          store_id INTEGER,
+          avatar_url TEXT,
+          active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`);
+        await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, active, created_at)
+          SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, active, created_at FROM users`);
+        await run('DROP TABLE users');
+        await run('ALTER TABLE users_new RENAME TO users');
+        try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
+      });
+      console.log('[db] Migração: perfil gerente aplicado.');
+    }
+  } catch (e) { console.log('[db] Migração gerente pulada:', e.message); }
   // sales: aceita canal 'Presencial'
   try {
     const sql = await tableSQL('sales');
     if (sql && !sql.includes('Presencial')) {
       await noFK(async () => {
+        try { await run('DROP TABLE IF EXISTS sales_new'); } catch {}
         await run(`CREATE TABLE sales_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           customer_name TEXT NOT NULL,
@@ -404,16 +461,18 @@ async function migrateTableChecks() {
           channel TEXT NOT NULL CHECK (channel IN ('WhatsApp','CRM','Presencial')),
           created_by INTEGER NOT NULL REFERENCES users(id),
           sale_date TEXT NOT NULL,
+          store_id INTEGER,
           is_bonus INTEGER NOT NULL DEFAULT 0,
           bonus_cents INTEGER,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )`);
-        await run(`INSERT INTO sales_new (id, customer_name, product, color, channel, created_by, sale_date, is_bonus, bonus_cents, created_at, updated_at)
-          SELECT id, customer_name, product, color, channel, created_by, sale_date, COALESCE(is_bonus,0), bonus_cents, created_at, updated_at FROM sales`);
+        await run(`INSERT INTO sales_new (id, customer_name, product, color, channel, created_by, sale_date, store_id, is_bonus, bonus_cents, created_at, updated_at)
+          SELECT id, customer_name, product, color, channel, created_by, sale_date, store_id, COALESCE(is_bonus,0), bonus_cents, created_at, updated_at FROM sales`);
         await run('DROP TABLE sales');
         await run('ALTER TABLE sales_new RENAME TO sales');
         await run('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date)');
+        try { await run("UPDATE sqlite_sequence SET name='sales' WHERE name='sales_new'"); } catch {}
       });
       console.log('[db] Migração: canal Presencial aplicado.');
     }
@@ -423,6 +482,7 @@ async function migrateTableChecks() {
     const sql = await tableSQL('commissions');
     if (sql && sql.includes('IN (2500')) {
       await noFK(async () => {
+        try { await run('DROP TABLE IF EXISTS commissions_new'); } catch {}
         await run(`CREATE TABLE commissions_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           sale_id INTEGER NOT NULL,
@@ -443,4 +503,16 @@ async function migrateTableChecks() {
   } catch (e) { console.log('[db] Migração comissões pulada:', e.message); }
 }
 
-module.exports = { all, get, run, ready, creditForParticipants, commissionCents, commissionBaseCents, isRemote };
+// Lojas: Sede herda QR/localização/raio atuais (nada muda para quem já usa);
+// Magé e Guapimirim nascem com QR próprio e raio 150m (admin ajusta local no painel).
+async function seedStores() {
+  try {
+    const cfg = await get('SELECT * FROM ponto_config WHERE id=1');
+    await run('INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO NOTHING',
+      'Sede', 'SEDE', (cfg && cfg.qr_code) || 'PONTO-LOJA-01', cfg ? cfg.lat : null, cfg ? cfg.lng : null, (cfg && cfg.radius_m) || 150);
+    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Magé','MAGE','PONTO-MAGE-01',NULL,NULL,150) ON CONFLICT(name) DO NOTHING");
+    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Guapimirim','GUAPI','PONTO-GUAPI-01',NULL,NULL,150) ON CONFLICT(name) DO NOTHING");
+  } catch (e) { console.log('[db] Seed lojas pulado:', e.message); }
+}
+
+module.exports = { all, get, run, ready, creditForParticipants, commissionCents, commissionBaseCents, isRemote, ARCHIVE_DAYS: 90 };

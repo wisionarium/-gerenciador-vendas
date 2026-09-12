@@ -19,9 +19,52 @@ const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 // ---------- helpers ----------
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !isNaN(Date.parse(s));
-const toPublicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, sector: u.sector || 'online', active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null });
+const toPublicUser = (u) => ({
+  id: u.id, name: u.name, email: u.email, role: u.role, sector: u.sector || 'online',
+  store_id: u.store_id || null, store_name: u.store_name || (u.role === 'admin' ? 'Todas' : 'Sede'),
+  active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null,
+});
 const validSector = (s) => ['online', 'presencial'].includes(s);
 const CHANNELS = ['WhatsApp', 'CRM', 'Presencial'];
+
+// gerente: admin da própria loja (não vê outras lojas, não gerencia usuários)
+function requireManager(req, res, next) {
+  if (req.user.role !== 'admin' && req.user.role !== 'manager')
+    return res.status(403).json({ error: 'Acesso restrito ao administrador.' });
+  next();
+}
+// loja do gerente (admin = todas = null). Retorna 403 se tentar outra loja.
+function managerStoreId(req) {
+  if (req.user.role === 'manager') {
+    if (!req.user.store_id) return { error: 'Gerente sem loja vinculada.' };
+    return { storeId: Number(req.user.store_id) };
+  }
+  return { storeId: null };
+}
+function scopedStoreId(req, param) {
+  const m = managerStoreId(req);
+  if (m.error) return m;
+  if (m.storeId != null) {
+    if (param != null && param !== '' && Number(param) !== m.storeId)
+      return { error: 'Acesso restrito à sua loja.' };
+    return { storeId: m.storeId };
+  }
+  if (param != null && param !== '') return { storeId: Number(param) };
+  return { storeId: null };
+}
+async function getStore(id) {
+  if (id == null) return null;
+  try { return await db.get('SELECT * FROM stores WHERE id=?', Number(id)); }
+  catch { return null; }
+}
+async function sedeId() {
+  try {
+    const s = await db.get("SELECT id FROM stores WHERE name='Sede' LIMIT 1");
+    if (s) return s.id;
+    const f = await db.all('SELECT id FROM stores ORDER BY id LIMIT 1');
+    return f.length ? f[0].id : null;
+  } catch { return null; }
+}
 
 // bônus de modelo especial: body {is_bonus, bonus_value em R$} → centavos ou null.
 // Retorna {isBonus, bonusCents} ou {error}.
@@ -100,28 +143,72 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
   const { sector } = req.query;
   const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
   const sectorParam = validSector(sector) ? [sector] : [];
-  if (req.user.role === 'admin') {
-    const rows = await db.all(`SELECT * FROM users WHERE role='seller'${sectorFilter} ORDER BY name`, ...sectorParam);
+  const sel = 'SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id';
+  if (req.user.role === 'admin' || req.user.role === 'manager') {
+    const rows = await db.all(`${sel} WHERE u.role='seller'${sectorFilter} ORDER BY u.name`, ...sectorParam);
     return res.json({ sellers: rows.map(toPublicUser) });
   }
-  const rows = await db.all(`SELECT * FROM users WHERE role='seller' AND active=1${sectorFilter} ORDER BY name`, ...sectorParam);
+  const rows = await db.all(`${sel} WHERE u.role='seller' AND u.active=1${sectorFilter} ORDER BY u.name`, ...sectorParam);
   return res.json({ sellers: rows.map(toPublicUser) });
 }));
 
+// ---------- LOJAS ----------
+app.get('/api/stores', requireAuth, ah(async (req, res) => {
+  let rows = [];
+  try { rows = await db.all('SELECT * FROM stores WHERE active=1 ORDER BY id'); }
+  catch { return res.json({ stores: [] }); }
+  if (req.user.role === 'manager') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
+  if (req.user.role === 'seller') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
+  res.json({ stores: rows });
+}));
+
+app.put('/api/stores/:id', requireAuth, requireManager, ah(async (req, res) => {
+  const store = await getStore(req.params.id);
+  if (!store) return res.status(404).json({ error: 'Loja não encontrada.' });
+  if (req.user.role === 'manager' && Number(store.id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  const { name, lat, lng, radius_m } = req.body || {};
+  const nLat = lat === null || lat === undefined || lat === '' ? null : Number(lat);
+  const nLng = lng === null || lng === undefined || lng === '' ? null : Number(lng);
+  const nRad = Number(radius_m ?? store.radius_m);
+  if (nLat != null && (!Number.isFinite(nLat) || nLat < -90 || nLat > 90)) return res.status(400).json({ error: 'Latitude inválida.' });
+  if (nLng != null && (!Number.isFinite(nLng) || nLng < -180 || nLng > 180)) return res.status(400).json({ error: 'Longitude inválida.' });
+  if (!Number.isFinite(nRad) || nRad < 30 || nRad > 2000) return res.status(400).json({ error: 'Raio deve ser entre 30 e 2000 metros.' });
+  // gerente ajusta localização/raio da própria loja; só admin renomeia
+  const newName = req.user.role === 'admin' ? String(name || store.name).slice(0, 60) : store.name;
+  await db.run('UPDATE stores SET name=?, lat=?, lng=?, radius_m=? WHERE id=?',
+    newName, nLat, nLng, Math.round(nRad), store.id);
+  res.json({ store: await getStore(store.id) });
+}));
+
 app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
-  const rows = await db.all('SELECT * FROM users ORDER BY role DESC, name');
+  const rows = await db.all(
+    'SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id ORDER BY u.role DESC, u.name'
+  );
   res.json({ users: rows.map(toPublicUser) });
 }));
 
 app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector } = req.body || {};
+  const { name, email, password, role, sector, store_id } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
-  if (!['admin', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
+  if (!['admin', 'manager', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
+  let storeId = null;
+  if (role !== 'admin') {
+    if (store_id != null && store_id !== '') {
+      const st = await getStore(store_id);
+      if (!st || !st.active) return res.status(400).json({ error: 'Loja inválida.' });
+      storeId = st.id;
+    } else if (role === 'manager') {
+      return res.status(400).json({ error: 'Gerente precisa de uma loja vinculada.' });
+    } else {
+      storeId = await sedeId();
+    }
+  }
   if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
   try {
-    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, active) VALUES (?,?,?,?,?,1)',
-      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online');
+    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, active) VALUES (?,?,?,?,?,?,1)',
+      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId);
     const u = await db.get('SELECT * FROM users WHERE id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
@@ -131,15 +218,31 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector } = req.body || {};
+  const { name, email, password, role, sector, store_id } = req.body || {};
   const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
-  if (role && !['admin', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
+  if (role && !['admin', 'manager', 'seller'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
+  const newRole = role || target.role;
+  let storeId = target.store_id;
+  if (store_id !== undefined) {
+    if (store_id === null || store_id === '') {
+      if (newRole === 'manager') return res.status(400).json({ error: 'Gerente precisa de uma loja vinculada.' });
+      storeId = newRole === 'admin' ? null : await sedeId();
+    } else {
+      const st = await getStore(store_id);
+      if (!st || !st.active) return res.status(400).json({ error: 'Loja inválida.' });
+      storeId = st.id;
+    }
+  } else if (newRole === 'manager' && !storeId) {
+    return res.status(400).json({ error: 'Gerente precisa de uma loja vinculada.' });
+  } else if (newRole === 'admin') {
+    storeId = null;
+  }
   try {
-    await db.run('UPDATE users SET name=?, email=?, role=?, sector=? WHERE id=?',
-      name.trim(), email.trim().toLowerCase(), role || target.role, validSector(sector) ? sector : (target.sector || 'online'), target.id);
+    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=? WHERE id=?',
+      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, target.id);
     if (password) {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
       await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
@@ -324,12 +427,15 @@ app.get('/api/calls', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id } = req.query;
   let where = '1=1';
   const params = [];
-  if (req.user.role !== 'admin') {
+  if (req.user.role !== 'admin' && req.user.role !== 'manager') {
     where += ' AND c.seller_id = ?';
     params.push(req.user.id);
   } else if (seller_id) {
     where += ' AND c.seller_id = ?';
     params.push(seller_id);
+  } else if (req.user.role === 'manager') {
+    where += ' AND c.seller_id IN (SELECT id FROM users WHERE store_id = ?)';
+    params.push(req.user.store_id);
   }
   if (from && isValidDate(from)) { where += ' AND c.date >= ?'; params.push(from); }
   if (to && isValidDate(to)) { where += ' AND c.date <= ?'; params.push(to); }
@@ -340,7 +446,7 @@ app.get('/api/calls', requireAuth, ah(async (req, res) => {
   res.json({ calls: rows });
 }));
 
-app.post('/api/calls', requireAuth, requireAdmin, ah(async (req, res) => {
+app.post('/api/calls', requireAuth, requireManager, ah(async (req, res) => {
   let { date, quantity, seller_id } = req.body || {};
   date = date || todayISO();
   quantity = Number(quantity);
@@ -351,15 +457,21 @@ app.post('/api/calls', requireAuth, requireAdmin, ah(async (req, res) => {
   if (!seller_id) return res.status(400).json({ error: 'Selecione a vendedora.' });
   const s = await db.get("SELECT * FROM users WHERE id=? AND role='seller' AND active=1", seller_id);
   if (!s) return res.status(400).json({ error: 'Vendedora inválida.' });
+  if (req.user.role === 'manager' && Number(s.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Você só registra chamadas da sua loja.' });
 
   const r = await db.run('INSERT INTO call_records (seller_id, date, quantity) VALUES (?,?,?)', s.id, date, quantity);
   const row = await db.get('SELECT * FROM call_records WHERE id=?', r.lastInsertRowid);
   res.status(201).json({ call: row });
 }));
 
-app.delete('/api/calls/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const row = await db.get('SELECT * FROM call_records WHERE id=?', req.params.id);
+app.delete('/api/calls/:id', requireAuth, requireManager, ah(async (req, res) => {
+  const row = await db.get(
+    'SELECT c.*, u.store_id AS seller_store FROM call_records c JOIN users u ON u.id=c.seller_id WHERE c.id=?', req.params.id
+  );
   if (!row) return res.status(404).json({ error: 'Registro não encontrado.' });
+  if (req.user.role === 'manager' && Number(row.seller_store) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
   await db.run('DELETE FROM call_records WHERE id=?', row.id);
   res.json({ ok: true });
 }));
@@ -370,11 +482,18 @@ async function saleWithParticipants(sale) {
     'SELECT sp.*, u.name AS seller_name FROM sale_participants sp JOIN users u ON u.id=sp.seller_id WHERE sp.sale_id=?',
     sale.id
   );
-  return { ...sale, participants: parts };
+  let store_name = sale.store_name || null;
+  if (!store_name && sale.store_id) {
+    const st = await getStore(sale.store_id);
+    store_name = st ? st.name : null;
+  }
+  return { ...sale, store_name: store_name || 'Sede', participants: parts };
 }
 
 app.get('/api/sales', requireAuth, ah(async (req, res) => {
-  const { from, to, seller_id, channel, product, q } = req.query;
+  const { from, to, seller_id, channel, product, q, store_id } = req.query;
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
   const conds = [];
   const params = [];
   if (from && isValidDate(from)) { conds.push('s.sale_date >= ?'); params.push(from); }
@@ -382,12 +501,13 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   if (channel && CHANNELS.includes(channel)) { conds.push('s.channel = ?'); params.push(channel); }
   if (product) { conds.push('s.product LIKE ?'); params.push(`%${product}%`); }
   if (q) { conds.push('(s.customer_name LIKE ? OR s.product LIKE ? OR s.color LIKE ?)'); params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+  if (scope.storeId != null) { conds.push('s.store_id = ?'); params.push(scope.storeId); }
 
   let joinParticipant = '';
   if (seller_id) {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(Number(seller_id));
-  } else if (req.user.role !== 'admin') {
+  } else if (req.user.role !== 'admin' && req.user.role !== 'manager') {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(req.user.id);
   }
@@ -399,8 +519,8 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   res.json({ sales: await Promise.all(rows.map(saleWithParticipants)) });
 }));
 
-app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { customer_name, product, color, channel, sale_date, participant_ids } = req.body || {};
+app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
+  const { customer_name, product, color, channel, sale_date, participant_ids, store_id } = req.body || {};
   const date = sale_date || todayISO();
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
   if (!product?.trim()) return res.status(400).json({ error: 'Produto é obrigatório.' });
@@ -410,6 +530,16 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   const pids = [...new Set((participant_ids || []).map(Number).filter(Boolean))];
   if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
   if (pids.length > 3) return res.status(400).json({ error: 'Máximo de 3 participantes.' });
+
+  // loja da venda (gerente fica travado na dele; admin usa a informada ou a Sede)
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  let store = scope.storeId != null ? await getStore(scope.storeId) : null;
+  if (!store) {
+    const sid = await sedeId();
+    store = sid ? await getStore(sid) : null;
+  }
+  if (!store || !store.active) return res.status(400).json({ error: 'Loja inválida.' });
 
   const placeholders = pids.map(() => '?').join(',');
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
@@ -446,13 +576,13 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   let credit, perSellerCents;
   try {
     credit = db.creditForParticipants(pids.length);
-    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents);
+    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents, store.name);
   }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   const r = await db.run(
-    'INSERT INTO sales (customer_name, product, color, channel, created_by, sale_date, is_bonus, bonus_cents) VALUES (?,?,?,?,?,?,?,?)',
-    customer_name.trim(), product.trim(), color.trim(), channel, req.user.id, date,
+    'INSERT INTO sales (customer_name, product, color, channel, created_by, sale_date, store_id, is_bonus, bonus_cents) VALUES (?,?,?,?,?,?,?,?,?)',
+    customer_name.trim(), product.trim(), color.trim(), channel, req.user.id, date, store.id,
     bonus.isBonus ? 1 : 0, bonus.isBonus ? bonus.bonusCents : null
   );
   const saleId = r.lastInsertRowid;
@@ -462,10 +592,12 @@ app.post('/api/sales', requireAuth, requireAdmin, ah(async (req, res) => {
   res.status(201).json({ sale: await saleWithParticipants(sale) });
 }));
 
-app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
-  const { customer_name, product, color, channel, sale_date, participant_ids } = req.body || {};
+  const scope = scopedStoreId(req, sale.store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const { customer_name, product, color, channel, sale_date, participant_ids, store_id } = req.body || {};
   const date = sale_date || sale.sale_date;
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
   if (!product?.trim()) return res.status(400).json({ error: 'Produto é obrigatório.' });
@@ -479,18 +611,33 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
 
+  // loja: gerente não move venda para fora da dele
+  let store = await getStore(sale.store_id);
+  if (store_id != null && store_id !== '') {
+    const sc2 = scopedStoreId(req, store_id);
+    if (sc2.error) return res.status(403).json({ error: sc2.error });
+    const st2 = await getStore(store_id);
+    if (!st2 || !st2.active) return res.status(400).json({ error: 'Loja inválida.' });
+    store = st2;
+  }
+  if (!store) {
+    const sid = await sedeId();
+    store = sid ? await getStore(sid) : null;
+  }
+  if (!store) return res.status(400).json({ error: 'Loja inválida.' });
+
   const bonus = parseBonus(req.body);
   if (bonus.error) return res.status(400).json({ error: bonus.error });
   let credit, perSellerCents;
   try {
     credit = db.creditForParticipants(pids.length);
-    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents);
+    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents, store.name);
   }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   await db.run(
-    'UPDATE sales SET customer_name=?, product=?, color=?, channel=?, sale_date=?, is_bonus=?, bonus_cents=?, updated_at=datetime(\'now\') WHERE id=?',
-    customer_name.trim(), product.trim(), color.trim(), channel, date,
+    'UPDATE sales SET customer_name=?, product=?, color=?, channel=?, sale_date=?, store_id=?, is_bonus=?, bonus_cents=?, updated_at=datetime(\'now\') WHERE id=?',
+    customer_name.trim(), product.trim(), color.trim(), channel, date, store.id,
     bonus.isBonus ? 1 : 0, bonus.isBonus ? bonus.bonusCents : null, sale.id
   );
   await db.run('DELETE FROM sale_participants WHERE sale_id=?', sale.id);
@@ -500,9 +647,11 @@ app.put('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ sale: await saleWithParticipants(updated) });
 }));
 
-app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+app.delete('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
+  const scope = scopedStoreId(req, sale.store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
   // limpa dependências de forma explícita (não depende de FK CASCADE,
   // que não é garantido no modo remoto) e de forma resiliente a
   // bancos criados antes da tabela commissions existir.
@@ -516,9 +665,11 @@ app.delete('/api/sales/:id', requireAuth, requireAdmin, ah(async (req, res) => {
 // cancelar venda (admin): registra o motivo em canceled_sales e remove a
 // venda das listas/totais (vendedoras, ranking, relatório, comissões).
 // reason: 'desistencia' | 'outros'. note: observação opcional (máx. 140).
-app.post('/api/sales/:id/cancel', requireAuth, requireAdmin, ah(async (req, res) => {
+app.post('/api/sales/:id/cancel', requireAuth, requireManager, ah(async (req, res) => {
   const sale = await db.get('SELECT * FROM sales WHERE id=?', req.params.id);
   if (!sale) return res.status(404).json({ error: 'Venda não encontrada.' });
+  const scope = scopedStoreId(req, sale.store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
   const { reason, note } = req.body || {};
   if (!['desistencia', 'outros'].includes(reason))
     return res.status(400).json({ error: 'Escolha o motivo: desistência ou outros.' });
@@ -608,6 +759,40 @@ app.post('/api/maintenance/archive', requireAuth, requireAdmin, ah(async (req, r
   res.json({ ok: true, cutoff, truncated: oldSales.length >= BATCH || oldCalls.length >= BATCH, archived: { sales: nSales, calls: nCalls, canceled: nCanceled } });
 }));
 
+// verificação retroativa (admin, só leitura): recalcula a comissão de cada venda
+// ativa pela regra atual (loja+setor+bônus) e compara com o gravado.
+// Não altera nada — só relata divergências, se houver.
+app.get('/api/maintenance/verify-commissions', requireAuth, requireAdmin, ah(async (req, res) => {
+  const sales = await db.all('SELECT * FROM sales ORDER BY id LIMIT 2000');
+  const diffs = [];
+  let checked = 0;
+  for (const sale of sales) {
+    const parts = await db.all(
+      'SELECT sp.*, u.sector FROM sale_participants sp JOIN users u ON u.id=sp.seller_id WHERE sp.sale_id=?', sale.id
+    );
+    if (!parts.length) continue;
+    const store = sale.store_id ? await getStore(sale.store_id) : null;
+    const storeName = store ? store.name : 'Sede';
+    let expected;
+    try {
+      expected = db.commissionCents(
+        parts.map((p) => p.sector || 'online'), parts.length,
+        sale.is_bonus ? sale.bonus_cents : null, storeName
+      );
+    } catch { continue; }
+    const actual = await db.all('SELECT * FROM commissions WHERE sale_id=?', sale.id);
+    const bySeller = Object.fromEntries(actual.map((c) => [c.seller_id, Number(c.amount_cents)]));
+    for (const p of parts) {
+      checked++;
+      if (bySeller[p.seller_id] == null || bySeller[p.seller_id] !== expected) {
+        diffs.push({ sale_id: sale.id, sale_date: sale.sale_date, customer: sale.customer_name, store: storeName, seller_id: p.seller_id, expected_cents: expected, actual_cents: bySeller[p.seller_id] ?? null });
+      }
+    }
+    if (diffs.length >= 100) break;
+  }
+  res.json({ checked, diffs: diffs.slice(0, 100), ok: diffs.length === 0 });
+}));
+
 // consulta ao arquivo (admin, só leitura)
 app.get('/api/maintenance/archive', requireAuth, requireAdmin, ah(async (req, res) => {
   const { q, from, to } = req.query;
@@ -647,16 +832,23 @@ app.get('/api/commissions/me', requireAuth, ah(async (req, res) => {
 }));
 
 // resumo por vendedora (admin)
-app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, res) => {
+app.get('/api/commissions/summary', requireAuth, requireManager, ah(async (req, res) => {
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
-  const { sector } = req.query;
-  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
-  const sellers = await db.all(`SELECT * FROM users WHERE role='seller'${sectorFilter} ORDER BY name`, ...(validSector(sector) ? [sector] : []));
+  const { sector, store_id } = req.query;
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(u.sector,\'online\')=?' : '';
+  const storeFilter = scope.storeId != null ? ' AND u.store_id=?' : '';
+  const sellers = await db.all(
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller'${sectorFilter}${storeFilter} ORDER BY u.name`,
+    ...(validSector(sector) ? [sector] : []), ...(scope.storeId != null ? [scope.storeId] : [])
+  );
   const rows = await Promise.all(sellers.map(async (s) => {
     const m = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM commissions WHERE seller_id=? AND month=?', s.id, month);
     const pm = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM payouts WHERE seller_id=? AND month=?', s.id, month);
     return {
-      seller_id: s.id, name: s.name, sector: s.sector || 'online', active: !!s.active, avatar_url: s.avatar_url || null,
+      seller_id: s.id, name: s.name, sector: s.sector || 'online', store_id: s.store_id, store_name: s.store_name || 'Sede',
+      active: !!s.active, avatar_url: s.avatar_url || null,
       month_cents: Number(m.t), paid_month_cents: Number(pm.t),
       pending_cents: await pendingCents(s.id),
     };
@@ -666,12 +858,13 @@ app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, re
 }));
 
 // histórico de pagamentos (admin)
-app.get('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
+app.get('/api/commissions/payouts', requireAuth, requireManager, ah(async (req, res) => {
   const { month, seller_id } = req.query;
   const conds = [];
   const params = [];
   if (month && /^\d{4}-\d{2}$/.test(month)) { conds.push('p.month=?'); params.push(month); }
   if (seller_id) { conds.push('p.seller_id=?'); params.push(Number(seller_id)); }
+  else if (req.user.role === 'manager') { conds.push('p.seller_id IN (SELECT id FROM users WHERE store_id=?)'); params.push(req.user.store_id); }
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
   const rows = await db.all(
     `SELECT p.*, u.name AS seller_name, a.name AS by_name FROM payouts p
@@ -682,10 +875,12 @@ app.get('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, re
 }));
 
 // registrar pagamento (admin)
-app.post('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
+app.post('/api/commissions/payouts', requireAuth, requireManager, ah(async (req, res) => {
   const { seller_id, amount_cents, month } = req.body || {};
   const seller = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", Number(seller_id));
   if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  if (req.user.role === 'manager' && Number(seller.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
   const cents = Math.round(Number(amount_cents));
   if (!Number.isFinite(cents) || cents <= 0) return res.status(400).json({ error: 'Valor inválido.' });
   const m = (month && /^\d{4}-\d{2}$/.test(month)) ? month : todayISO().slice(0, 7);
@@ -781,32 +976,57 @@ app.get('/api/ponto/qr', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ qr_code: cfg.qr_code, qrImage, store_name: cfg.store_name });
 }));
 
-// bater ponto (vendedora): QR + GPS; tipo automático (entrada → saída)
+// QRs de todas as lojas p/ impressão (admin vê todas; gerente só a dele)
+app.get('/api/stores/qr', requireAuth, requireManager, ah(async (req, res) => {
+  let rows = [];
+  try { rows = await db.all('SELECT * FROM stores WHERE active=1 ORDER BY id'); }
+  catch { return res.json({ stores: [] }); }
+  if (req.user.role === 'manager') rows = rows.filter((s) => Number(s.id) === Number(req.user.store_id));
+  const out = await Promise.all(rows.map(async (s) => ({
+    id: s.id, name: s.name, short: s.short, qr_code: s.qr_code,
+    lat: s.lat, lng: s.lng, radius_m: s.radius_m,
+    qrImage: await QRCode.toDataURL(String(s.qr_code), { width: 600, margin: 2 }),
+  })));
+  res.json({ stores: out });
+}));
+
+// bater ponto (vendedora): QR da loja + GPS; tipo automático (entrada → saída)
 app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'seller') return res.status(403).json({ error: 'Recurso da vendedora.' });
   const { qr_code, lat, lng, accuracy } = req.body || {};
-  const cfg = await getPontoConfig();
-  if (String(qr_code || '').trim().toUpperCase() !== String(cfg.qr_code).trim().toUpperCase())
-    return res.status(400).json({ error: 'QR inválido. Escaneie o QR da loja.' });
+  const code = String(qr_code || '').trim().toUpperCase();
+  // QR identifica a loja (Sede, Magé, Guapimirim)
+  let stores = [];
+  try { stores = await db.all('SELECT * FROM stores WHERE active=1'); } catch {}
+  let store = stores.find((s) => String(s.qr_code).trim().toUpperCase() === code) || null;
+  if (!store) {
+    // compatibilidade: QR legado da sede
+    try {
+      const cfg = await getPontoConfig();
+      if (code === String(cfg.qr_code).trim().toUpperCase())
+        store = { id: await sedeId(), name: cfg.store_name || 'Sede', lat: cfg.lat, lng: cfg.lng, radius_m: cfg.radius_m || 150 };
+    } catch {}
+  }
+  if (!store) return res.status(400).json({ error: 'QR inválido. Escaneie o QR da loja.' });
   const nLat = Number(lat);
   const nLng = Number(lng);
   if (!Number.isFinite(nLat) || !Number.isFinite(nLng)) return res.status(400).json({ error: 'Ative a localização para bater o ponto.' });
-  if (cfg.lat == null || cfg.lng == null) return res.status(500).json({ error: 'Loja sem localização cadastrada. Fale com o admin.' });
+  if (store.lat == null || store.lng == null) return res.status(500).json({ error: `Loja ${store.name} sem localização cadastrada. Fale com o admin.` });
   const acc = accuracy == null || accuracy === '' ? null : Number(accuracy);
   if (acc != null && Number.isFinite(acc) && acc > 200)
     return res.status(400).json({ error: 'Sinal de GPS fraco. Aproxime-se da entrada e tente de novo.' });
-  const dist = haversineM(nLat, nLng, Number(cfg.lat), Number(cfg.lng));
-  if (dist > Number(cfg.radius_m || 150))
-    return res.status(403).json({ error: `Você está a ${Math.round(dist)}m da loja (raio ${cfg.radius_m}m). Aproxime-se para bater o ponto.` });
+  const dist = haversineM(nLat, nLng, Number(store.lat), Number(store.lng));
+  if (dist > Number(store.radius_m || 150))
+    return res.status(403).json({ error: `Você está a ${Math.round(dist)}m da loja ${store.name} (raio ${store.radius_m}m). Aproxime-se para bater o ponto.` });
   const today = todayISO();
   const now = new Date().toISOString();
   let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   if (!p) {
-    await db.run('INSERT INTO punches (seller_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?)',
-      req.user.id, today, now, nLat, nLng, acc);
+    await db.run('INSERT INTO punches (seller_id, store_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?,?)',
+      req.user.id, store.id, today, now, nLat, nLng, acc);
     p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
     const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
-    return res.status(201).json({ type: 'in', punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
+    return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
   }
   if (p.check_in_at && !p.check_out_at) {
     if (Date.parse(now) - Date.parse(p.check_in_at) < 3 * 60000)
@@ -829,17 +1049,33 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
   res.json({ date: today, punch: p ? punchCalc(p, !!hol) : null, is_holiday: !!hol });
 }));
 
-// relatório do dia (admin) + sugestão automática de feriado
-app.get('/api/ponto/dia', requireAuth, requireAdmin, ah(async (req, res) => {
+// relatório do dia (admin/gerente) + feriado automático
+app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   const date = req.query.date || todayISO();
+  const { store_id } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
   let hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
-  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const sellers = await db.all(
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
+    ...(scope.storeId != null ? [scope.storeId] : [])
+  );
+  const storeNames = {};
+  const punchStore = async (p) => {
+    if (!p || !p.store_id) return 'Sede';
+    if (!storeNames[p.store_id]) {
+      const st = await getStore(p.store_id);
+      storeNames[p.store_id] = st ? st.name : 'Sede';
+    }
+    return storeNames[p.store_id];
+  };
   const buildRows = async (isHol) => Promise.all(sellers.map(async (s) => {
     const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', s.id, date);
     return {
-      seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null,
-      punch: p ? punchCalc(p, isHol) : null,
+      seller_id: s.id, name: s.name, sector: s.sector || 'online',
+      store_id: s.store_id, store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
+      punch: p ? { ...punchCalc(p, isHol), punch_store: await punchStore(p) } : null,
     };
   }));
   let rows = await buildRows(!!hol);
@@ -887,11 +1123,16 @@ app.delete('/api/ponto/feriados/:date', requireAuth, requireAdmin, ah(async (req
   res.json({ ok: true });
 }));
 
-// resumo mensal de extras (admin)
-app.get('/api/ponto/resumo', requireAuth, requireAdmin, ah(async (req, res) => {
+// resumo mensal de extras (admin/gerente)
+app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) => {
   const month = req.query.month || todayISO().slice(0, 7);
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido.' });
-  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY name");
+  const scope = scopedStoreId(req, req.query.store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const sellers = await db.all(
+    `SELECT * FROM users WHERE role='seller' AND active=1${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY name`,
+    ...(scope.storeId != null ? [scope.storeId] : [])
+  );
   const hols = await db.all('SELECT date FROM holidays WHERE date LIKE ?', `${month}%`);
   const holSet = new Set(hols.map((h) => h.date));
   const rows = await Promise.all(sellers.map(async (s) => {
@@ -911,10 +1152,14 @@ app.get('/api/ponto/resumo', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ month, rows, total_extra_min: rows.reduce((a, r) => a + r.extra_min, 0), total_extra_label: fmtDur(rows.reduce((a, r) => a + r.extra_min, 0)) });
 }));
 
-// correção manual (admin): HH:MM no horário de SP
-app.put('/api/ponto/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const p = await db.get('SELECT * FROM punches WHERE id=?', req.params.id);
+// correção manual (admin/gerente): HH:MM no horário de SP
+app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
+  const p = await db.get(
+    'SELECT pu.*, u.store_id AS seller_store FROM punches pu JOIN users u ON u.id=pu.seller_id WHERE pu.id=?', req.params.id
+  );
   if (!p) return res.status(404).json({ error: 'Registro não encontrado.' });
+  if (req.user.role === 'manager' && Number(p.seller_store) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
   const { check_in_hhmm, check_out_hhmm } = req.body || {};
   const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
   if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return res.status(400).json({ error: 'Horário inválido (use HH:MM).' });
@@ -928,11 +1173,16 @@ app.put('/api/ponto/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol) });
 }));
 
-// lançamento manual / contingência (admin): cria ou ajusta o dia sem QR/GPS
-app.post('/api/ponto/manual', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { seller_id, date, check_in_hhmm, check_out_hhmm } = req.body || {};
+// lançamento manual / contingência (admin/gerente): cria ou ajusta o dia sem QR/GPS
+app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) => {
+  const { seller_id, date, check_in_hhmm, check_out_hhmm, store_id } = req.body || {};
   const seller = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", Number(seller_id));
   if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  if (req.user.role === 'manager' && Number(seller.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const punchStoreId = scope.storeId != null ? scope.storeId : (seller.store_id || await sedeId());
   const d = date || todayISO();
   if (!isValidDate(d)) return res.status(400).json({ error: 'Data inválida.' });
   const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
@@ -943,16 +1193,16 @@ app.post('/api/ponto/manual', requireAuth, requireAdmin, ah(async (req, res) => 
   const outISO = check_out_hhmm ? toISO(check_out_hhmm) : null;
   if (outISO && Date.parse(outISO) <= Date.parse(inISO)) return res.status(400).json({ error: 'Saída deve ser depois da entrada.' });
   await db.run(
-    `INSERT INTO punches (seller_id, date, check_in_at, check_out_at) VALUES (?,?,?,?)
-     ON CONFLICT(seller_id, date) DO UPDATE SET check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, updated_at=datetime('now')`,
-    seller.id, d, inISO, outISO
+    `INSERT INTO punches (seller_id, store_id, date, check_in_at, check_out_at) VALUES (?,?,?,?,?)
+     ON CONFLICT(seller_id, date) DO UPDATE SET store_id=excluded.store_id, check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, updated_at=datetime('now')`,
+    seller.id, punchStoreId, d, inISO, outISO
   );
   const hol = await db.get('SELECT * FROM holidays WHERE date=?', d);
   res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol) });
 }));
 
 // ---------- STATS ----------
-async function summarize(from, to, sellerId) {
+async function summarize(from, to, sellerId, storeId) {
   const p = [];
   let callWhere = '1=1';
   if (from) { callWhere += ' AND date >= ?'; p.push(from); }
@@ -960,6 +1210,9 @@ async function summarize(from, to, sellerId) {
   let calls = 0;
   if (sellerId) {
     const r = await db.get(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE seller_id=? AND ${callWhere}`, sellerId, ...p);
+    calls = Number(r.t);
+  } else if (storeId != null) {
+    const r = await db.get(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE seller_id IN (SELECT id FROM users WHERE store_id=?) AND ${callWhere}`, storeId, ...p);
     calls = Number(r.t);
   } else {
     const r = await db.get(`SELECT COALESCE(SUM(quantity),0) AS t FROM call_records WHERE ${callWhere}`, ...p);
@@ -970,6 +1223,7 @@ async function summarize(from, to, sellerId) {
   let saleWhere = '1=1';
   if (from) { saleWhere += ' AND s.sale_date >= ?'; sp.push(from); }
   if (to) { saleWhere += ' AND s.sale_date <= ?'; sp.push(to); }
+  if (storeId != null) { saleWhere += ' AND s.store_id = ?'; sp.push(storeId); }
   const creditSel = 'SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE ' + saleWhere;
   const creditParams = [...sp];
   if (sellerId) { creditParams.push(sellerId); }
@@ -1015,12 +1269,27 @@ async function summarize(from, to, sellerId) {
 }
 
 app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
-  const { from, to, seller_id, sector } = req.query;
-  const sid = req.user.role === 'admin' ? (seller_id ? Number(seller_id) : null) : req.user.id;
-  if (req.user.role === 'admin' && !seller_id && validSector(sector)) {
-    // agregado do setor: vendas contam inteiras e uma única vez
+  const { from, to, seller_id, sector, store_id } = req.query;
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const storeId = scope.storeId;
+  let sid = null;
+  if (req.user.role === 'seller') sid = req.user.id;
+  else if (seller_id) {
+    sid = Number(seller_id);
+    if (req.user.role === 'manager') {
+      const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", sid);
+      if (!t || Number(t.store_id) !== Number(req.user.store_id))
+        return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+    }
+  }
+  if ((req.user.role === 'admin' || req.user.role === 'manager') && !sid && validSector(sector)) {
+    // agregado do setor (+ loja): vendas contam inteiras e uma única vez
     // (mesmo divididas entre 2 vendedoras do setor ou com outro setor).
-    const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 AND COALESCE(sector,'online')=?", sector);
+    const sellers = await db.all(
+      `SELECT * FROM users WHERE role='seller' AND active=1 AND COALESCE(sector,'online')=?${storeId != null ? ' AND store_id=?' : ''}`,
+      sector, ...(storeId != null ? [storeId] : [])
+    );
     const sids = sellers.map((s) => s.id);
     if (!sids.length) {
       return res.json({ calls: 0, salesCredit: 0, whatsapp: 0, crm: 0, presencial: 0, records: 0, waRecords: 0, crmRecords: 0, presRecords: 0, conversion: null });
@@ -1031,6 +1300,7 @@ app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
     let dw = inSector;
     if (from) { dw += ' AND s.sale_date >= ?'; dp.push(from); }
     if (to) { dw += ' AND s.sale_date <= ?'; dp.push(to); }
+    if (storeId != null) { dw += ' AND s.store_id = ?'; dp.push(storeId); }
     const cnt = async (ch) => {
       const r = await db.get(
         `SELECT COUNT(DISTINCT s.id) AS t FROM sales s WHERE ${dw}${ch ? ' AND s.channel=?' : ''}`,
@@ -1046,7 +1316,7 @@ app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
     const calls = Number(callsRow.t);
     const credSum = async (ch) => {
       const r = await db.get(
-        `SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE sp.seller_id IN (${ph})${from ? ' AND s.sale_date >= ?' : ''}${to ? ' AND s.sale_date <= ?' : ''}${ch ? ' AND s.channel=?' : ''}`,
+        `SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s ON s.id=sp.sale_id WHERE sp.seller_id IN (${ph})${from ? ' AND s.sale_date >= ?' : ''}${to ? ' AND s.sale_date <= ?' : ''}${storeId != null ? ' AND s.store_id = ?' : ''}${ch ? ' AND s.channel=?' : ''}`,
         ...sids, ...dp, ...(ch ? [ch] : [])
       );
       return Number(r.t);
@@ -1061,19 +1331,22 @@ app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
       conversion: calls > 0 ? (records / calls) * 100 : null,
     });
   }
-  res.json(await summarize(from || null, to || null, sid));
+  res.json(await summarize(from || null, to || null, sid, storeId));
 }));
 
-app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { from, to, sector } = req.query;
-  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
+app.get('/api/stats/ranking', requireAuth, requireManager, ah(async (req, res) => {
+  const { from, to, sector, store_id } = req.query;
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(u.sector,\'online\')=?' : '';
+  const storeFilter = scope.storeId != null ? ' AND u.store_id=?' : '';
   const sellers = await db.all(
-    `SELECT * FROM users WHERE role='seller' AND active=1${sectorFilter} ORDER BY name`,
-    ...(validSector(sector) ? [sector] : [])
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${sectorFilter}${storeFilter} ORDER BY u.name`,
+    ...(validSector(sector) ? [sector] : []), ...(scope.storeId != null ? [scope.storeId] : [])
   );
   const rows = await Promise.all(sellers.map(async (s) => {
-    const st = await summarize(from || null, to || null, s.id);
-    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', avatar_url: s.avatar_url || null, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, presencial: st.presencial, conversion: st.conversion };
+    const st = await summarize(from || null, to || null, s.id, scope.storeId);
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_id: s.store_id, store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null, calls: st.calls, sales: st.salesCredit, whatsapp: st.whatsapp, crm: st.crm, presencial: st.presencial, conversion: st.conversion };
   }));
   rows.sort((a, b) => b.sales - a.sales || b.calls - a.calls);
   res.json({ ranking: rows });
@@ -1081,7 +1354,13 @@ app.get('/api/stats/ranking', requireAuth, requireAdmin, ah(async (req, res) => 
 
 app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   const targetId = Number(req.params.id);
-  if (req.user.role !== 'admin' && targetId !== req.user.id) return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role !== 'admin' && req.user.role !== 'manager' && targetId !== req.user.id)
+    return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role === 'manager') {
+    const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", targetId);
+    if (!t || Number(t.store_id) !== Number(req.user.store_id))
+      return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  }
   const { from, to, cfrom, cto } = req.query;
   const current = await summarize(from || null, to || null, targetId);
   const compare = (cfrom || cto) ? await summarize(cfrom || null, cto || null, targetId) : null;
@@ -1121,16 +1400,22 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   });
 }));
 
-app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
+app.get('/api/report/daily', requireAuth, requireManager, ah(async (req, res) => {
   const date = req.query.date || todayISO();
-  const { sector } = req.query;
+  const { sector, store_id } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
-  const sectorFilter = validSector(sector) ? ' AND COALESCE(sector,\'online\')=?' : '';
-  const sectorParam = validSector(sector) ? [sector] : [];
-  const sellers = await db.all(`SELECT * FROM users WHERE role='seller' AND active=1${sectorFilter} ORDER BY name`, ...sectorParam);
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(u.sector,\'online\')=?' : '';
+  const storeFilter = scope.storeId != null ? ' AND u.store_id=?' : '';
+  const extraParams = [...(validSector(sector) ? [sector] : []), ...(scope.storeId != null ? [scope.storeId] : [])];
+  const sellers = await db.all(
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${sectorFilter}${storeFilter} ORDER BY u.name`,
+    ...extraParams
+  );
   const allRows = await Promise.all(sellers.map(async (s) => {
-    const st = await summarize(date, date, s.id);
-    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', calls: st.calls, sales: st.salesCredit };
+    const st = await summarize(date, date, s.id, scope.storeId);
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_name: s.store_name || 'Sede', calls: st.calls, sales: st.salesCredit };
   }));
   const summary = {
     calls: allRows.reduce((a, r) => a + r.calls, 0),
@@ -1138,34 +1423,41 @@ app.get('/api/report/daily', requireAuth, requireAdmin, ah(async (req, res) => {
     records: 0,
   };
   if (!validSector(sector)) {
-    const full = await summarize(date, date, null);
+    const full = await summarize(date, date, null, scope.storeId);
     summary.records = full.records;
+    summary.waRecords = full.waRecords;
+    summary.crmRecords = full.crmRecords;
+    summary.presRecords = full.presRecords;
   } else {
     const sids = sellers.map((s) => s.id);
     if (sids.length) {
       const ph = sids.map(() => '?').join(',');
-      const c = await db.get(`SELECT COUNT(DISTINCT s.id) AS t FROM sales s JOIN sale_participants sp ON sp.sale_id=s.id WHERE s.sale_date=? AND sp.seller_id IN (${ph})`, date, ...sids);
+      const c = await db.get(
+        `SELECT COUNT(DISTINCT s.id) AS t FROM sales s JOIN sale_participants sp ON sp.sale_id=s.id WHERE s.sale_date=? AND sp.seller_id IN (${ph})${scope.storeId != null ? ' AND s.store_id=?' : ''}`,
+        date, ...sids, ...(scope.storeId != null ? [scope.storeId] : [])
+      );
       summary.records = Number(c.t);
     }
   }
   const ranking = allRows.filter((r) => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
   // detalhamento alfabético por vendedora (relatório WhatsApp) — inclui todas, mesmo zeradas
-  const roster = await db.all(`SELECT * FROM users WHERE role='seller'${sectorFilter} ORDER BY name`, ...sectorParam);
+  const roster = sellers;
   const details = await Promise.all(roster.map(async (s) => {
-    const st = await summarize(date, date, s.id);
+    const st = await summarize(date, date, s.id, scope.storeId);
     const rows = await db.all(
-      'SELECT s.* FROM sales s JOIN sale_participants spf ON spf.sale_id=s.id AND spf.seller_id=? WHERE s.sale_date=? ORDER BY s.id',
-      s.id, date
+      `SELECT s.* FROM sales s JOIN sale_participants spf ON spf.sale_id=s.id AND spf.seller_id=? WHERE s.sale_date=?${scope.storeId != null ? ' AND s.store_id=?' : ''} ORDER BY s.id`,
+      s.id, date, ...(scope.storeId != null ? [scope.storeId] : [])
     );
     const sales = await Promise.all(rows.map(async (sale) => {
       const full = await saleWithParticipants(sale);
       const me = full.participants.find((p) => p.seller_id === s.id);
       const partners = full.participants.filter((p) => p.seller_id !== s.id).map((p) => p.seller_name);
-      return { product: sale.product, channel: sale.channel, credit: Number(me ? me.credit : 0), partners };
+      return { product: sale.product, channel: sale.channel, store_name: full.store_name, credit: Number(me ? me.credit : 0), partners };
     }));
-    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', active: !!s.active, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_name: s.store_name || 'Sede', active: !!s.active, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
   }));
-  res.json({ date, sector: validSector(sector) ? sector : 'all', summary, ranking, details });
+  const storeName = scope.storeId != null ? ((await getStore(scope.storeId)) || {}).name || '' : '';
+  res.json({ date, sector: validSector(sector) ? sector : 'all', store: storeName, summary, ranking, details });
 }));
 
 // SPA fallback
