@@ -303,7 +303,7 @@ const THEME_DARKS = {
   roxo:     { name: 'Roxo',     brand: '#4c1d95', brand2: '#5f27b8' },
   caramelo: { name: 'Caramelo', brand: '#6f4a1f', brand2: '#8a5f28' },
   azul:     { name: 'Azul',     brand: '#1e3a8a', brand2: '#2b4fa3' },
-  preta:    { name: 'Preta',    brand: '#111111', brand2: '#2b2b2b' },
+  preta:    { name: 'Preta',    brand: '#000000', brand2: '#1c1c1c' },
 };
 const THEME_LIGHTS = {
   classico: { name: 'Clássico', accent: '#1e6b4e', soft: '#e7f0e8', weak: '#e2efe5', onAccent: '#ffffff', lime: '#cdf14d' },
@@ -313,7 +313,7 @@ const THEME_LIGHTS = {
   bege:     { name: 'Bege',     accent: '#d9c193', soft: '#faf5e9', weak: '#f4ecda', onAccent: '#0f1f17', lime: '#eab308' },
   pessego:  { name: 'Pêssego',  accent: '#f2b28c', soft: '#fdf0e4', weak: '#fbe9d7', onAccent: '#0f1f17', lime: '#fb923c' },
   amarelo:  { name: 'Amarelo',  accent: '#eed36a', soft: '#fbf3da', weak: '#f8eed2', onAccent: '#0f1f17', lime: '#facc15' },
-  cinza:    { name: 'Cinza',    accent: '#9aa0a8', soft: '#f1f2f4', weak: '#e4e6ea', onAccent: '#0f1f17', lime: '#6b7280' },
+  cinza:    { name: 'Cinza',    accent: '#c9ced5', soft: '#f5f6f8', weak: '#eceef1', onAccent: '#0f1f17', lime: '#9aa0a8' },
 };
 function mergedTheme(darkId, lightId) {
   const d = THEME_DARKS[darkId] || THEME_DARKS.verde;
