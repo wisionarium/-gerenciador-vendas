@@ -31,6 +31,13 @@ const fmtInt = (n) => (Number(n) || 0).toLocaleString('pt-BR');
 const fmtPct = (n) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%');
 const fmtBRL = (cents) => ((Number(cents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtDateBR = (iso) => { if (!iso) return '—'; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+const WEEKDAYS_BR = ['Domingo', 'Segunda Feira', 'Terça Feira', 'Quarta Feira', 'Quinta Feira', 'Sexta Feira', 'Sábado'];
+const weekdayBR = (iso) => {
+  if (!iso) return '';
+  const dt = new Date(iso + 'T12:00:00');
+  return isNaN(dt) ? '' : WEEKDAYS_BR[dt.getDay()];
+};
+const fmtDateBRWeek = (iso) => (weekdayBR(iso) ? `${fmtDateBR(iso)} - ${weekdayBR(iso)}` : fmtDateBR(iso));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
 const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
@@ -911,7 +918,7 @@ async function viewConfig(app, back = '#/vendedora') {
 function staffPunchRow(x, showDate = true) {
   return `
   <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBR(x.date)}` : fmtDateBR(x.date)}</span><br>
+    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span><br>
     <span style="font-size:13px">Entrada: ${x.in_hhmm || '—'} • Saída: ${x.out_hhmm || '—'}</span></span>
     <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}</span>
   </div></div>`;
