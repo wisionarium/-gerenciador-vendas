@@ -437,16 +437,20 @@ async function migrateTableChecks() {
     catch { return ''; }
   };
   const noFK = async (fn) => {
-    if (isRemote) return fn();
+    // vale também no remoto (Turso): o client HTTP mantém sessão e o PRAGMA persiste.
+    // Sem isso, DROP TABLE de tabela referenciada (users) aborta com SQLITE_CONSTRAINT.
     try { await run('PRAGMA foreign_keys=OFF'); } catch {}
     try { return await fn(); }
-    finally { try { await run('PRAGMA foreign_keys=ON'); } catch {} }
+    finally { if (!isRemote) { try { await run('PRAGMA foreign_keys=ON'); } catch {} } }
   };
   // users: aceita perfil 'manager' (rebuild preservando dados)
   try {
     const st = await once('users-manager-role',
       async () => !(await tableSQL('users')).includes('manager'),
       async () => {
+        // saneamento prévio: NULLs que violariam o NOT NULL da tabela nova
+        try { await run('UPDATE users SET active=1 WHERE active IS NULL'); } catch {}
+        try { await run("UPDATE users SET role='seller' WHERE role IS NULL OR role NOT IN ('admin','seller','manager')"); } catch {}
         await noFK(async () => {
           try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
           await run(`CREATE TABLE users_new (

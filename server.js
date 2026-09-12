@@ -778,7 +778,18 @@ app.get('/api/maintenance/db-health', requireAuth, requireAdmin, ah(async (req, 
   }
   let ledger = [];
   try { ledger = await db.all('SELECT * FROM migrations ORDER BY name'); } catch {}
-  res.json({ health, migrations: ledger });
+  const counts = {};
+  for (const [k, sql] of [
+    ['users', 'SELECT COUNT(*) AS c FROM users'],
+    ['sales', 'SELECT COUNT(*) AS c FROM sales'],
+    ['sale_participants', 'SELECT COUNT(*) AS c FROM sale_participants'],
+    ['commissions', 'SELECT COUNT(*) AS c FROM commissions'],
+    ['punches', 'SELECT COUNT(*) AS c FROM punches'],
+  ]) {
+    try { counts[k] = Number((await db.get(sql)).c); }
+    catch (e) { counts[k] = 'erro: ' + String(e.message).slice(0, 120); }
+  }
+  res.json({ health, migrations: ledger, counts });
 }));
 
 // verificação retroativa (admin, só leitura): recalcula a comissão de cada venda
