@@ -18,6 +18,9 @@ const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // ---------- helpers ----------
 const todayISO = () => new Date().toISOString().slice(0, 10);
+// data de São Paulo (UTC-3): a frase do dia e o sorteio seguem o dia local,
+// não o UTC do servidor (que vira o dia 3h antes, à meia-noite não — às 21h).
+const todaySP = () => new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
 const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !isNaN(Date.parse(s));
 const toPublicUser = (u) => ({
   id: u.id, name: u.name, email: u.email, role: u.role, sector: u.sector || 'online',
@@ -356,9 +359,9 @@ function bankPhrase(list, dateISO) {
   return list[n % list.length].text;
 }
 
-// ---------- PHRASES (frase do dia) ----------
+// ---------- PHRASES (frase do dia: uma sorteada por dia, igual para todos) ----------
 app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
-  const today = todayISO();
+  const today = todaySP();
   const drawn = await drawnSeller(today);
   const dp = await db.get(
     'SELECT dp.*, u.name AS author_name FROM daily_phrases dp JOIN users u ON u.id=dp.seller_id WHERE dp.date=?', today
@@ -380,7 +383,7 @@ app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
 
 // frase do dia escrita pela sorteada (máx. 140 caracteres)
 app.post('/api/phrases/daily', requireAuth, ah(async (req, res) => {
-  const today = todayISO();
+  const today = todaySP();
   const drawn = await drawnSeller(today);
   if (!drawn) return res.status(400).json({ error: 'Nenhuma vendedora ativa.' });
   if (req.user.id !== drawn.id && req.user.role !== 'admin')

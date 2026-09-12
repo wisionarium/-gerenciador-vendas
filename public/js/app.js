@@ -940,9 +940,9 @@ async function viewStaff(app) {
         <div class="seller-hi" style="flex:1">Olá, ${esc(me.name.split(' ')[0])}</div>
       </div>
       <div style="text-align:center;color:#fff;font-size:17px;font-weight:700;margin-top:10px">${p ? `Hoje: ${p.in_hhmm || '--:--'} - Saída: ${p.out_hhmm || '--:--'}` : 'Hoje: sem registro ainda'}</div>
-      <div class="card" style="background:#fff;text-align:center;margin:12px 4px 0;border:none">
-        <div class="muted" style="font-size:12px">Hora extra total:</div>
-        <div class="mono" style="font-size:26px;font-weight:800">${fmtDurLocal(totalExtra)}</div>
+      <div class="card" style="background:#fff;text-align:center;margin:12px 4px 0;border:none;color:#111">
+        <div style="font-size:12px;color:#4b5563">Hora extra total:</div>
+        <div class="mono" style="font-size:26px;font-weight:800;color:#111">${fmtDurLocal(totalExtra)}</div>
       </div>
     </div>
     <div class="phrase"><div class="phrase-title">Frase do dia:</div>
