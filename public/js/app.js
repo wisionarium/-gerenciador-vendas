@@ -99,6 +99,7 @@ const ICONS = {
   doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l5 5V20.5H7z"/><path d="M14 3.5V9h5"/></svg>',
   chart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21V10h4v11zm7 0V3h4v18zm7 0v-7h4v7z"/></svg>',
   team: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
 };
 function setNav() {
   const u = store.user;
@@ -123,7 +124,8 @@ function setNav() {
       <a href="#/admin" title="Início">${ICONS.home}</a>
       <a href="#/admin/vendas" title="Vendas">${ICONS.tag}</a>
       ${fab}
-      <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>`;
+      <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
+      <a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
   } else {
     nav.innerHTML = `
       <a href="#/vendedora" title="Início">${ICONS.home}</a>

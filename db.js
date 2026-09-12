@@ -238,10 +238,32 @@ if (isRemote) {
     return rs.rows.map((r) => Object.fromEntries(r.map((v, i) => [cols[i], v])));
   };
 
-  all = async (sql, ...params) => toObjects(await client.execute({ sql, args: params }));
+  // Vercel ↔ Turso às vezes derruba a conexão (ECONNRESET/TLS/timeout).
+  // Retenta só falha de TRANSPORTE (3 tentativas, backoff 200/500ms).
+  // Erro de lógica SQL (ex: CONSTRAINT) falha rápido, sem retry.
+  const isTransportError = (e) => {
+    const msg = String((e && e.message) || e || '') + ' ' + String((e && e.cause && e.cause.message) || '');
+    return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|socket disconnected|TLS|network|terminated|timeout|input error/i.test(msg)
+      && !/SQLITE_CONSTRAINT|UNIQUE|CHECK constraint|no such (table|column)/i.test(msg);
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const execTurso = async (sql, params, attempt = 1) => {
+    try {
+      return await client.execute({ sql, args: params });
+    } catch (e) {
+      if (attempt < 3 && isTransportError(e)) {
+        console.log(`[db] retry Turso (tentativa ${attempt + 1}/3): ${String(e.message || e).slice(0, 100)}`);
+        await sleep(attempt === 1 ? 200 : 500);
+        return execTurso(sql, params, attempt + 1);
+      }
+      throw e;
+    }
+  };
+
+  all = async (sql, ...params) => toObjects(await execTurso(sql, params));
   get = async (sql, ...params) => (await all(sql, ...params))[0];
   run = async (sql, ...params) => {
-    const rs = await client.execute({ sql, args: params });
+    const rs = await execTurso(sql, params);
     return { lastInsertRowid: Number(rs.lastInsertRowid ?? 0) };
   };
   console.log('[db] Modo remoto: Turso');

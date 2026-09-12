@@ -110,7 +110,7 @@ function requireAdmin(req, res, next) {
 app.post('/api/auth/login', ah(async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Informe e-mail e senha.' });
-  const user = await db.get('SELECT * FROM users WHERE lower(email) = lower(?)', String(email).trim());
+  const user = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE lower(u.email) = lower(?)', String(email).trim());
   if (!user) return res.status(401).json({ error: 'Credenciais inválidas.' });
   if (!user.active) return res.status(403).json({ error: 'Usuária desativada. Fale com o administrador.' });
   const ok = bcrypt.compareSync(String(password), user.password_hash);
