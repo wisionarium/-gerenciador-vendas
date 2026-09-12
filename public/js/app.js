@@ -1542,7 +1542,10 @@ async function tabPontoLoja(body) {
 async function tabPontoDia(body, t) {
   const isManager = store.user?.role === 'manager';
   let stores = [];
-  try { stores = (await api('/api/stores')).stores; } catch {}
+  // gerente não tem o seletor de loja (travado na dele) — e /api/stores é só-admin
+  if (!isManager) {
+    try { stores = (await api('/api/stores')).stores; } catch {}
+  }
   body.innerHTML = `
     <div class="card">
       <div class="row" style="flex-wrap:nowrap;align-items:end">
