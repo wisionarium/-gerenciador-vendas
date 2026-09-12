@@ -407,8 +407,30 @@ async function autoArchive() {
     console.log(`[db] Arquivo automático: ${nSales} venda(s), ${nCalls} chamada(s), ${nCanceled} cancelada(s) (antes de ${cutoff}).`);
 }
 
-// Rebuild idempotente de CHECKs antigos (canal 'Presencial' e comissões flexíveis).
+// Migrações com ledger: cada uma roda UMA única vez (registrada em `migrations`).
+// À prova de serverless: passos ordenados + temporário com DROP IF EXISTS — se duas
+// instâncias coincidirem, uma completa e a outra aborta sem corromper (retry OK).
 // Funciona no SQLite local e no Turso (só DDL/DML padrão).
+async function ensureLedger() {
+  try { await run('CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime(\'now\')))'); } catch {}
+}
+async function migrationDone(name) {
+  try { const r = await get('SELECT name FROM migrations WHERE name=?', name); return !!r; }
+  catch { return false; }
+}
+async function markMigration(name) {
+  try { await run('INSERT INTO migrations (name) VALUES (?) ON CONFLICT(name) DO NOTHING', name); } catch {}
+}
+async function once(name, neededFn, fn) {
+  await ensureLedger();
+  if (await migrationDone(name)) return 'skipped';
+  let needed = true;
+  try { needed = await neededFn(); } catch { needed = true; }
+  if (!needed) { await markMigration(name); return 'skipped'; }
+  await fn();
+  await markMigration(name);
+  return 'applied';
+}
 async function migrateTableChecks() {
   const tableSQL = async (name) => {
     try { const r = await get("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", name); return r ? r.sql : ''; }
@@ -422,11 +444,12 @@ async function migrateTableChecks() {
   };
   // users: aceita perfil 'manager' (rebuild preservando dados)
   try {
-    const sql = await tableSQL('users');
-    if (sql && sql.includes("'admin','seller'") && !sql.includes('manager')) {
-      await noFK(async () => {
-        try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
-        await run(`CREATE TABLE users_new (
+    const st = await once('users-manager-role',
+      async () => !(await tableSQL('users')).includes('manager'),
+      async () => {
+        await noFK(async () => {
+          try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
+          await run(`CREATE TABLE users_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
           email TEXT NOT NULL UNIQUE,
@@ -440,20 +463,22 @@ async function migrateTableChecks() {
         )`);
         await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, active, created_at)
           SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, active, created_at FROM users`);
-        await run('DROP TABLE users');
-        await run('ALTER TABLE users_new RENAME TO users');
-        try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
-      });
-      console.log('[db] Migração: perfil gerente aplicado.');
-    }
+          await run('DROP TABLE users');
+          await run('ALTER TABLE users_new RENAME TO users');
+          try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
+        });
+      }
+    );
+    if (st === 'applied') console.log('[db] Migração: perfil gerente aplicada.');
   } catch (e) { console.log('[db] Migração gerente pulada:', e.message); }
   // sales: aceita canal 'Presencial'
   try {
-    const sql = await tableSQL('sales');
-    if (sql && !sql.includes('Presencial')) {
-      await noFK(async () => {
-        try { await run('DROP TABLE IF EXISTS sales_new'); } catch {}
-        await run(`CREATE TABLE sales_new (
+    const st = await once('sales-presencial-channel',
+      async () => !(await tableSQL('sales')).includes('Presencial'),
+      async () => {
+        await noFK(async () => {
+          try { await run('DROP TABLE IF EXISTS sales_new'); } catch {}
+          await run(`CREATE TABLE sales_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           customer_name TEXT NOT NULL,
           product TEXT NOT NULL,
@@ -469,21 +494,23 @@ async function migrateTableChecks() {
         )`);
         await run(`INSERT INTO sales_new (id, customer_name, product, color, channel, created_by, sale_date, store_id, is_bonus, bonus_cents, created_at, updated_at)
           SELECT id, customer_name, product, color, channel, created_by, sale_date, store_id, COALESCE(is_bonus,0), bonus_cents, created_at, updated_at FROM sales`);
-        await run('DROP TABLE sales');
-        await run('ALTER TABLE sales_new RENAME TO sales');
-        await run('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date)');
-        try { await run("UPDATE sqlite_sequence SET name='sales' WHERE name='sales_new'"); } catch {}
-      });
-      console.log('[db] Migração: canal Presencial aplicado.');
-    }
+          await run('DROP TABLE sales');
+          await run('ALTER TABLE sales_new RENAME TO sales');
+          await run('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date)');
+          try { await run("UPDATE sqlite_sequence SET name='sales' WHERE name='sales_new'"); } catch {}
+        });
+      }
+    );
+    if (st === 'applied') console.log('[db] Migração: canal Presencial aplicada.');
   } catch (e) { console.log('[db] Migração canal pulada:', e.message); }
   // commissions: CHECK flexível (qualquer valor > 0: 3500/1750 e bônus)
   try {
-    const sql = await tableSQL('commissions');
-    if (sql && sql.includes('IN (2500')) {
-      await noFK(async () => {
-        try { await run('DROP TABLE IF EXISTS commissions_new'); } catch {}
-        await run(`CREATE TABLE commissions_new (
+    const st = await once('commissions-flex-check',
+      async () => !(await tableSQL('commissions')).includes('amount_cents > 0'),
+      async () => {
+        await noFK(async () => {
+          try { await run('DROP TABLE IF EXISTS commissions_new'); } catch {}
+          await run(`CREATE TABLE commissions_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           sale_id INTEGER NOT NULL,
           seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -494,12 +521,13 @@ async function migrateTableChecks() {
         )`);
         await run(`INSERT INTO commissions_new (id, sale_id, seller_id, month, amount_cents, created_at)
           SELECT id, sale_id, seller_id, month, amount_cents, created_at FROM commissions`);
-        await run('DROP TABLE commissions');
-        await run('ALTER TABLE commissions_new RENAME TO commissions');
-        await run('CREATE INDEX IF NOT EXISTS idx_comm_seller_month ON commissions(seller_id, month)');
-      });
-      console.log('[db] Migração: comissões flexíveis aplicada.');
-    }
+          await run('DROP TABLE commissions');
+          await run('ALTER TABLE commissions_new RENAME TO commissions');
+          await run('CREATE INDEX IF NOT EXISTS idx_comm_seller_month ON commissions(seller_id, month)');
+        });
+      }
+    );
+    if (st === 'applied') console.log('[db] Migração: comissões flexíveis aplicada.');
   } catch (e) { console.log('[db] Migração comissões pulada:', e.message); }
 }
 

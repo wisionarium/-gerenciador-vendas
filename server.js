@@ -92,7 +92,7 @@ async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Não autenticado.' });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = await db.get('SELECT * FROM users WHERE id = ?', payload.id);
+    const user = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id = ?', payload.id);
     if (!user || !user.active) return res.status(401).json({ error: 'Usuário inválido ou desativado.' });
     req.user = user;
     next();
@@ -133,7 +133,7 @@ app.put('/api/me/avatar', requireAuth, ah(async (req, res) => {
       return res.status(400).json({ error: 'Imagem inválida. Use uma foto JPG/PNG comum.' });
   }
   await db.run('UPDATE users SET avatar_url=? WHERE id=?', avatar || null, sid);
-  const u = await db.get('SELECT * FROM users WHERE id=?', sid);
+  const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', sid);
   if (!u) return res.status(404).json({ error: 'Usuária não encontrada.' });
   res.json({ user: toPublicUser(u) });
 }));
@@ -209,7 +209,7 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   try {
     const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, active) VALUES (?,?,?,?,?,?,1)',
       name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId);
-    const u = await db.get('SELECT * FROM users WHERE id=?', r.lastInsertRowid);
+    const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'E-mail já cadastrado.' });
@@ -247,7 +247,7 @@ app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
       await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
     }
-    const u = await db.get('SELECT * FROM users WHERE id=?', target.id);
+    const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', target.id);
     res.json({ user: toPublicUser(u) });
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'E-mail já cadastrado.' });
@@ -261,7 +261,7 @@ app.patch('/api/users/:id/status', requireAuth, requireAdmin, ah(async (req, res
   if (target.id === req.user.id) return res.status(400).json({ error: 'Você não pode desativar a si mesma.' });
   const { active } = req.body || {};
   await db.run('UPDATE users SET active=? WHERE id=?', active ? 1 : 0, target.id);
-  const u = await db.get('SELECT * FROM users WHERE id=?', target.id);
+  const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', target.id);
   res.json({ user: toPublicUser(u) });
 }));
 
@@ -303,6 +303,7 @@ const THEME_DARKS = {
   roxo:     { name: 'Roxo',     brand: '#4c1d95', brand2: '#5f27b8' },
   caramelo: { name: 'Caramelo', brand: '#6f4a1f', brand2: '#8a5f28' },
   azul:     { name: 'Azul',     brand: '#1e3a8a', brand2: '#2b4fa3' },
+  preta:    { name: 'Preta',    brand: '#111111', brand2: '#2b2b2b' },
 };
 const THEME_LIGHTS = {
   classico: { name: 'Clássico', accent: '#1e6b4e', soft: '#e7f0e8', weak: '#e2efe5', onAccent: '#ffffff', lime: '#cdf14d' },
@@ -312,6 +313,7 @@ const THEME_LIGHTS = {
   bege:     { name: 'Bege',     accent: '#d9c193', soft: '#faf5e9', weak: '#f4ecda', onAccent: '#0f1f17', lime: '#eab308' },
   pessego:  { name: 'Pêssego',  accent: '#f2b28c', soft: '#fdf0e4', weak: '#fbe9d7', onAccent: '#0f1f17', lime: '#fb923c' },
   amarelo:  { name: 'Amarelo',  accent: '#eed36a', soft: '#fbf3da', weak: '#f8eed2', onAccent: '#0f1f17', lime: '#facc15' },
+  cinza:    { name: 'Cinza',    accent: '#9aa0a8', soft: '#f1f2f4', weak: '#e4e6ea', onAccent: '#0f1f17', lime: '#6b7280' },
 };
 function mergedTheme(darkId, lightId) {
   const d = THEME_DARKS[darkId] || THEME_DARKS.verde;
@@ -757,6 +759,26 @@ app.post('/api/maintenance/archive', requireAuth, requireAdmin, ah(async (req, r
     nCanceled++;
   }
   res.json({ ok: true, cutoff, truncated: oldSales.length >= BATCH || oldCalls.length >= BATCH, archived: { sales: nSales, calls: nCalls, canceled: nCanceled } });
+}));
+
+// saúde do banco (admin, só leitura): tabelas, colunas, checks e ledger de migrações.
+// Serve para inspecionar o banco de produção pelo navegador, sem adivinhar.
+app.get('/api/maintenance/db-health', requireAuth, requireAdmin, ah(async (req, res) => {
+  const tables = ['users', 'stores', 'sales', 'sale_participants', 'commissions', 'payouts',
+    'seller_goals', 'phrases', 'seller_settings', 'daily_phrases', 'ponto_config', 'holidays',
+    'punches', 'canceled_sales', 'archived_sales', 'archived_calls', 'archived_canceled',
+    'holiday_skips', 'migrations'];
+  const health = {};
+  for (const t of tables) {
+    try {
+      const cols = await db.all(`SELECT name FROM pragma_table_info('${t}')`);
+      const row = await db.get("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", t);
+      health[t] = { columns: cols.map((c) => c.name), has_manager_role: t === 'users' ? !!(row && row.sql && row.sql.includes('manager')) : undefined };
+    } catch (e) { health[t] = { error: String(e.message).slice(0, 200) }; }
+  }
+  let ledger = [];
+  try { ledger = await db.all('SELECT * FROM migrations ORDER BY name'); } catch {}
+  res.json({ health, migrations: ledger });
 }));
 
 // verificação retroativa (admin, só leitura): recalcula a comissão de cada venda
