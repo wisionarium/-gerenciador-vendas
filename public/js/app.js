@@ -1124,9 +1124,7 @@ function modalSale(sellers, stores) {
       <label>Participantes (1 a 3) *</label>
       <details class="tray" id="pTray">
         <summary id="pTraySum">Selecionar participantes…</summary>
-        <div class="check-list" id="plist">
-          ${sellers.filter((s) => s.active !== false).map((s) => `<div class="check ${preselected.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)} ${s.store_name && s.store_name !== 'Sede' ? storeTag(s.store_name) : ''}</div>`).join('')}
-        </div>
+        <div class="check-list" id="plist"></div>
       </details>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:10px"><input type="checkbox" id="sBonus" style="width:auto"> ⭐ Valor exclusivo (bônus de modelo especial)</label>
       <div id="sBonusBox" style="display:none">
@@ -1153,19 +1151,40 @@ function modalSale(sellers, stores) {
       ? '<p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p>'
       : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base) + ' • ' + esc(sStoreName())} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
   };
-  $('#sStore').onchange = refreshSalePreview;
+  $('#sStore').onchange = () => { loadEligible(); refreshSalePreview(); };
+  $('#sDate').onchange = loadEligible;
+  // chip da participante: visitante mostra a loja de origem (ex.: Sede) mesmo sendo Sede
+  const plistChip = (s, on) => `<div class="check${on ? ' on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}${s.visitor || (s.store_name && s.store_name !== 'Sede') ? ` ${storeTag(s.store_name || 'Sede')}` : ''}</div>`;
+  const renderPlist = (list) => {
+    const keep = new Set($$('#plist .check.on').map((c) => Number(c.dataset.id)));
+    const vis = list.filter((s) => s.active !== false);
+    $('#plist').innerHTML = vis.length
+      ? vis.map((s) => plistChip(s, keep.has(Number(s.id)) || preselected.includes(s.id))).join('')
+      : '<div class="empty">Ninguém elegível (sem nativas nem ponto nesta data).</div>';
+    syncTray();
+  };
+  const syncTray = () => {
+    const sel = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim());
+    $('#pTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
+    refreshSalePreview();
+  };
+  // gerente: só nativas da loja + visitantes com ponto lá na data (admin vê todas)
+  const loadEligible = async () => {
+    if (me.role !== 'manager') { renderPlist(sellers); return; }
+    try {
+      const { sellers: elig } = await api(`/api/sellers/eligible?store_id=${$('#sStore').value}&date=${$('#sDate').value || todayISO()}`);
+      renderPlist(elig);
+    } catch (e) { renderPlist(sellers.filter((s) => Number(s.store_id) === Number(me.store_id))); }
+  };
   $('#sBonus').onchange = () => { $('#sBonusBox').style.display = $('#sBonus').checked ? 'block' : 'none'; refreshSalePreview(); };
   $('#sBonusVal').oninput = refreshSalePreview;
   $('#plist').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
     if ($$('#plist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
-    const sel = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim());
-    $('#pTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
-    refreshSalePreview();
+    syncTray();
   };
-  $('#pTraySum').textContent = $$('#plist .check.on').map((x) => x.dataset.name || x.textContent.trim()).join(', ') || 'Selecionar participantes…';
-  refreshSalePreview();
+  loadEligible();
   $('#fSale').onsubmit = async (e) => {
     e.preventDefault();
     const pids = $$('#plist .check.on').map((c) => Number(c.dataset.id));
@@ -1251,9 +1270,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
       <label>Participantes (1 a 3) *</label>
       <details class="tray" id="eTray">
         <summary id="eTraySum">Selecionar participantes…</summary>
-        <div class="check-list" id="eplist">
-          ${sellers.filter((s) => s.active !== false || selIds.includes(s.id)).map((s) => `<div class="check ${selIds.includes(s.id) ? 'on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)} ${s.store_name && s.store_name !== 'Sede' ? storeTag(s.store_name) : ''}</div>`).join('')}
-        </div>
+        <div class="check-list" id="eplist"></div>
       </details>
       <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:10px"><input type="checkbox" id="eBonus" style="width:auto" ${wasBonus ? 'checked' : ''}> ⭐ Valor exclusivo (bônus de modelo especial)</label>
       <div id="eBonusBox" style="display:${wasBonus ? 'block' : 'none'}">
@@ -1280,19 +1297,41 @@ function modalEditSale(sale, sellers, stores, onSaved) {
       ? '<p class="muted" style="margin:0;font-size:13px">Selecione as participantes para ver a comissão.</p>'
       : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base) + ' • ' + esc(eStoreName())} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
   };
-  $('#eStore').onchange = refreshEditPreview;
+  $('#eStore').onchange = () => { loadEligibleE(); refreshEditPreview(); };
+  $('#eDate').onchange = loadEligibleE;
+  const eplistChip = (s, on) => `<div class="check${on ? ' on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}${s.visitor || (s.store_name && s.store_name !== 'Sede') ? ` ${storeTag(s.store_name || 'Sede')}` : ''}</div>`;
+  const renderEplist = (list) => {
+    const keep = new Set([...$$('#eplist .check.on').map((c) => Number(c.dataset.id)), ...selIds]);
+    const pinned = sellers.filter((s) => selIds.includes(Number(s.id)) && !list.some((x) => Number(x.id) === Number(s.id)));
+    const vis = [...pinned, ...list].filter((s) => s.active !== false || selIds.includes(Number(s.id)));
+    $('#eplist').innerHTML = vis.length
+      ? vis.map((s) => eplistChip(s, keep.has(Number(s.id)))).join('')
+      : '<div class="empty">Ninguém elegível (sem nativas nem ponto nesta data).</div>';
+    syncTrayE();
+  };
+  const syncTrayE = () => {
+    const sel = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim());
+    $('#eTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
+    refreshEditPreview();
+  };
+  // gerente: só nativas da loja + visitantes com ponto lá na data (admin vê todas);
+  // quem já está na venda continua selecionável mesmo se sair do filtro
+  const loadEligibleE = async () => {
+    if (me.role !== 'manager') { renderEplist(sellers); return; }
+    try {
+      const { sellers: elig } = await api(`/api/sellers/eligible?store_id=${$('#eStore').value}&date=${$('#eDate').value || sale.sale_date}`);
+      renderEplist(elig);
+    } catch (e) { renderEplist(sellers.filter((s) => Number(s.store_id) === Number(me.store_id))); }
+  };
   $('#eBonus').onchange = () => { $('#eBonusBox').style.display = $('#eBonus').checked ? 'block' : 'none'; refreshEditPreview(); };
   $('#eBonusVal').oninput = refreshEditPreview;
   $('#eplist').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
     if ($$('#eplist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
-    const sel = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim());
-    $('#eTraySum').textContent = sel.length ? sel.join(', ') : 'Selecionar participantes…';
-    refreshEditPreview();
+    syncTrayE();
   };
-  $('#eTraySum').textContent = $$('#eplist .check.on').map((x) => x.dataset.name || x.textContent.trim()).join(', ') || 'Selecionar participantes…';
-  refreshEditPreview();
+  loadEligibleE();
   $('#fEditSale').onsubmit = async (e) => {
     e.preventDefault();
     const pids = $$('#eplist .check.on').map((c) => Number(c.dataset.id));

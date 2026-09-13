@@ -155,6 +155,44 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
   return res.json({ sellers: rows.map(toPublicUser) });
 }));
 
+// elegíveis p/ participar de venda na loja+data: nativas ativas + visitantes
+// (vendedoras de outra loja com check-in na loja na data). Só vendedoras.
+async function eligibleSellerIds(storeId, dateISO) {
+  const natives = await db.all(
+    "SELECT id FROM users WHERE role='seller' AND active=1 AND store_id=?", storeId
+  ).catch(() => []);
+  const ids = new Set(natives.map((r) => r.id));
+  if (isValidDate(dateISO)) {
+    const rows = await db.all(
+      `SELECT DISTINCT p.seller_id AS id FROM punches p JOIN users u ON u.id=p.seller_id
+       WHERE p.store_id=? AND p.date=? AND p.check_in_at IS NOT NULL AND u.role='seller' AND u.active=1`,
+      storeId, dateISO
+    ).catch(() => []);
+    for (const r of rows) ids.add(r.id);
+  }
+  return ids;
+}
+
+// lista elegível p/ o seletor de participantes (gerente trava na própria loja)
+app.get('/api/sellers/eligible', requireAuth, requireManager, ah(async (req, res) => {
+  const { store_id, date } = req.query;
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const storeId = scope.storeId ?? await sedeId();
+  const d = isValidDate(date) ? date : todayISO();
+  const ids = await eligibleSellerIds(storeId, d);
+  const homeIds = new Set((await db.all(
+    "SELECT id FROM users WHERE role='seller' AND active=1 AND store_id=?", storeId
+  ).catch(() => [])).map((r) => r.id));
+  if (!ids.size) return res.json({ sellers: [], store_id: storeId, date: d });
+  const ph = [...ids].map(() => '?').join(',');
+  const rows = await db.all(
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id IN (${ph}) ORDER BY u.name`,
+    [...ids]
+  );
+  res.json({ sellers: rows.map((u) => ({ ...toPublicUser(u), visitor: !homeIds.has(u.id) })), store_id: storeId, date: d });
+}));
+
 // ---------- LOJAS ----------
 app.get('/api/stores', requireAuth, ah(async (req, res) => {
   let rows = [];
@@ -606,6 +644,12 @@ app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
   const placeholders = pids.map(() => '?').join(',');
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
+  // gerente: só nativas da loja ou visitantes com ponto lá na data da venda
+  if (req.user.role !== 'admin') {
+    const ok = await eligibleSellerIds(store.id, date);
+    if (pids.some((id) => !ok.has(Number(id))))
+      return res.status(403).json({ error: 'Participante não é da loja nem bateu ponto lá nesta data.' });
+  }
 
   const bonus = parseBonus(req.body);
   if (bonus.error) return res.status(400).json({ error: bonus.error });
@@ -687,6 +731,12 @@ app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
     store = sid ? await getStore(sid) : null;
   }
   if (!store) return res.status(400).json({ error: 'Loja inválida.' });
+  // gerente: só nativas da loja ou visitantes com ponto lá na data da venda
+  if (req.user.role !== 'admin') {
+    const ok = await eligibleSellerIds(store.id, date);
+    if (pids.some((id) => !ok.has(Number(id))))
+      return res.status(403).json({ error: 'Participante não é da loja nem bateu ponto lá nesta data.' });
+  }
 
   const bonus = parseBonus(req.body);
   if (bonus.error) return res.status(400).json({ error: bonus.error });
