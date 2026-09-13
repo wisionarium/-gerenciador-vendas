@@ -1332,10 +1332,6 @@ async function viewAdmin(app) {
   app.innerHTML = `
     <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:4px 0">Visão geral${isManager ? ` <span class="muted" style="font-size:13px">• ${esc(store.user.store_name || '')}</span>` : ''}</h2><div class="row"><a class="btn" href="#/admin/ponto" style="text-decoration:none">🕒 Ponto</a>${isManager ? '' : '<a class="btn" href="#/admin/comissoes" style="text-decoration:none">💰 Comissões</a>'}</div></div>
     <div id="kpiWrap"><div class="card"><p class="muted">Carregando…</p></div></div>
-    ${isManager ? '' : `<div class="mini-pills" id="storePills">
-      <button data-st="" class="${!adminStore ? 'on' : ''}">Todas</button>
-      ${stores.map((s) => `<button data-st="${s.id}" class="${String(adminStore) === String(s.id) ? 'on' : ''}">${esc(s.name)}</button>`).join('')}
-    </div>`}
     ${periodPills(adminPeriod.key)}
     <div id="customRow" style="display:${adminPeriod.key === 'custom' ? 'block' : 'none'}" class="card">
       <div class="row"><div style="flex:1"><label>De</label><input type="date" id="fFrom" value="${adminPeriod.from || ''}"></div>
@@ -1343,16 +1339,13 @@ async function viewAdmin(app) {
       <div style="height:10px"></div><button class="btn btn-primary" id="applyCustom">Aplicar</button>
     </div>
     <div class="row" style="margin:10px 0">
-      <select id="fSeller" style="flex:1;max-width:240px"><option value="">Todas as vendedoras</option></select>
-      <select id="fSector" style="flex:1;max-width:200px"><option value="">Todos</option><option value="online" ${adminSector === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${adminSector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
+      <div style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Vendedores:</span><select id="fSeller" style="width:100%"><option value="">Todos os vendedores</option></select></div>
+      <div style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Online / Presencial:</span><select id="fSector" style="width:100%"><option value="">Todos</option><option value="online" ${adminSector === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${adminSector === 'presencial' ? 'selected' : ''}>Presencial</option></select></div>
+      ${isManager ? '' : `<div style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Empresa:</span><select id="fStore" style="width:100%"><option value="">Todas</option>${stores.map((s) => `<option value="${s.id}" ${String(adminStore) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>`}
     </div>
     <div id="rankWrap"></div>`;
-  const storePills = $('#storePills');
-  if (storePills) storePills.onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    adminStore = b.dataset.st; adminSeller = '';
-    route();
-  };
+  const fStoreEl = $('#fStore');
+  if (fStoreEl) fStoreEl.onchange = () => { adminStore = fStoreEl.value; adminSeller = ''; route(); };
   bindPeriodPills((p) => {
     if (p.key === 'custom') { adminPeriod = { key: 'custom', from: adminPeriod.from, to: adminPeriod.to }; route(); return; }
     adminPeriod = p; route();
@@ -1364,7 +1357,7 @@ async function viewAdmin(app) {
 
   const { sellers } = await api(`/api/sellers${adminSector ? `?sector=${adminSector}` : ''}`);
   const sel = $('#fSeller');
-  sel.innerHTML = `<option value="">Todas as vendedoras</option>` + sellers.map((s) => `<option value="${s.id}" ${String(adminSeller) === String(s.id) ? 'selected' : ''}>${esc(s.name)} (${sectorLabel(s.sector)})</option>`).join('');
+  sel.innerHTML = `<option value="">Todos os vendedores</option>` + sellers.map((s) => `<option value="${s.id}" ${String(adminSeller) === String(s.id) ? 'selected' : ''}>${esc(s.name)} (${sectorLabel(s.sector)})</option>`).join('');
   sel.onchange = () => { adminSeller = sel.value; loadAdminBody(); };
   $('#fSector').onchange = (e) => { adminSector = e.target.value; adminSeller = ''; route(); };
   await loadAdminBody();
