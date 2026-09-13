@@ -1935,13 +1935,43 @@ async function tabPontoFeriados(body) {
   await loadHols();
 }
 
+// máscara HH:MM ao digitar (0755 vira 07:55 na hora)
+function maskHHMM(input) {
+  if (!input) return;
+  input.addEventListener('input', () => {
+    const d = input.value.replace(/\D/g, '').slice(0, 4);
+    input.value = d.length > 2 ? d.slice(0, 2) + ':' + d.slice(2) : d;
+  });
+}
+const hhmmToMin = (s) => {
+  const parts = String(s || '').trim().split(':');
+  if (parts.length !== 2) return null;
+  const hh = Number(parts[0]), mm = Number(parts[1]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+};
+// regra 13h: entrada só até 12:59; horário >=13h com saída vazia vira saída
+// (para registrar a saída de quem esqueceu a entrada). Retorna {check_in, check_out} ou {error}.
+function splitEntryExit(inStr, outStr) {
+  const e = (inStr || '').trim(), s = (outStr || '').trim();
+  const eMin = e ? hhmmToMin(e) : null;
+  const sMin = s ? hhmmToMin(s) : null;
+  if (e && eMin == null) return { error: 'Entrada inválida (use HH:MM).' };
+  if (s && sMin == null) return { error: 'Saída inválida (use HH:MM).' };
+  if (!e && !s) return { error: 'Informe ao menos a entrada ou a saída.' };
+  if (e && eMin >= 13 * 60 && !s) return { check_in: null, check_out: e, moved: true };
+  if (e && eMin >= 13 * 60 && s) return { error: 'Entrada só até 12:59 — após 13h é saída (deixe a entrada vazia).' };
+  if (e && s && sMin <= eMin) return { error: 'Saída deve ser depois da entrada.' };
+  return { check_in: e || null, check_out: s || null, moved: false };
+}
+
 function modalManualPonto(sellerId, sellerName, date, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Lançar ponto — ${esc(sellerName)}</h3>
-    <p class="muted" style="font-size:13px">${esc(date)} — horário de São Paulo (HH:MM). Use quando o QR falhar.</p>
+    <p class="muted" style="font-size:13px">${esc(date)} — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Use quando o QR falhar.</p>
     <form id="fManual">
-      <label>Entrada *</label><input id="mIn" required placeholder="08:00" inputmode="numeric">
+      <label>Entrada (até 12:59)</label><input id="mIn" placeholder="08:00" inputmode="numeric">
       <label>Saída (vazio = só entrada)</label><input id="mOut" placeholder="18:00" inputmode="numeric">
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar</button>
@@ -1950,11 +1980,14 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  maskHHMM($('#mIn')); maskHHMM($('#mOut'));
   $('#fManual').onsubmit = async (e) => {
     e.preventDefault();
+    const t = splitEntryExit($('#mIn').value, $('#mOut').value);
+    if (t.error) return toast(t.error, 'err');
     try {
-      await api('/api/ponto/manual', { method: 'POST', body: JSON.stringify({ seller_id: sellerId, date, check_in_hhmm: $('#mIn').value.trim(), check_out_hhmm: $('#mOut').value.trim() || null }) });
-      closeModal(); toast('Ponto lançado!'); if (reload) reload();
+      await api('/api/ponto/manual', { method: 'POST', body: JSON.stringify({ seller_id: sellerId, date, check_in_hhmm: t.check_in, check_out_hhmm: t.check_out }) });
+      closeModal(); toast(t.moved ? 'Registrado como saída (após 13h é saída).' : 'Ponto lançado!'); if (reload) reload();
     } catch (err) { toast(err.message, 'err'); }
   };
 }
@@ -1963,9 +1996,9 @@ function modalFixPonto(p, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Corrigir ponto #${p.id}</h3>
-    <p class="muted" style="font-size:13px">${esc(p.date)} — horário de São Paulo (HH:MM). Apague a saída para deixar pendente.</p>
+    <p class="muted" style="font-size:13px">${esc(p.date)} — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Apague a saída para deixar pendente.</p>
     <form id="fFix">
-      <label>Entrada *</label><input id="fxIn" required placeholder="08:00" value="${esc(p.in_hhmm || '')}">
+      <label>Entrada (até 12:59)</label><input id="fxIn" placeholder="08:00" value="${esc(p.in_hhmm || '')}">
       <label>Saída (vazio = pendente)</label><input id="fxOut" placeholder="18:00" value="${esc(p.out_hhmm || '')}">
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar</button>
@@ -1974,11 +2007,14 @@ function modalFixPonto(p, reload) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  maskHHMM($('#fxIn')); maskHHMM($('#fxOut'));
   $('#fFix').onsubmit = async (e) => {
     e.preventDefault();
+    const t = splitEntryExit($('#fxIn').value, $('#fxOut').value);
+    if (t.error) return toast(t.error, 'err');
     try {
-      await api(`/api/ponto/${p.id}`, { method: 'PUT', body: JSON.stringify({ check_in_hhmm: $('#fxIn').value.trim(), check_out_hhmm: $('#fxOut').value.trim() || null }) });
-      closeModal(); toast('Ponto corrigido!'); if (reload) reload();
+      await api(`/api/ponto/${p.id}`, { method: 'PUT', body: JSON.stringify({ check_in_hhmm: t.check_in, check_out_hhmm: t.check_out }) });
+      closeModal(); toast(t.moved ? 'Registrado como saída (após 13h é saída).' : 'Ponto corrigido!'); if (reload) reload();
     } catch (err) { toast(err.message, 'err'); }
   };
 }

@@ -1236,6 +1236,25 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   res.json({ month, rows, total_extra_min: rows.reduce((a, r) => a + r.extra_min, 0), total_extra_label: fmtDur(rows.reduce((a, r) => a + r.extra_min, 0)) });
 }));
 
+// regra 13h (igual ao app): entrada só até 12:59; horário >=13h sem saída vira saída
+// (para registrar a saída de quem esqueceu a entrada). Retorna {inISO, outISO, moved} ou {error}.
+function normalizePunchTimes(dateISO, check_in_hhmm, check_out_hhmm) {
+  const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+  if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return { error: 'Horário inválido (use HH:MM).' };
+  let ci = (check_in_hhmm || '').trim() || null;
+  let co = (check_out_hhmm || '').trim() || null;
+  if (!ci && !co) return { error: 'Informe ao menos a entrada ou a saída.' };
+  const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+  let moved = false;
+  if (ci && toMin(ci) >= 13 * 60 && !co) { co = ci; ci = null; moved = true; }
+  if (ci && toMin(ci) >= 13 * 60) return { error: 'Entrada só até 12:59 — após 13h é saída.' };
+  const toISO = (hhmm) => new Date(`${dateISO}T${hhmm}:00-03:00`).toISOString();
+  const inISO = ci ? toISO(ci) : null;
+  const outISO = co ? toISO(co) : null;
+  if (inISO && outISO && Date.parse(outISO) <= Date.parse(inISO)) return { error: 'Saída deve ser depois da entrada.' };
+  return { inISO, outISO, moved };
+}
+
 // correção manual (admin/gerente): HH:MM no horário de SP
 app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   const p = await db.get(
@@ -1245,14 +1264,9 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (req.user.role === 'manager' && Number(p.seller_store) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
   const { check_in_hhmm, check_out_hhmm } = req.body || {};
-  const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
-  if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return res.status(400).json({ error: 'Horário inválido (use HH:MM).' });
-  if (!check_in_hhmm) return res.status(400).json({ error: 'Entrada é obrigatória.' });
-  const toISO = (hhmm) => new Date(`${p.date}T${hhmm}:00-03:00`).toISOString();
-  const inISO = toISO(check_in_hhmm);
-  const outISO = check_out_hhmm ? toISO(check_out_hhmm) : null;
-  if (outISO && Date.parse(outISO) <= Date.parse(inISO)) return res.status(400).json({ error: 'Saída deve ser depois da entrada.' });
-  await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, updated_at=datetime(\'now\') WHERE id=?', inISO, outISO, p.id);
+  const t = normalizePunchTimes(p.date, check_in_hhmm, check_out_hhmm);
+  if (t.error) return res.status(400).json({ error: t.error });
+  await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
   const hol = await db.get('SELECT * FROM holidays WHERE date=?', p.date);
   res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol) });
 }));
@@ -1269,17 +1283,12 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
   const punchStoreId = scope.storeId != null ? scope.storeId : (seller.store_id || await sedeId());
   const d = date || todayISO();
   if (!isValidDate(d)) return res.status(400).json({ error: 'Data inválida.' });
-  const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
-  if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return res.status(400).json({ error: 'Horário inválido (use HH:MM).' });
-  if (!check_in_hhmm) return res.status(400).json({ error: 'Entrada é obrigatória.' });
-  const toISO = (hhmm) => new Date(`${d}T${hhmm}:00-03:00`).toISOString();
-  const inISO = toISO(check_in_hhmm);
-  const outISO = check_out_hhmm ? toISO(check_out_hhmm) : null;
-  if (outISO && Date.parse(outISO) <= Date.parse(inISO)) return res.status(400).json({ error: 'Saída deve ser depois da entrada.' });
+  const t = normalizePunchTimes(d, check_in_hhmm, check_out_hhmm);
+  if (t.error) return res.status(400).json({ error: t.error });
   await db.run(
     `INSERT INTO punches (seller_id, store_id, date, check_in_at, check_out_at) VALUES (?,?,?,?,?)
      ON CONFLICT(seller_id, date) DO UPDATE SET store_id=excluded.store_id, check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, updated_at=datetime('now')`,
-    seller.id, punchStoreId, d, inISO, outISO
+    seller.id, punchStoreId, d, t.inISO, t.outISO
   );
   const hol = await db.get('SELECT * FROM holidays WHERE date=?', d);
   res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol) });
