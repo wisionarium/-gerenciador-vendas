@@ -85,7 +85,6 @@ const PERIODS = {
 };
 
 let adminPeriod = { key: 'mes', ...PERIODS.mes() };
-let adminChannel = '';
 
 let adminSeller = '';
 
@@ -1331,11 +1330,6 @@ async function viewAdmin(app) {
       <button data-st="" class="${!adminStore ? 'on' : ''}">Todas</button>
       ${stores.map((s) => `<button data-st="${s.id}" class="${String(adminStore) === String(s.id) ? 'on' : ''}">${esc(s.name)}</button>`).join('')}
     </div>`}
-    <div class="mini-pills" id="sectorPills">
-      <button data-s="" class="${!adminSector ? 'on' : ''}">Todos</button>
-      <button data-s="online" class="${adminSector === 'online' ? 'on' : ''}">Online</button>
-      <button data-s="presencial" class="${adminSector === 'presencial' ? 'on' : ''}">Presencial</button>
-    </div>
     ${periodPills(adminPeriod.key)}
     <div id="customRow" style="display:${adminPeriod.key === 'custom' ? 'block' : 'none'}" class="card">
       <div class="row"><div style="flex:1"><label>De</label><input type="date" id="fFrom" value="${adminPeriod.from || ''}"></div>
@@ -1344,18 +1338,13 @@ async function viewAdmin(app) {
     </div>
     <div class="row" style="margin:10px 0">
       <select id="fSeller" style="flex:1;max-width:240px"><option value="">Todas as vendedoras</option></select>
-      <select id="fChannel" style="flex:1;max-width:200px"><option value="">Todos os canais</option><option ${adminChannel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${adminChannel === 'CRM' ? 'selected' : ''}>CRM</option><option ${adminChannel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
+      <select id="fSector" style="flex:1;max-width:200px"><option value="">Todos</option><option value="online" ${adminSector === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${adminSector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
     </div>
     <div id="rankWrap"></div>`;
   const storePills = $('#storePills');
   if (storePills) storePills.onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     adminStore = b.dataset.st; adminSeller = '';
-    route();
-  };
-  $('#sectorPills').onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    adminSector = b.dataset.s; adminSeller = '';
     route();
   };
   bindPeriodPills((p) => {
@@ -1371,7 +1360,7 @@ async function viewAdmin(app) {
   const sel = $('#fSeller');
   sel.innerHTML = `<option value="">Todas as vendedoras</option>` + sellers.map((s) => `<option value="${s.id}" ${String(adminSeller) === String(s.id) ? 'selected' : ''}>${esc(s.name)} (${sectorLabel(s.sector)})</option>`).join('');
   sel.onchange = () => { adminSeller = sel.value; loadAdminBody(); };
-  $('#fChannel').onchange = (e) => { adminChannel = e.target.value; loadAdminBody(); };
+  $('#fSector').onchange = (e) => { adminSector = e.target.value; adminSeller = ''; route(); };
   await loadAdminBody();
 
   async function loadAdminBody() {
@@ -1386,10 +1375,7 @@ async function viewAdmin(app) {
       api(`/api/stats/ranking?${qs}${sectorQs}${storeQs}`),
     ]);
     const filtered = adminSeller ? ranking.ranking.filter((r) => String(r.seller_id) === String(adminSeller)) : ranking.ranking;
-    const chanVal = (r) => (adminChannel === 'WhatsApp' ? r.whatsapp : adminChannel === 'CRM' ? r.crm : r.presencial);
-    const withChannel = adminChannel
-      ? filtered.map((r) => ({ ...r, sales: chanVal(r) }))
-      : filtered;
+    const withChannel = filtered;
     kpi.innerHTML = `
       <p class="muted" style="margin:12px 0">${esc(adminPeriod.label || '')} • ${from ? fmtDateBR(from) : '…'} a ${to ? fmtDateBR(to) : '…'}</p>
       ${kpiCards(summary, '', !adminSeller)}
