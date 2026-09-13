@@ -149,7 +149,7 @@ function setNav() {
   const mark = (sel) => $$(sel).forEach((a) => {
     const href = a.getAttribute('href');
     if (!href) return;
-    a.classList.toggle('active', href === '#/admin' || href === '#/vendedora' ? h === href : h.startsWith(href));
+    a.classList.toggle('active', href === '#/admin' || href === '#/vendedora' || href === '#/funcionario' ? h === href : h.startsWith(href));
   });
   mark('#bottomNav a');
 }
