@@ -564,7 +564,9 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
   if (scope.storeId != null) { conds.push('s.store_id = ?'); params.push(scope.storeId); }
 
   let joinParticipant = '';
-  if (seller_id) {
+  // seller_id de outra pessoa: só admin/gerente. Vendedora/funcionária sempre vê só as próprias
+  // (antes, o parâmetro era aceito de qualquer logada — brecha via Inspecionar).
+  if (seller_id && (req.user.role === 'admin' || req.user.role === 'manager')) {
     joinParticipant = 'JOIN sale_participants spf ON spf.sale_id = s.id AND spf.seller_id = ?';
     params.unshift(Number(seller_id));
   } else if (req.user.role !== 'admin' && req.user.role !== 'manager') {
