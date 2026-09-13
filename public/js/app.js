@@ -1018,18 +1018,7 @@ async function viewHistory(app) {
     const qs = new URLSearchParams({ from: r.from, to: r.to });
     if ($('#hQ').value.trim()) qs.set('q', $('#hQ').value.trim());
     try {
-    const { sales } = await api(`/api/sales?${qs}`);
-    const totalEl = $('#saleTotal');
-    if (totalEl) {
-      if (sid) {
-        const total = sales.reduce((a, s) => a + (s.participants || [])
-          .filter((p) => String(p.seller_id) === String(sid))
-          .reduce((x, p) => x + Number(p.credit || 0), 0), 0);
-        totalEl.textContent = `Total de ${fmtV(total)} vendas.`;
-      } else {
-        totalEl.textContent = '';
-      }
-    }
+      const { sales } = await api(`/api/sales?${qs}`);
       const mine = sales.reduce((a, s) => a + s.participants.filter((p) => p.seller_id === me.id).reduce((x, p) => x + Number(p.credit), 0), 0);
       $('#hList').innerHTML = `
         <p class="muted" style="margin:4px 0 10px">${r.label} • ${sales.length} registro(s) • <b class="mono">${fmtV(mine)} vendas</b></p>
@@ -1527,6 +1516,17 @@ async function viewAllSales(app) {
     const stid = $('#fStoreSales')?.value || '';
     const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sid ? { seller_id: sid } : {}), ...(stid ? { store_id: stid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
+    const totalEl = $('#saleTotal');
+    if (totalEl) {
+      if (sid) {
+        const total = sales.reduce((a, s) => a + (s.participants || [])
+          .filter((p) => String(p.seller_id) === String(sid))
+          .reduce((x, p) => x + Number(p.credit || 0), 0), 0);
+        totalEl.textContent = `Total de ${fmtV(total)} vendas.`;
+      } else {
+        totalEl.textContent = '';
+      }
+    }
     $('#list').innerHTML = sales.length
       ? compactListHTML(sales, (s) => saleCard(s, `<button class="btn btn-ghost" style="font-size:12px;padding:6px 10px" data-edit="${s.id}">Editar</button> <button class="btn btn-ghost btn-del" style="font-size:12px;padding:6px 10px" data-del="${s.id}">Cancelar</button>`), 8)
       : '<div class="card empty">Não há vendas registradas neste período.</div>';
