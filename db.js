@@ -95,6 +95,14 @@ const SCHEMA = [
     text TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // sorteio da frase travado por dia: só vendedoras presentes (ponto até o corte),
+  // em round-robin pelo histórico (menos recentemente sorteada primeiro)
+  `CREATE TABLE IF NOT EXISTS daily_draws (
+    date TEXT PRIMARY KEY,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pool_size INTEGER NOT NULL DEFAULT 0,
+    locked_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
   // ponto: config da loja (linha única id=1) + feriados + batidas
   `CREATE TABLE IF NOT EXISTS ponto_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),

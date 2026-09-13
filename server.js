@@ -344,13 +344,67 @@ app.put('/api/settings/theme', requireAuth, ah(async (req, res) => {
   res.json({ dark, light, theme: mergedTheme(dark, light) });
 }));
 
-// rodízio diário: vendedora do dia = rotação entre as ativas
+// rodízio diário (prévia/fallback): rotação entre as vendedoras ativas
+// (todos os setores e lojas — só role='seller')
 async function drawnSeller(dateISO) {
   const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY id");
   if (!sellers.length) return null;
   const [y, mo, dd] = dateISO.split('-').map(Number);
   const n = Math.floor(Date.UTC(y, mo - 1, dd) / 86400000);
   return sellers[n % sellers.length];
+}
+
+// hora atual em São Paulo (HH:MM:SS) — mesmo fuso fixo do todaySP (UTC-3, sem DST)
+const nowSPTime = () => new Date(Date.now() - 3 * 3600e3).toISOString().slice(11, 19);
+const DRAW_CUTOFF = '07:59:59'; // trava o sorteio: só quem já bateu ponto até aqui
+const DRAW_FALLBACK = '08:00:00'; // vazio no corte? espera e sorteia entre presentes às 8h
+
+// sorteio da frase travado por dia: só vendedoras presentes (ponto até o corte),
+// em round-robin pelo histórico (menos recentemente sorteada primeiro; estreante na frente).
+// Retorna { seller, locked, preCutoff?, waiting? }. Idempotente e seguro p/ concorrência
+// (INSERT … ON CONFLICT DO NOTHING + releitura). Na Vercel o caminho preguiçoso
+// (a cada request) cobre o agendamento; no servidor local um timer antecipa a trava.
+async function ensureDraw(dateISO) {
+  const won = await db.get(
+    'SELECT u.* FROM daily_draws d JOIN users u ON u.id=d.seller_id WHERE d.date=?', dateISO
+  ).catch(() => null);
+  if (won) return { seller: won, locked: true };
+  const sellers = await db.all("SELECT * FROM users WHERE role='seller' AND active=1 ORDER BY id");
+  if (!sellers.length) return { seller: null, locked: false };
+  const nowT = nowSPTime();
+  if (nowT < DRAW_CUTOFF) {
+    return { seller: await drawnSeller(dateISO), locked: false, preCutoff: true };
+  }
+  // corte vigente: 07:59:59, ou 08:00:00 quando passou das 8h sem ninguém no corte
+  const cutoff = nowT < DRAW_FALLBACK ? DRAW_CUTOFF : DRAW_FALLBACK;
+  const cutoffMs = Date.parse(`${dateISO}T${cutoff}-03:00`);
+  const punches = await db.all(
+    'SELECT seller_id, check_in_at FROM punches WHERE date=? AND check_in_at IS NOT NULL', dateISO
+  ).catch(() => []);
+  const presentIds = new Set(
+    punches.filter((p) => Number.isFinite(Date.parse(p.check_in_at)) && Date.parse(p.check_in_at) <= cutoffMs)
+      .map((p) => p.seller_id)
+  );
+  let pool = sellers.filter((s) => presentIds.has(s.id));
+  if (!pool.length) {
+    if (nowT < DRAW_FALLBACK) return { seller: null, locked: false, waiting: true };
+    pool = sellers; // 8h e ninguém presente: rodízio geral p/ nunca ficar sem sorteada
+  }
+  const hist = await db.all('SELECT seller_id, MAX(date) AS last_date FROM daily_draws GROUP BY seller_id').catch(() => []);
+  const lastBy = Object.fromEntries(hist.map((h) => [h.seller_id, h.last_date || '']));
+  const ordered = [...pool].sort((a, b) => {
+    const la = lastBy[a.id] || '', lb = lastBy[b.id] || '';
+    return la < lb ? -1 : la > lb ? 1 : a.id - b.id;
+  });
+  const pick = ordered[0];
+  try {
+    await db.run('INSERT INTO daily_draws (date, seller_id, pool_size) VALUES (?,?,?) ON CONFLICT(date) DO NOTHING',
+      dateISO, pick.id, pool.length);
+  } catch {}
+  const final = await db.get(
+    'SELECT u.* FROM daily_draws d JOIN users u ON u.id=d.seller_id WHERE d.date=?', dateISO
+  ).catch(() => null);
+  return { seller: final || pick, locked: true };
 }
 
 function bankPhrase(list, dateISO) {
@@ -362,7 +416,8 @@ function bankPhrase(list, dateISO) {
 // ---------- PHRASES (frase do dia: uma sorteada por dia, igual para todos) ----------
 app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
   const today = todaySP();
-  const drawn = await drawnSeller(today);
+  const draw = await ensureDraw(today);
+  const drawn = draw.seller;
   const dp = await db.get(
     'SELECT dp.*, u.name AS author_name FROM daily_phrases dp JOIN users u ON u.id=dp.seller_id WHERE dp.date=?', today
   );
@@ -371,6 +426,7 @@ app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
       text: dp.text, author: dp.author_name, authorId: dp.seller_id, date: today,
       drawnSellerId: drawn ? drawn.id : null, drawnSellerName: drawn ? drawn.name : null,
       canWrite: drawn ? (req.user.id === drawn.id || req.user.role === 'admin') : false,
+      locked: draw.locked,
     });
   }
   // só vale a frase escrita pela vendedora (sem frase padrão/banco)
@@ -378,13 +434,14 @@ app.get('/api/phrases/today', requireAuth, ah(async (req, res) => {
     text: '', author: null, authorId: null, date: today,
     drawnSellerId: drawn ? drawn.id : null, drawnSellerName: drawn ? drawn.name : null,
     canWrite: drawn ? (req.user.id === drawn.id || req.user.role === 'admin') : false,
+    locked: draw.locked, preCutoff: !!draw.preCutoff, waiting: !!draw.waiting,
   });
 }));
 
 // frase do dia escrita pela sorteada (máx. 140 caracteres)
 app.post('/api/phrases/daily', requireAuth, ah(async (req, res) => {
   const today = todaySP();
-  const drawn = await drawnSeller(today);
+  const { seller: drawn } = await ensureDraw(today);
   if (!drawn) return res.status(400).json({ error: 'Nenhuma vendedora ativa.' });
   if (req.user.id !== drawn.id && req.user.role !== 'admin')
     return res.status(403).json({ error: `Hoje é o dia de ${drawn.name} escrever a frase.` });
@@ -1697,6 +1754,23 @@ if (require.main === module) {
       console.log(`[app] Rodando em http://localhost:${PORT}`);
       console.log('[app] Login admin: admin@equipe.com / admin123');
     });
+    // antecipa a trava do sorteio da frase (7:59:59 e 8h SP). Best-effort:
+    // o caminho preguiçoso em ensureDraw cobre reinícios e a Vercel.
+    const scheduleDraw = () => {
+      try {
+        const nowMs = Date.now();
+        const spNow = new Date(nowMs - 3 * 3600e3);
+        const midnightUTC = Date.UTC(spNow.getUTCFullYear(), spNow.getUTCMonth(), spNow.getUTCDate());
+        const targets = [midnightUTC + (7 * 3600 + 59 * 60 + 59) * 1000, midnightUTC + 8 * 3600 * 1000]
+          .map((t) => t + 3 * 3600e3); // de volta p/ relógio do servidor
+        const next = targets.find((t) => t > nowMs) ?? targets[0] + 86400000;
+        setTimeout(async () => {
+          try { await ensureDraw(todaySP()); } catch (e) { console.log('[draw] agendamento pulado:', e.message); }
+          scheduleDraw();
+        }, Math.max(1000, next - nowMs));
+      } catch {}
+    };
+    scheduleDraw();
   }).catch((e) => {
     console.error('[db] Falha ao inicializar:', e);
     process.exit(1);

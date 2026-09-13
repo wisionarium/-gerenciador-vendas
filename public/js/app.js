@@ -446,8 +446,10 @@ async function viewSeller(app) {
     </div>
     <div class="phrase"><div class="phrase-title">Frase do dia:</div>
       ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)} <button class="share-btn" id="sharePhrase" title="Compartilhar frase"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="10.7" x2="15.4" y2="6.3"/><line x1="8.6" y1="13.3" x2="15.4" y2="17.7"/></svg></button></div>` : ''}
-      ${!phraseRes.author && phraseRes.canWrite ? `<button class="btn btn-accent" id="writePhrase">✍️ Hoje é seu dia! Escrever a frase</button>` : ''}
-      ${!phraseRes.author && !phraseRes.canWrite && phraseRes.drawnSellerName ? `<div class="muted" style="font-size:12px;margin-top:8px">Aguardando ${esc(phraseRes.drawnSellerName.split(' ')[0])} escrever…</div>` : ''}
+      ${!phraseRes.author && phraseRes.canWrite && phraseRes.locked !== false ? `<button class="btn btn-accent" id="writePhrase">✍️ Hoje é seu dia! Escrever a frase</button>` : ''}
+      ${!phraseRes.author && !phraseRes.canWrite && phraseRes.locked !== false && phraseRes.drawnSellerName ? `<div class="muted" style="font-size:12px;margin-top:8px">Aguardando ${esc(phraseRes.drawnSellerName.split(' ')[0])} escrever…</div>` : ''}
+      ${!phraseRes.author && phraseRes.preCutoff ? `<div class="muted" style="font-size:12px;margin-top:8px">🕗 Sorteio às 8h entre quem já bateu ponto.</div>` : ''}
+      ${!phraseRes.author && phraseRes.waiting ? `<div class="muted" style="font-size:12px;margin-top:8px">Aguardando o primeiro ponto para sortear…</div>` : ''}
     </div>
     <div class="mini-pills" id="homePills">
       <button data-k="hoje" class="on">Hoje</button>
@@ -952,7 +954,11 @@ async function viewStaff(app) {
       </div>
     </div>
     <div class="phrase"><div class="phrase-title">Frase do dia:</div>
-      ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>` : `<div class="muted" style="font-size:12px">Ainda não publicada hoje.</div>`}
+      ${phraseRes.author ? `<div class="phrase-text">“${esc(phraseRes.text)}”</div><div class="phrase-author">— ${esc(phraseRes.author)}</div>`
+        : phraseRes.preCutoff ? `<div class="muted" style="font-size:12px">🕗 Sorteio às 8h entre quem já bateu ponto.</div>`
+        : phraseRes.waiting ? `<div class="muted" style="font-size:12px">Aguardando o primeiro ponto para sortear…</div>`
+        : phraseRes.drawnSellerName ? `<div class="muted" style="font-size:12px">Aguardando ${esc(phraseRes.drawnSellerName.split(' ')[0])} escrever…</div>`
+        : `<div class="muted" style="font-size:12px">Ainda não publicada hoje.</div>`}
     </div>
     <div class="mini-pills"><button class="on" style="pointer-events:none">Recente</button></div>
     <div id="staffRecent">${recent.length ? recent.map((x) => staffPunchRow(x, false)).join('') : '<div class="card empty">Nenhum ponto recente.</div>'}</div>
