@@ -1018,7 +1018,18 @@ async function viewHistory(app) {
     const qs = new URLSearchParams({ from: r.from, to: r.to });
     if ($('#hQ').value.trim()) qs.set('q', $('#hQ').value.trim());
     try {
-      const { sales } = await api(`/api/sales?${qs}`);
+    const { sales } = await api(`/api/sales?${qs}`);
+    const totalEl = $('#saleTotal');
+    if (totalEl) {
+      if (sid) {
+        const total = sales.reduce((a, s) => a + (s.participants || [])
+          .filter((p) => String(p.seller_id) === String(sid))
+          .reduce((x, p) => x + Number(p.credit || 0), 0), 0);
+        totalEl.textContent = `Total de ${fmtV(total)} vendas.`;
+      } else {
+        totalEl.textContent = '';
+      }
+    }
       const mine = sales.reduce((a, s) => a + s.participants.filter((p) => p.seller_id === me.id).reduce((x, p) => x + Number(p.credit), 0), 0);
       $('#hList').innerHTML = `
         <p class="muted" style="margin:4px 0 10px">${r.label} • ${sales.length} registro(s) • <b class="mono">${fmtV(mine)} vendas</b></p>
@@ -1505,6 +1516,7 @@ async function viewAllSales(app) {
       <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
       <button class="btn btn-primary" id="go">Filtrar</button>
     </div></div>
+    <div id="saleTotal" class="muted" style="margin:12px 4px 0;font-size:13px"></div>
     <div id="list" style="margin-top:12px"><div class="card"><p class="muted">Carregando…</p></div></div>`;
   try {
     const { sellers } = await api('/api/sellers');
