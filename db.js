@@ -566,14 +566,36 @@ async function migrateTableChecks() {
 }
 
 // Lojas: Sede herda QR/localização/raio atuais (nada muda para quem já usa);
-// Magé e Guapimirim nascem com QR próprio e raio 150m (admin ajusta local no painel).
+// Magé e Guapimirim nascem com QR próprio, pin exato do Google Maps (Supra Bike)
+// e raio 200m (admin pode refinar no painel; o boot só corrige se estiver vazio
+// ou a mais de ~30m do pin correto — evita voltar ao "meio do mato").
+const STORE_PINS = {
+  // Supra Bike Magé — Av. Simão da Motta, 324 - Centro (pin do Google Maps)
+  'Magé': { lat: -22.660877, lng: -43.0353822, radius_m: 200 },
+  // Supra Bike Guapimirim — Av. Dedo de Deus, 720 - Centro (pin do Google Maps)
+  'Guapimirim': { lat: -22.5272307, lng: -42.9830801, radius_m: 200 },
+};
 async function seedStores() {
   try {
     const cfg = await get('SELECT * FROM ponto_config WHERE id=1');
     await run('INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO NOTHING',
       'Sede', 'SEDE', (cfg && cfg.qr_code) || 'PONTO-LOJA-01', cfg ? cfg.lat : null, cfg ? cfg.lng : null, (cfg && cfg.radius_m) || 150);
-    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Magé','MAGE','PONTO-MAGE-01',NULL,NULL,150) ON CONFLICT(name) DO NOTHING");
-    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Guapimirim','GUAPI','PONTO-GUAPI-01',NULL,NULL,150) ON CONFLICT(name) DO NOTHING");
+    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Magé','MAGE','PONTO-MAGE-01',?,?,?) ON CONFLICT(name) DO NOTHING",
+      STORE_PINS['Magé'].lat, STORE_PINS['Magé'].lng, STORE_PINS['Magé'].radius_m);
+    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Guapimirim','GUAPI','PONTO-GUAPI-01',?,?,?) ON CONFLICT(name) DO NOTHING",
+      STORE_PINS['Guapimirim'].lat, STORE_PINS['Guapimirim'].lng, STORE_PINS['Guapimirim'].radius_m);
+    // corrige filiais com local vazio ou grosseiramente errado (>~30m do pin),
+    // sem apagar um ajuste fino futuro feito pelo admin no painel
+    for (const [name, pin] of Object.entries(STORE_PINS)) {
+      try {
+        await run(
+          `UPDATE stores SET lat=?, lng=?, radius_m=? WHERE name=?
+           AND (lat IS NULL OR lng IS NULL OR radius_m IS NULL OR radius_m != ?
+             OR ABS(lat - ?) > 0.0003 OR ABS(lng - ?) > 0.0003)`,
+          pin.lat, pin.lng, pin.radius_m, name, pin.radius_m, pin.lat, pin.lng
+        );
+      } catch {}
+    }
   } catch (e) { console.log('[db] Seed lojas pulado:', e.message); }
 }
 

@@ -1656,11 +1656,12 @@ async function tabPontoLoja(body) {
             </div>
             <div id="geores-${s.id}" style="margin-top:6px;font-size:13px"></div>
             <div style="height:10px"></div>
-            <b style="font-size:13px">3) Manual (do Google Maps)</b>
+            <b style="font-size:13px">3) Manual — cole do Google Maps</b><br>
+            <span class="muted" style="font-size:12px">No Maps: segure o dedo na porta da loja → Compartilhar → copie as coordenadas.</span>
             <div class="row" style="margin-top:4px">
               <div style="flex:1"><input id="geolat-${s.id}" inputmode="decimal" placeholder="Latitude"></div>
               <div style="flex:1"><input id="geolng-${s.id}" inputmode="decimal" placeholder="Longitude"></div>
-              <div style="flex:0 1 90px"><input id="georad-${s.id}" type="number" min="30" max="2000" value="${s.radius_m ?? 150}" title="Raio (m)"></div>
+              <div style="flex:0 1 90px"><input id="georad-${s.id}" type="number" min="30" max="2000" value="${s.radius_m ?? 200}" title="Raio (m)"></div>
             </div>
             <div style="height:6px"></div>
             <button class="btn btn-accent" data-geosave="${s.id}">Salvar localização</button>
@@ -1688,8 +1689,10 @@ async function tabPontoLoja(body) {
       const usesave = e.target.closest('[data-geousesave]');
       if (usesave) {
         const s = byId[usesave.dataset.geousesave];
+        const radInput = $(`#georad-${s.id}`);
+        const rad = radInput ? Number(radInput.value || s.radius_m || 200) : Number(s.radius_m ?? 200);
         try {
-          await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat: Number(usesave.dataset.lat), lng: Number(usesave.dataset.lng), radius_m: s.radius_m ?? 150 }) });
+          await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat: Number(usesave.dataset.lat), lng: Number(usesave.dataset.lng), radius_m: rad }) });
           toast(`Localização da ${s.name} salva!`);
           tabPontoLoja(body);
         } catch (err) { toast(err.message, 'err'); }
@@ -1703,14 +1706,19 @@ async function tabPontoLoja(body) {
         if (cep.length !== 8) { out.innerHTML = `<span style="color:var(--red)">Digite os 8 números do CEP.</span>`; return; }
         out.innerHTML = `<span class="muted">Buscando CEP…</span>`;
         try {
-          const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&countrycodes=br&postalcode=${cep}&limit=1`, { headers: { Accept: 'application/json' } });
+          // 1) ViaCEP resolve o CEP para logradouro/bairro/cidade (o Nominatim sozinho
+          // erra feio com só "postalcode" no BR); 2) geocodifica o endereço completo
+          const vc = await (await fetch(`https://viacep.com.br/ws/${cep}/json/`)).json();
+          if (vc.erro) { out.innerHTML = `<span style="color:var(--red)">CEP não encontrado. Confira o número ou use o modo manual.</span>`; return; }
+          const q = [vc.logradouro, vc.bairro, `${vc.localidade} - ${vc.uf}`, 'Brasil'].filter(Boolean).join(', ');
+          const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&countrycodes=br&q=${encodeURIComponent(q)}&limit=1`, { headers: { Accept: 'application/json' } });
           const j = await r.json();
-          if (!j.length) { out.innerHTML = `<span style="color:var(--red)">CEP não encontrado. Confira o número ou use o modo manual.</span>`; return; }
+          if (!j.length) { out.innerHTML = `<span style="color:var(--red)">Encontrei o endereço (${esc(q)}) mas não a coordenada. Cole do Google Maps no modo manual.</span>`; return; }
           const lat = Number(Number(j[0].lat).toFixed(6));
           const lng = Number(Number(j[0].lon).toFixed(6));
-          out.innerHTML = `📍 ${esc(j[0].display_name.split(',').slice(0, 3).join(','))}<br>
+          out.innerHTML = `📍 ${esc([vc.logradouro, vc.bairro, `${vc.localidade}/${vc.uf}`].filter(Boolean).join(' • '))}<br>
             <span class="mono">${lat}, ${lng}</span> • <a href="https://maps.google.com/?q=${lat},${lng}" target="_blank" rel="noopener">Ver no mapa</a><br>
-            <span class="muted" style="font-size:12px">Confira no mapa se é a rua da loja antes de salvar.</span>
+            <span class="muted" style="font-size:12px">Confira no mapa se é a porta da loja antes de salvar (CEP cobre a rua toda).</span>
             <div style="height:6px"></div>
             <button class="btn btn-accent" data-geousesave="${s.id}" data-lat="${lat}" data-lng="${lng}">Usar este ponto</button>`;
         } catch (err) { out.innerHTML = `<span style="color:var(--red)">Sem internet para buscar o CEP. Tente o GPS ou o modo manual.</span>`; }
@@ -1719,12 +1727,17 @@ async function tabPontoLoja(body) {
       const sv = e.target.closest('[data-geosave]');
       if (sv) {
         const s = byId[sv.dataset.geosave];
-        const lat = Number(String($(`#geolat-${s.id}`).value || '').replace(',', '.'));
-        const lng = Number(String($(`#geolng-${s.id}`).value || '').replace(',', '.'));
-        const rad = Number($(`#georad-${s.id}`).value || s.radius_m || 150);
+        const lat = Number(String($(`#geolat-${s.id}`).value || '').trim().replace(',', '.'));
+        const lng = Number(String($(`#geolng-${s.id}`).value || '').trim().replace(',', '.'));
+        const rad = Number($(`#georad-${s.id}`).value || s.radius_m || 200);
         if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
           toast('Coordenadas inválidas. Confira latitude (-90 a 90) e longitude (-180 a 180).', 'err');
           return;
+        }
+        // RJ fica em lat ~-23..-22 e lng ~-44..-41: fora disso quase sempre é lat/lng trocado
+        // (o ponto cairia no "meio do mato" ou até no oceano)
+        if (lat > 0 || lat < -24 || lat > -21 || lng > -40 || lng < -45) {
+          if (!confirm(`Atenção: ${lat}, ${lng} parece fora do RJ (lat deve ser ~-22 e lng ~-43). Pode estar com latitude e longitude TROCADAS.\n\nSalvar mesmo assim?`)) return;
         }
         try {
           await api(`/api/stores/${s.id}`, { method: 'PUT', body: JSON.stringify({ lat, lng, radius_m: rad }) });
