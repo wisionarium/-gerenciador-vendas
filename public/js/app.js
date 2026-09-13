@@ -1396,19 +1396,19 @@ async function viewAdmin(app) {
     `;
     const rankRow = (r, i) => `<tr>
       <td>${i + 1}</td>
-          <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span><b>${esc(r.name)}</b> ${sectorTag(r.sector)} ${storeTag(r.store_name)}</span></span></a></td>
-      <td class="mono">${fmtInt(r.calls)}</td><td class="mono"><b>${fmtV(r.sales)}</b></td><td class="mono">${fmtPct(r.conversion)}</td>
+          <td><a href="#/admin/vendedora/${r.seller_id}" style="text-decoration:none"><span class="row rank-seller-row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span><span class="rank-seller"><b>${esc(r.name)}</b> ${sectorTag(r.sector)} ${storeTag(r.store_name)}</span></span></a></td>
+      <td class="mono num">${fmtInt(r.calls)}</td><td class="mono num"><b>${fmtV(r.sales)}</b></td>
     </tr>`;
-    const rankHead = '<table><thead><tr><th>#</th><th>Vendedora</th><th>Chamadas</th><th>Vendas</th><th>Conv.</th></tr></thead><tbody>';
+    const rankHead = '<table class="rank-table"><colgroup><col class="c-pos"><col class="c-seller"><col class="c-num"><col class="c-num"></colgroup><thead><tr><th>#</th><th>Vendedora</th><th class="num">Chamadas</th><th class="num">Vendas</th></tr></thead><tbody>';
     const first5 = withChannel.slice(0, 5).map(rankRow).join('');
     const restRank = withChannel.slice(5);
     rank.innerHTML = `
       <h3 class="section-title">Ranking</h3>
       ${withChannel.length ? `
-      <div class="card" style="padding:0;overflow:hidden">
-        ${rankHead}${first5}</tbody></table>
-        ${restRank.length ? `<div data-rest style="display:none"><table><tbody>${restRank.map((r, k) => rankRow(r, k + 5)).join('')}</tbody></table></div>
-        <div style="padding:10px"><button class="btn btn-ghost btn-big" data-more>Ver mais (${restRank.length})</button></div>` : ''}
+      <div class="card rank-card" style="padding:0;overflow:hidden">
+        ${rankHead}${first5}</tbody>${restRank.length ? `<tbody data-rest style="display:none">${restRank.map((r, k) => rankRow(r, k + 5)).join('')}</tbody>` : ''}
+        </table>
+        ${restRank.length ? `<div style="padding:10px"><button class="btn btn-ghost btn-big" data-more>Ver mais (${restRank.length})</button></div>` : ''}
       </div>` : '<div class="card empty">Não há dados neste período.</div>'}
     `;
     bindCompactList(rank);
@@ -1569,7 +1569,8 @@ function bindCompactList(box) {
   btn.onclick = () => {
     const rest = box.querySelector('[data-rest]');
     const open = rest.style.display === 'none';
-    rest.style.display = open ? 'block' : 'none';
+    const isTbody = rest.tagName === 'TBODY';
+    rest.style.display = open ? (isTbody ? 'table-row-group' : 'block') : 'none';
     btn.textContent = open ? 'Ver menos' : `Ver mais (${rest.children.length})`;
   };
 }
@@ -2125,7 +2126,7 @@ async function viewSellerDetail(app, id) {
   const max = Math.max(0.1, ...d.daily.map((x) => x.sales));
   app.innerHTML = `
     <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
-    <h2 style="margin:6px 0">${esc(d.seller.name)} ${sectorTag(d.seller.sector)} ${storeTag(d.seller.store_name)}</h2>
+    <h2 style="margin:6px 0;display:flex;align-items:center;gap:10px"><span class="ava" style="width:48px;height:48px;font-size:20px;flex:none">${d.seller.avatar_url ? `<img src="${d.seller.avatar_url}" alt="">` : esc((d.seller.name || '?')[0].toUpperCase())}</span><span>${esc(d.seller.name)} ${sectorTag(d.seller.sector)} ${storeTag(d.seller.store_name)}</span></h2>
     ${kpiCardsDetail(d.current, d.seller)}
     ${(d.byStore || []).length > 1 ? `
     <div class="card" style="margin-top:12px">
@@ -2150,13 +2151,21 @@ async function viewSellerDetail(app, id) {
 
 let reportSector = '';
 let reportStore = '';
+let reportMode = 'dia';
 async function viewReport(app) {
   const t = todayISO();
+  const mk = t.slice(0, 7);
   const isManager = store.user?.role === 'manager';
   if (isManager) reportStore = String(store.user.store_id || '');
   let stores = [];
   try { stores = (await api('/api/stores')).stores; } catch {}
-  app.innerHTML = `<h2 style="margin:4px 0">Relatório do dia</h2><div class="card"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}">
+  app.innerHTML = `<h2 style="margin:4px 0">Relatório</h2><div class="card">
+    <div class="mini-pills" id="repMode" style="margin-bottom:10px">
+      <button data-m="dia" class="${reportMode === 'dia' ? 'on' : ''}">Dia</button>
+      <button data-m="mes" class="${reportMode === 'mes' ? 'on' : ''}">Mês</button>
+    </div>
+    <div id="repDateWrap" style="display:${reportMode === 'dia' ? 'block' : 'none'}"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}"></div>
+    <div id="repMonthWrap" style="display:${reportMode === 'mes' ? 'block' : 'none'}"><label>Mês</label><input type="month" id="rMonth" value="${mk}" max="${mk}"></div>
     ${isManager ? '' : `<div class="mini-pills" id="repStore" style="margin-top:10px">
       <button data-st="" class="${!reportStore ? 'on' : ''}">Todas</button>
       ${stores.map((s) => `<button data-st="${s.id}" class="${String(reportStore) === String(s.id) ? 'on' : ''}">${esc(s.name)}</button>`).join('')}
@@ -2191,6 +2200,14 @@ async function viewReport(app) {
     load();
   };
   syncSectorPills();
+  $('#repMode').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    reportMode = b.dataset.m;
+    $$('#repMode button').forEach((x) => x.classList.toggle('on', x === b));
+    $('#repDateWrap').style.display = reportMode === 'dia' ? 'block' : 'none';
+    $('#repMonthWrap').style.display = reportMode === 'mes' ? 'block' : 'none';
+    load();
+  };
   $('#repSector').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     reportSector = b.dataset.s;
@@ -2198,18 +2215,24 @@ async function viewReport(app) {
     load();
   };
   const load = async () => {
-    const date = $('#rDate').value || t;
-    const { summary, details, sector, store } = await api(`/api/report/daily?date=${date}${reportSector ? `&sector=${reportSector}` : ''}${reportStore ? `&store_id=${reportStore}` : ''}`);
+    const isMonth = reportMode === 'mes';
+    const monthVal = $('#rMonth')?.value || mk;
+    const date = $('#rDate')?.value || t;
+    const periodLabel = isMonth ? monthVal.slice(5, 7) + '/' + monthVal.slice(0, 4) : fmtDateBR(date);
+    const { summary, details, sector, store } = await api(isMonth
+      ? `/api/report/monthly?month=${monthVal}${reportSector ? `&sector=${reportSector}` : ''}${reportStore ? `&store_id=${reportStore}` : ''}`
+      : `/api/report/daily?date=${date}${reportSector ? `&sector=${reportSector}` : ''}${reportStore ? `&store_id=${reportStore}` : ''}`);
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
     const sectorTitle = `${sector && sector !== 'all' ? ` (${sectorLabel(sector).toUpperCase()})` : ''}${store ? ` [${store.toUpperCase()}]` : ''}`;
+    const title = isMonth ? 'RELATÓRIO MENSAL' : 'RELATÓRIO COMERCIAL';
     const msg =
-      `*RELATÓRIO COMERCIAL${sectorTitle} - ${fmtDateBR(date)}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtInt(summary.records)}\nWhatsApp: ${fmtInt(summary.waRecords ?? 0)} | CRM: ${fmtInt(summary.crmRecords ?? 0)} | Presencial: ${fmtInt(summary.presRecords ?? 0)}` +
+      `*${title}${sectorTitle} - ${periodLabel}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtInt(summary.records)}\nWhatsApp: ${fmtInt(summary.waRecords ?? 0)} | CRM: ${fmtInt(summary.crmRecords ?? 0)} | Presencial: ${fmtInt(summary.presRecords ?? 0)}` +
       details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)} - Chamadas ${fmtInt(d.calls)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
       <div class="card">
-        <h3 style="margin:0">Relatório comercial</h3>
-        <p class="muted">Data: ${fmtDateBR(date)} • ordem alfabética</p>
+        <h3 style="margin:0">Relatório ${isMonth ? 'mensal' : 'comercial'}</h3>
+        <p class="muted">${isMonth ? 'Mês' : 'Data'}: ${periodLabel} • ordem alfabética</p>
         ${kpiCards(summary, '', true)}
         ${compactListHTML(details, (d) => `
           <div class="sale-card" style="padding:10px 12px">
@@ -2217,7 +2240,7 @@ async function viewReport(app) {
               <span><b>${esc(d.name)}</b> ${sectorTag(d.sector)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
               <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
             </div>
-            ${d.sales.length ? `<div style="margin-top:4px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : s.channel === 'Presencial' ? 'ch-pres' : 'ch-crm'}">${esc(s.channel)}</b>${s.store_name && s.store_name !== (d.store_name || 'Sede') ? ` ${storeTag(s.store_name)}` : ''}</div>`).join('')}</div>` : '<div class="muted" style="font-size:13px;margin-top:4px">Sem vendas neste dia.</div>'}
+            ${d.sales.length ? `<div style="margin-top:4px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : s.channel === 'Presencial' ? 'ch-pres' : 'ch-crm'}">${esc(s.channel)}</b>${s.store_name && s.store_name !== (d.store_name || 'Sede') ? ` ${storeTag(s.store_name)}` : ''}</div>`).join('')}</div>` : `<div class="muted" style="font-size:13px;margin-top:4px">${isMonth ? 'Sem vendas neste mês.' : 'Sem vendas neste dia.'}</div>`}
           </div>`, 5)}
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="waPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
@@ -2239,6 +2262,8 @@ async function viewReport(app) {
     };
   };
   $('#rGo').onclick = load;
+  $('#rDate').onchange = () => { if (reportMode === 'dia') load(); };
+  $('#rMonth').onchange = () => { if (reportMode === 'mes') load(); };
   await load();
 }
 

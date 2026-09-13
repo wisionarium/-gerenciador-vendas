@@ -1596,6 +1596,85 @@ app.get('/api/report/daily', requireAuth, requireManager, ah(async (req, res) =>
   res.json({ date, sector: validSector(sector) ? sector : 'all', store: storeName, summary, ranking, details });
 }));
 
+app.get('/api/report/monthly', requireAuth, requireManager, ah(async (req, res) => {
+  const month = String(req.query.month || '');
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido. Use YYYY-MM.' });
+  const [yy, mm] = month.split('-').map(Number);
+  if (mm < 1 || mm > 12) return res.status(400).json({ error: 'Mês inválido.' });
+  const from = `${month}-01`;
+  const lastDay = new Date(yy, mm, 0).getDate();
+  const to = `${month}-${String(lastDay).padStart(2, '0')}`;
+  const { sector, store_id } = req.query;
+  const scope = scopedStoreId(req, store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const sectorFilter = validSector(sector) ? ' AND COALESCE(u.sector,\'online\')=?' : '';
+  const storeFilter = scope.storeId != null ? ' AND u.store_id=?' : '';
+  const extraParams = [...(validSector(sector) ? [sector] : []), ...(scope.storeId != null ? [scope.storeId] : [])];
+  let sellers = await db.all(
+    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.role='seller' AND u.active=1${sectorFilter}${storeFilter} ORDER BY u.name`,
+    ...extraParams
+  );
+  if (scope.storeId != null) {
+    // visitantes: venderam na loja no mês mas são de outra loja
+    const homeIds = new Set(sellers.map((s) => s.id));
+    const visitors = await db.all(
+      `SELECT DISTINCT u.*, s.name AS store_name FROM users u
+       JOIN sale_participants sp ON sp.seller_id=u.id
+       JOIN sales sl ON sl.id=sp.sale_id AND sl.sale_date>=? AND sl.sale_date<=? AND sl.store_id=?
+       LEFT JOIN stores s ON s.id=u.store_id
+       WHERE u.role='seller' AND u.active=1${sectorFilter} ORDER BY u.name`,
+      from, to, scope.storeId, ...(validSector(sector) ? [sector] : [])
+    );
+    for (const v of visitors) if (!homeIds.has(v.id)) { homeIds.add(v.id); sellers.push(v); }
+    sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+  }
+  const allRows = await Promise.all(sellers.map(async (s) => {
+    const st = await summarize(from, to, s.id, scope.storeId);
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_name: s.store_name || 'Sede', calls: st.calls, sales: st.salesCredit };
+  }));
+  const summary = {
+    calls: allRows.reduce((a, r) => a + r.calls, 0),
+    salesCredit: allRows.reduce((a, r) => a + r.sales, 0),
+    records: 0,
+  };
+  if (!validSector(sector)) {
+    const full = await summarize(from, to, null, scope.storeId);
+    summary.records = full.records;
+    summary.waRecords = full.waRecords;
+    summary.crmRecords = full.crmRecords;
+    summary.presRecords = full.presRecords;
+  } else {
+    const sids = sellers.map((s) => s.id);
+    if (sids.length) {
+      const ph = sids.map(() => '?').join(',');
+      const c = await db.get(
+        `SELECT COUNT(DISTINCT s.id) AS t FROM sales s JOIN sale_participants sp ON sp.sale_id=s.id WHERE s.sale_date>=? AND s.sale_date<=? AND sp.seller_id IN (${ph})${scope.storeId != null ? ' AND s.store_id=?' : ''}`,
+        from, to, ...sids, ...(scope.storeId != null ? [scope.storeId] : [])
+      );
+      summary.records = Number(c.t);
+    }
+  }
+  const ranking = allRows.filter((r) => r.sales > 0 || r.calls > 0).sort((a, b) => b.sales - a.sales);
+  // detalhamento alfabético por vendedora (relatório WhatsApp mensal) — inclui todas, mesmo zeradas
+  const roster = sellers;
+  const details = await Promise.all(roster.map(async (s) => {
+    const st = await summarize(from, to, s.id, scope.storeId);
+    const rows = await db.all(
+      `SELECT s.* FROM sales s JOIN sale_participants spf ON spf.sale_id=s.id AND spf.seller_id=? WHERE s.sale_date>=? AND s.sale_date<=?${scope.storeId != null ? ' AND s.store_id=?' : ''} ORDER BY s.sale_date, s.id`,
+      s.id, from, to, ...(scope.storeId != null ? [scope.storeId] : [])
+    );
+    const sales = await Promise.all(rows.map(async (sale) => {
+      const full = await saleWithParticipants(sale);
+      const me = full.participants.find((p) => p.seller_id === s.id);
+      const partners = full.participants.filter((p) => p.seller_id !== s.id).map((p) => p.seller_name);
+      return { product: sale.product, channel: sale.channel, store_name: full.store_name, credit: Number(me ? me.credit : 0), partners };
+    }));
+    return { seller_id: s.id, name: s.name, sector: s.sector || 'online', store_name: s.store_name || 'Sede', active: !!s.active, calls: st.calls, credit: st.salesCredit, records: sales.length, sales };
+  }));
+  const storeName2 = scope.storeId != null ? ((await getStore(scope.storeId)) || {}).name || '' : '';
+  res.json({ month, from, to, sector: validSector(sector) ? sector : 'all', store: storeName2, summary, ranking, details });
+}));
+
 // SPA fallback
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Rota não encontrada.' });

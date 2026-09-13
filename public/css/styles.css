@@ -94,6 +94,18 @@ label{font-size:13px;font-weight:700;color:#374151;display:block;margin:12px 0 6
 table{width:100%;border-collapse:collapse;font-size:14px;max-width:100%}
 th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 @media(max-width:480px){th,td{padding:8px 6px;font-size:13px}}
+/* ranking visão geral: tabela única com larguras fixas p/ gaveta não desalinhar */
+.rank-card{overflow-x:auto}
+.rank-table{table-layout:fixed;width:100%}
+.rank-table .c-pos{width:30px}
+.rank-table .c-num{width:82px}
+.rank-table th.num,.rank-table td.num{text-align:right;white-space:nowrap}
+.rank-table th,.rank-table td{vertical-align:middle}
+.rank-seller-row{min-width:0}
+.rank-seller-row .ava.sm{flex:none}
+.rank-seller{min-width:0;flex:1;overflow:hidden}
+.rank-seller b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+@media(max-width:480px){.rank-table .c-num{width:70px}.rank-table .c-pos{width:26px}}
 .sale-card{border:1px solid var(--line);border-radius:18px;padding:12px;margin-bottom:10px;background:#fff;max-width:100%;min-width:0;overflow:hidden}
 .chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:800;background:#f3f4f6}
 .chip.wa{background:#dcfce7;color:#166534}.chip.crm{background:#dbeafe;color:#1e40af}.chip.lime{background:#fef9c3;color:#854d0e}
