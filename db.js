@@ -293,8 +293,8 @@ if (isRemote) {
 // ---- Regra central de crédito (FUNDAMENTAL) ----
 function creditForParticipants(count) {
   if (count === 1) return 1.0;
-  if (count === 2 || count === 3) return 0.5;
-  throw new Error('Venda deve ter de 1 a 3 participantes.');
+  if (count >= 2 && count <= 4) return 0.5;
+  throw new Error('Venda deve ter de 1 a 4 participantes.');
 }
 
 // ---- Comissão por loja + setor + bônus de modelo especial ----
@@ -302,7 +302,7 @@ function creditForParticipants(count) {
 // bonusCents: base exclusiva em centavos (modelo especial) ou null
 // - filial → base 2500 (qualquer setor)
 // - Sede: todos presencial → 3500; se há qualquer online → 2500
-// - individual recebe a base cheia; dividida (2–3) recebe metade
+// - individual recebe a base cheia; dividida (2–4) recebe metade
 function commissionBaseCents(sectors, bonusCents, storeName) {
   if (bonusCents != null) return Math.round(Number(bonusCents));
   if (storeName && storeName !== 'Sede') return 2500;
@@ -310,7 +310,7 @@ function commissionBaseCents(sectors, bonusCents, storeName) {
   return allPres ? 3500 : 2500;
 }
 function commissionCents(sectors, count, bonusCents, storeName) {
-  if (count !== 1 && count !== 2 && count !== 3) throw new Error('Venda deve ter de 1 a 3 participantes.');
+  if (count < 1 || count > 4) throw new Error('Venda deve ter de 1 a 4 participantes.');
   let bonus = null;
   if (bonusCents != null && bonusCents !== '') {
     bonus = Math.round(Number(bonusCents));

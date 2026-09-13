@@ -30,7 +30,7 @@ Sem variáveis de ambiente, usa `./data.db` (SQLite local).
 
 ## Regra de vendas compartilhadas (central em `db.js` + `server.js`)
 - 1 participante = `1.0`
-- 2 ou 3 participantes = `0.5` para cada (registro único, sem rateio matemático)
+- 2 a 4 participantes = `0.5` para cada (registro único, sem rateio matemático)
 
 ## Principais rotas API
 - `POST /api/auth/login`, `GET /api/me`

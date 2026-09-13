@@ -1111,7 +1111,7 @@ function modalSale(sellers, stores) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Nova venda</h3>
-    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–3) = 0,5 cada.<br>⚠️ Cadastre <b>1 vez só</b> com todas as participantes — ela já aparece no histórico de cada uma.</p>
+    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–4) = 0,5 cada.<br>⚠️ Cadastre <b>1 vez só</b> com todas as participantes — ela já aparece no histórico de cada uma.</p>
     <form id="fSale">
       <label>Cliente *</label><input id="sClient" required placeholder="Nome do cliente">
       <label>Produto *</label><input id="sProduct" required placeholder="Ex: Scooter X">
@@ -1121,7 +1121,7 @@ function modalSale(sellers, stores) {
       <label>Canal *</label>
       <select id="sChannel"><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
       <label>Data</label><input type="date" id="sDate" value="${todayISO()}" max="${todayISO()}">
-      <label>Participantes (1 a 3) *</label>
+      <label>Participantes (1 a 4) *</label>
       <details class="tray" id="pTray">
         <summary id="pTraySum">Selecionar participantes…</summary>
         <div class="check-list" id="plist"></div>
@@ -1181,7 +1181,7 @@ function modalSale(sellers, stores) {
   $('#plist').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
-    if ($$('#plist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
+    if ($$('#plist .check.on').length > 4) { c.classList.remove('on'); toast('Máximo de 4 participantes.', 'err'); }
     syncTray();
   };
   loadEligible();
@@ -1257,7 +1257,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Editar venda #${sale.id}</h3>
-    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–3) = 0,5 cada.</p>
+    <p class="muted" style="font-size:13px">Individual = 1,0 • Compartilhada (2–4) = 0,5 cada.</p>
     <form id="fEditSale">
       <label>Cliente *</label><input id="eClient" required value="${esc(sale.customer_name)}">
       <label>Produto *</label><input id="eProduct" required value="${esc(sale.product)}">
@@ -1267,7 +1267,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
       <label>Canal *</label>
       <select id="eChannel"><option ${sale.channel === 'WhatsApp' ? 'selected' : ''}>WhatsApp</option><option ${sale.channel === 'CRM' ? 'selected' : ''}>CRM</option><option ${sale.channel === 'Presencial' ? 'selected' : ''}>Presencial</option></select>
       <label>Data</label><input type="date" id="eDate" value="${esc(sale.sale_date)}" max="${todayISO()}">
-      <label>Participantes (1 a 3) *</label>
+      <label>Participantes (1 a 4) *</label>
       <details class="tray" id="eTray">
         <summary id="eTraySum">Selecionar participantes…</summary>
         <div class="check-list" id="eplist"></div>
@@ -1328,7 +1328,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
   $('#eplist').onclick = (e) => {
     const c = e.target.closest('.check'); if (!c) return;
     c.classList.toggle('on');
-    if ($$('#eplist .check.on').length > 3) { c.classList.remove('on'); toast('Máximo de 3 participantes.', 'err'); }
+    if ($$('#eplist .check.on').length > 4) { c.classList.remove('on'); toast('Máximo de 4 participantes.', 'err'); }
     syncTrayE();
   };
   loadEligibleE();

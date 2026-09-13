@@ -629,7 +629,7 @@ app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   const pids = [...new Set((participant_ids || []).map(Number).filter(Boolean))];
   if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
-  if (pids.length > 3) return res.status(400).json({ error: 'Máximo de 3 participantes.' });
+  if (pids.length > 4) return res.status(400).json({ error: 'Máximo de 4 participantes.' });
 
   // loja da venda (gerente fica travado na dele; admin usa a informada ou a Sede)
   const scope = scopedStoreId(req, store_id);
@@ -712,7 +712,7 @@ app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   const pids = [...new Set((participant_ids || []).map(Number).filter(Boolean))];
   if (pids.length < 1) return res.status(400).json({ error: 'Selecione ao menos 1 participante.' });
-  if (pids.length > 3) return res.status(400).json({ error: 'Máximo de 3 participantes.' });
+  if (pids.length > 4) return res.status(400).json({ error: 'Máximo de 4 participantes.' });
   const placeholders = pids.map(() => '?').join(',');
   const sellers = await db.all(`SELECT * FROM users WHERE id IN (${placeholders}) AND role='seller' AND active=1`, ...pids);
   if (sellers.length !== pids.length) return res.status(400).json({ error: 'Participante inválida ou desativada.' });
