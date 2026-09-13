@@ -1152,7 +1152,7 @@ function modalSale(sellers, stores) {
       : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base) + ' • ' + esc(sStoreName())} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
   };
   $('#sStore').onchange = () => { loadEligible(); refreshSalePreview(); };
-  $('#sDate').onchange = loadEligible;
+  $('#sDate').onchange = () => loadEligible();
   // chip da participante: visitante mostra a loja de origem (ex.: Sede) mesmo sendo Sede
   const plistChip = (s, on) => `<div class="check${on ? ' on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}${s.visitor || (s.store_name && s.store_name !== 'Sede') ? ` ${storeTag(s.store_name || 'Sede')}` : ''}</div>`;
   const renderPlist = (list) => {
@@ -1298,7 +1298,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
       : `<p style="margin:0;font-size:13px">💰 Comissão: <b>${fmtBRL(pv.each)} cada</b> <span class="muted">(${pv.isBonus ? 'bônus exclusivo' : 'base ' + fmtBRL(pv.base) + ' • ' + esc(eStoreName())} • ${pv.count} participante${pv.count > 1 ? 's' : ''})</span></p>`;
   };
   $('#eStore').onchange = () => { loadEligibleE(); refreshEditPreview(); };
-  $('#eDate').onchange = loadEligibleE;
+  $('#eDate').onchange = () => loadEligibleE();
   const eplistChip = (s, on) => `<div class="check${on ? ' on' : ''}" data-id="${s.id}" data-name="${esc(s.name)}" data-sector="${esc(s.sector || 'online')}">${esc(s.name)} ${sectorTag(s.sector)}${s.visitor || (s.store_name && s.store_name !== 'Sede') ? ` ${storeTag(s.store_name || 'Sede')}` : ''}</div>`;
   const renderEplist = (list) => {
     const keep = new Set([...$$('#eplist .check.on').map((c) => Number(c.dataset.id)), ...selIds]);
