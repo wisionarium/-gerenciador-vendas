@@ -101,6 +101,9 @@ th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);overf
 .rank-table .c-num{width:82px}
 .rank-table th.num,.rank-table td.num{text-align:right;white-space:nowrap}
 .rank-table th,.rank-table td{vertical-align:middle}
+/* respiro nas bordas do card: 1ª coluna afastada da esquerda, última da direita */
+.rank-table th:first-child,.rank-table td:first-child{padding-left:16px}
+.rank-table th:last-child,.rank-table td:last-child{padding-right:16px}
 .rank-seller-row{min-width:0}
 .rank-seller-row .ava.sm{flex:none}
 .rank-seller{min-width:0;flex:1;overflow:hidden}
