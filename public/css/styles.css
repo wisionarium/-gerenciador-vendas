@@ -209,6 +209,22 @@ body.history-top #userBadge{margin-left:auto;font-weight:700}
 #splash.leaving .splash-inner{opacity:0}
 #splash.expand .splash-circle{transform:translate(-50%,-50%) scale(1);transition:transform .6s cubic-bezier(.3,.7,.3,1)}
 #splash.done{opacity:0;transition:opacity .4s ease;pointer-events:none}
+/* ---------- pull-to-refresh (só vendedora/funcionário, só no topo) ---------- */
+#ptr{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));left:50%;z-index:40;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(-90px)}
+#ptr.show{opacity:1}
+#ptr.settle{transition:transform .22s ease,opacity .22s ease}
+.ptr-circle{width:46px;height:46px;border-radius:50%;background:#fff;color:var(--brand);display:grid;place-items:center;box-shadow:0 8px 24px rgba(11,59,44,.28);border:1px solid var(--line);transform:scale(var(--ptr-s,.5));opacity:var(--ptr-o,0)}
+.ptr-circle svg{width:24px;height:24px;grid-area:1/1}
+.ptr-arrow{transform:rotate(calc(var(--ptr-r,0deg)));transition:transform .05s linear}
+.ptr-spin{display:none;animation:ptrSpin .8s linear infinite}
+#ptr.ready .ptr-circle{background:var(--lime);border-color:var(--lime);color:var(--lime-ink)}
+#ptr.loading .ptr-arrow{display:none}
+#ptr.loading .ptr-spin{display:block}
+#ptr.loading .ptr-circle{transform:scale(1);opacity:1}
+.ptr-label{font-size:12px;font-weight:800;color:#fff;background:rgba(11,59,44,.85);padding:5px 12px;border-radius:999px;opacity:0;transform:translateY(-4px);transition:opacity .15s ease}
+#ptr.ready .ptr-label{opacity:1;transform:none}
+#ptr.loading .ptr-label{opacity:1;transform:none}
+@keyframes ptrSpin{to{transform:rotate(360deg)}}
 /* ---------- animações (só home da vendedora) ---------- */
 @keyframes riseIn{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
 #homeList .sli{animation:riseIn .5s cubic-bezier(.2,.7,.3,1) both}

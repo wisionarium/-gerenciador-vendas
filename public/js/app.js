@@ -2481,6 +2481,111 @@ async function modalUser(u, reload) {
   setTimeout(exit, 3000);
 })();
 
+// ---------- pull-to-refresh (só vendedora/funcionário, só no topo) ----------
+// Gesto intencional: exige scroll no topo + arrasto vertical p/ baixo com
+// limiar mínimo e resistência, p/ não disparar em qualquer toque na tela.
+(function initPullToRefresh() {
+  const START_PX = 12;    // arrasto mínimo p/ começar a mostrar o símbolo
+  const TRIGGER_PX = 85;  // distância (com resistência) p/ soltar e atualizar
+  const MAX_PX = 140;     // trava visual do quanto o símbolo desce
+  const DAMPING = 0.42;   // resistência: puxa menos do que o dedo anda
+  let tracking = false, pulling = false, refreshing = false;
+  let startY = 0, startX = 0, dist = 0, wasReady = false;
+  const ptr = () => $('#ptr');
+  const allowed = () => {
+    const u = store.user;
+    if (!u || (u.role !== 'seller' && u.role !== 'staff')) return false;
+    const h = location.hash || '';
+    if (!h.startsWith('#/vendedora') && !h.startsWith('#/funcionario')) return false;
+    if (refreshing) return false;
+    if ($('#modalRoot') && $('#modalRoot').firstChild) return false;
+    if (document.querySelector('.modal-bg')) return false;
+    return true;
+  };
+  const paint = () => {
+    const el = ptr();
+    if (!el) return;
+    const p = Math.min(1, dist / TRIGGER_PX);
+    el.classList.add('show');
+    el.classList.remove('settle');
+    el.style.transform = `translateX(-50%) translateY(${Math.min(dist, MAX_PX) - 90}px)`;
+    el.style.setProperty('--ptr-s', (0.45 + 0.55 * p).toFixed(3));
+    el.style.setProperty('--ptr-o', p.toFixed(3));
+    el.style.setProperty('--ptr-r', Math.round(p * 180) + 'deg');
+    const ready = dist >= TRIGGER_PX;
+    el.classList.toggle('ready', ready);
+    if (ready && !wasReady && navigator.vibrate) { try { navigator.vibrate(10); } catch {} }
+    wasReady = ready;
+  };
+  const hide = () => {
+    const el = ptr();
+    if (!el) return;
+    el.classList.add('settle');
+    el.classList.remove('ready');
+    el.style.transform = 'translateX(-50%) translateY(-90px)';
+    el.style.setProperty('--ptr-s', '0.45');
+    el.style.setProperty('--ptr-o', '0');
+    setTimeout(() => { if (!refreshing) el.classList.remove('show', 'settle'); }, 230);
+  };
+  document.addEventListener('touchstart', (e) => {
+    if (!allowed() || window.scrollY > 0) { tracking = false; return; }
+    const t = e.touches[0];
+    tracking = true; pulling = false; dist = 0; wasReady = false;
+    startY = t.clientY; startX = t.clientX;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!tracking || refreshing || !allowed()) return;
+    const t = e.touches[0];
+    const dy = t.clientY - startY;
+    const dx = t.clientX - startX;
+    if (!pulling) {
+      if (dy < START_PX) return;
+      if (window.scrollY > 0) { tracking = false; return; }
+      if (Math.abs(dx) > Math.abs(dy) * 0.7) { tracking = false; return; }
+      const tag = (e.target && e.target.tagName) || '';
+      if (/INPUT|TEXTAREA|SELECT/.test(tag)) { tracking = false; return; }
+      pulling = true;
+    }
+    if (dy <= 0) { dist = 0; paint(); return; }
+    dist = Math.min(MAX_PX, (dy - START_PX) * DAMPING);
+    paint();
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+  const end = async () => {
+    if (!tracking) return;
+    tracking = false;
+    if (!pulling) return;
+    pulling = false;
+    const el = ptr();
+    if (dist >= TRIGGER_PX && allowed()) {
+      refreshing = true;
+      if (el) {
+        el.classList.add('show', 'loading', 'ready');
+        el.style.transform = 'translateX(-50%) translateY(0px)';
+        el.style.setProperty('--ptr-s', '1');
+        el.style.setProperty('--ptr-o', '1');
+      }
+      if (navigator.vibrate) { try { navigator.vibrate(15); } catch {} }
+      try { await route(); }
+      catch (err) { try { toast(err.message, 'err'); } catch {} }
+      finally {
+        refreshing = false;
+        dist = 0; wasReady = false;
+        if (el) {
+          el.classList.remove('loading', 'ready');
+          hide();
+        }
+        try { window.scrollTo({ top: 0 }); } catch {}
+      }
+    } else {
+      dist = 0; wasReady = false;
+      hide();
+    }
+  };
+  document.addEventListener('touchend', end, { passive: true });
+  document.addEventListener('touchcancel', () => { tracking = false; pulling = false; dist = 0; hide(); }, { passive: true });
+})();
+
 // ---------- PWA: auto-atualiza ao abrir/voltar (iPhone guarda o app suspenso) ----------
 let bootVersion = null;
 let alreadyReloaded = false;
