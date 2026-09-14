@@ -1600,15 +1600,28 @@ function compactListHTML(items, renderFn, initial = 5) {
     <button class="btn btn-ghost btn-big" data-more>Ver mais (${rest})</button>`;
 }
 function bindCompactList(box) {
-  const btn = box.querySelector('[data-more]');
-  if (!btn) return;
-  btn.onclick = () => {
-    const rest = box.querySelector('[data-rest]');
-    const open = rest.style.display === 'none';
-    const isTbody = rest.tagName === 'TBODY';
-    rest.style.display = open ? (isTbody ? 'table-row-group' : 'block') : 'none';
-    btn.textContent = open ? 'Ver menos' : `Ver mais (${rest.children.length})`;
-  };
+  if (!box) return;
+  const rests = [...box.querySelectorAll('[data-rest]')];
+  const btns = [...box.querySelectorAll('[data-more]')];
+  btns.forEach((btn, i) => {
+    if (btn._bound) return;
+    btn._bound = true;
+    // o botão pode estar logo após o [data-rest] ou dentro de um wrapper (caso Equipe)
+    let rest = null;
+    const prev = btn.previousElementSibling;
+    if (prev && prev.hasAttribute && prev.hasAttribute('data-rest')) rest = prev;
+    else if (btn.parentElement && btn.parentElement.previousElementSibling && btn.parentElement.previousElementSibling.hasAttribute && btn.parentElement.previousElementSibling.hasAttribute('data-rest')) rest = btn.parentElement.previousElementSibling;
+    else rest = rests[i] || rests[0];
+    if (!rest) return;
+    const total = rest.children.length;
+    btn.onclick = (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      const isHidden = rest.style.display === 'none';
+      const isTbody = rest.tagName === 'TBODY';
+      rest.style.display = isHidden ? (isTbody ? 'table-row-group' : 'block') : 'none';
+      btn.textContent = isHidden ? 'Ver menos' : `Ver mais (${total})`;
+    };
+  });
 }
 
 let pontoTab = 'dia';
@@ -1805,6 +1818,7 @@ async function tabPontoDia(body, t) {
         <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
         <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
       </div>
+      <div style="margin-top:10px"><input id="pSearch" placeholder="🔍 Buscar por nome…" autocomplete="off" style="width:100%"></div>
       <div id="pDay" style="margin-top:12px"><p class="muted">Carregando…</p></div>
     </div>`;
   $('#pKind').onclick = (e) => {
@@ -1813,50 +1827,70 @@ async function tabPontoDia(body, t) {
     $$('#pKind button').forEach((x) => x.classList.toggle('on', x === b));
     loadDay();
   };
+  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  let allRows = [];
+  let metaDay = null;
+  let currentDate = t;
+  const rowHTML = (r) => {
+    const ava = `<span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
+    const extra = r.punch && r.punch.extra_min > 0 ? ` <span class="chip lime">＋${esc(r.punch.extra_label)}</span>` : '';
+    const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
+    return `
+      <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${elsewhere}<br>
+        <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
+        <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
+      </div></div>`;
+  };
+  const absentHTML = (r) => `
+    <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+      <span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
+      <button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>
+    </div></div>`;
+  const renderDayLists = () => {
+    const box = $('#pDay');
+    if (!box || !metaDay) return;
+    const q = norm($('#pSearch')?.value || '');
+    const filtered = q ? allRows.filter((r) => norm(r.name).includes(q)) : allRows;
+    const present = filtered.filter((r) => r.punch);
+    const absent = filtered.filter((r) => !r.punch);
+    box._rows = allRows;
+    if (!filtered.length) {
+      box.innerHTML = q
+        ? `<div class="card empty">Nenhum nome encontrado para “${esc($('#pSearch').value)}”.</div>`
+        : `<div class="card empty">Nenhuma vendedora vinculada a esta loja ainda.<br><span class="muted" style="font-size:12px">O admin geral cadastra em Equipe → Nova pessoa → Vendedora → Loja.</span></div>`;
+      return;
+    }
+    box.innerHTML = `
+      <p class="muted" style="font-size:13px">✅ Presentes: <b>${present.length}</b> • ⬜ Ausentes: <b>${absent.length}</b>${q ? ` • 🔍 filtro: “${esc($('#pSearch').value)}”` : ''}</p>
+      ${metaDay.is_holiday ? `<p class="muted" style="font-size:13px">🎉 Feriado (${esc(metaDay.holiday.label)}) — padrão 5h${metaDay.auto_holiday ? ' • <span style="color:var(--brand)">detectado automaticamente 🤖</span>' : ''}</p>` : ''}
+      ${present.length ? compactListHTML(present, rowHTML, 8) : (q ? '' : '<div class="card empty">Ninguém presente neste dia.</div>')}
+      ${absent.length ? `<h3 class="section-title" style="font-size:15px">Ausentes (${absent.length})</h3>
+        ${compactListHTML(absent, absentHTML, 8)}` : ''}`;
+    bindCompactList(box);
+  };
   const loadDay = async () => {
     const date = $('#pDate').value || t;
+    currentDate = date;
     const stid = $('#pStore')?.value || '';
     const box = $('#pDay');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const d = await api(`/api/ponto/dia?date=${date}${stid ? `&store_id=${stid}` : ''}${pontoKind ? `&kind=${pontoKind}` : ''}`);
-      const present = d.rows.filter((r) => r.punch);
-      const absent = d.rows.filter((r) => !r.punch);
-      const rowHTML = (r) => {
-        const ava = `<span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
-        const extra = r.punch && r.punch.extra_min > 0 ? ` <span class="chip lime">＋${esc(r.punch.extra_label)}</span>` : '';
-        const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
-        return `
-          <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-            <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${elsewhere}<br>
-            <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
-            <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
-          </div></div>`;
-      };
-      box.innerHTML = `
-        ${!d.rows.length ? `<div class="card empty">Nenhuma vendedora vinculada a esta loja ainda.<br><span class="muted" style="font-size:12px">O admin geral cadastra em Equipe → Nova pessoa → Vendedora → Loja.</span></div>` : ''}
-        <p class="muted" style="font-size:13px">✅ Presentes: <b>${d.present}</b> • ⬜ Ausentes: <b>${d.absent}</b></p>
-        ${d.is_holiday ? `<p class="muted" style="font-size:13px">🎉 Feriado (${esc(d.holiday.label)}) — padrão 5h${d.auto_holiday ? ' • <span style="color:var(--brand)">detectado automaticamente 🤖</span>' : ''}</p>` : ''}
-        ${compactListHTML(present, rowHTML, 8)}
-        ${absent.length ? `<h3 class="section-title" style="font-size:15px">Ausentes (${absent.length})</h3>
-          ${compactListHTML(absent, (r) => `
-          <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}</span>
-            <button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>
-          </div></div>`, 8)}` : ''}`;
-      bindCompactList(box);
-      box._rows = d.rows;
+      allRows = d.rows || [];
+      metaDay = d;
+      renderDayLists();
       box.onclick = (e) => {
         const fx = e.target.closest('[data-fix]');
         if (fx) {
-          const row = box._rows.flatMap((x) => x.punch ? [x.punch] : []).find((p) => String(p.id) === String(fx.dataset.fix));
-          modalFixPonto(row, loadDay);
+          const row = (box._rows || []).flatMap((x) => x.punch ? [x.punch] : []).find((p) => String(p.id) === String(fx.dataset.fix));
+          if (row) modalFixPonto(row, loadDay);
           return;
         }
         const lc = e.target.closest('[data-lancar]');
         if (lc) {
-          const row = box._rows.find((x) => String(x.seller_id) === String(lc.dataset.lancar));
-          modalManualPonto(row.seller_id, row.name, date, loadDay);
+          const row = (box._rows || []).find((x) => String(x.seller_id) === String(lc.dataset.lancar));
+          if (row) modalManualPonto(row.seller_id, row.name, currentDate, loadDay);
         }
       };
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -1864,6 +1898,8 @@ async function tabPontoDia(body, t) {
   $('#pGo').onclick = loadDay;
   const pStoreEl = $('#pStore');
   if (pStoreEl) pStoreEl.onchange = loadDay;
+  $('#pSearch').oninput = () => renderDayLists();
+  $('#pDate').onchange = loadDay;
   await loadDay();
 }
   // mês
