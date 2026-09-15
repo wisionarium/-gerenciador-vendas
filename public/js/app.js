@@ -1069,7 +1069,11 @@ async function viewHistory(app) {
     try {
       const { punches } = await api(`/api/ponto/eu?month=${month}`);
       const total = (punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
-      $('#hhTotal').innerHTML = `<p class="muted" style="font-size:13px;margin:0">Extra no mês: <b class="mono">${Math.floor(total / 60)}h ${total % 60}min</b> • ${punches.length} dia(s)</p>`;
+      $('#hhTotal').innerHTML = `
+        <div style="text-align:center;padding:16px 8px 10px">
+          <div style="font-size:12px;color:#4b5563">Hora extra total no mês</div>
+          <div class="mono" style="font-size:38px;font-weight:800;line-height:1.25">${Math.floor(total / 60)}h ${total % 60}min</div>
+        </div>`;
       box.innerHTML = punches.length
         ? compactListHTML(punches, (x) => staffPunchRow(x), 10)
         : '<div class="card empty">Nenhum ponto neste mês.</div>';
