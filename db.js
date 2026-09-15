@@ -113,11 +113,16 @@ const SCHEMA = [
     qr_code TEXT NOT NULL DEFAULT 'PONTO-LOJA-01',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // feriados por loja: store_id 0 = Todas as lojas; >0 = loja específica (Sede/Magé/Guapimirim)
   `CREATE TABLE IF NOT EXISTS holidays (
-    date TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    store_id INTEGER NOT NULL DEFAULT 0,
     label TEXT NOT NULL DEFAULT 'Feriado',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (date, store_id)
   )`,
+  `CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays(date)`,
   `CREATE TABLE IF NOT EXISTS punches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -222,10 +227,13 @@ const SCHEMA = [
     archived_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_arch_canceled_date ON archived_canceled(sale_date)`,
-  // datas que o admin mandou NÃO tratar como feriado (veta a detecção automática)
+  // datas que o admin mandou NÃO tratar como feriado (veta a detecção automática).
+  // store_id 0 = veto geral (todas); >0 = veto só naquela loja.
   `CREATE TABLE IF NOT EXISTS holiday_skips (
-    date TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    date TEXT NOT NULL,
+    store_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (date, store_id)
   )`,
 ];
 
@@ -571,6 +579,62 @@ async function migrateTableChecks() {
     );
     if (st === 'applied') console.log('[db] Migração: comissões flexíveis aplicada.');
   } catch (e) { console.log('[db] Migração comissões pulada:', e.message); }
+  // holidays: escopo por loja (store_id 0 = Todas). Bancos antigos têm
+  // holidays(date PK, label) — rebuild preservando as linhas como "Todas".
+  try {
+    const st = await once('holidays-store-scope',
+      async () => {
+        const cols = await all(`SELECT name FROM pragma_table_info('holidays')`).catch(() => []);
+        if (!cols.length) return false; // tabela ainda não existe: SCHEMA novo já cria certo
+        return !cols.some((c) => c.name === 'store_id');
+      },
+      async () => {
+        await noFK(async () => {
+          try { await run('DROP TABLE IF EXISTS holidays_new'); } catch {}
+          await run(`CREATE TABLE holidays_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date TEXT NOT NULL,
+          store_id INTEGER NOT NULL DEFAULT 0,
+          label TEXT NOT NULL DEFAULT 'Feriado',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (date, store_id)
+        )`);
+          await run(`INSERT INTO holidays_new (date, store_id, label, created_at)
+          SELECT date, 0, label, created_at FROM holidays`);
+          await run('DROP TABLE holidays');
+          await run('ALTER TABLE holidays_new RENAME TO holidays');
+          await run('CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays(date)');
+        });
+      }
+    );
+    if (st === 'applied') console.log('[db] Migração: feriados por loja aplicada.');
+  } catch (e) { console.log('[db] Migração feriados pulada:', e.message); }
+  // holiday_skips: veto da detecção automática também por loja
+  try {
+    const st = await once('holiday-skips-store-scope',
+      async () => {
+        const cols = await all(`SELECT name FROM pragma_table_info('holiday_skips')`).catch(() => []);
+        if (!cols.length) return false;
+        return !cols.some((c) => c.name === 'store_id');
+      },
+      async () => {
+        await noFK(async () => {
+          try { await run('DROP TABLE IF EXISTS holiday_skips_new'); } catch {}
+          await run(`CREATE TABLE holiday_skips_new (
+          date TEXT NOT NULL,
+          store_id INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (date, store_id)
+        )`);
+          await run(`INSERT INTO holiday_skips_new (date, store_id, created_at)
+          SELECT date, 0, created_at FROM holiday_skips`);
+          await run('DROP TABLE holiday_skips');
+          await run('ALTER TABLE holiday_skips_new RENAME TO holiday_skips');
+        });
+      }
+    );
+    if (st === 'applied') console.log('[db] Migração: veto de feriado por loja aplicada.');
+  } catch (e) { console.log('[db] Migração veto de feriado pulada:', e.message); }
 }
 
 // Lojas: Sede herda QR/localização/raio atuais (nada muda para quem já usa);

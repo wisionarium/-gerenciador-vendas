@@ -917,9 +917,10 @@ async function viewConfig(app, back = '#/vendedora') {
 
 // ---------- HOME do funcionário (só ponto, padrão vendedora) ----------
 function staffPunchRow(x, showDate = true) {
+  const hol = x.is_holiday ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(x.holiday_label || 'Feriado')}">🎉 Feriado</span>` : '';
   return `
   <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span><br>
+    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span>${hol}<br>
     <span style="font-size:13px">Entrada: ${x.in_hhmm || '—'} • Saída: ${x.out_hhmm || '—'}</span></span>
     <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}</span>
   </div></div>`;
@@ -999,23 +1000,40 @@ async function viewStaffHistory(app) {
   await load();
 }
 
-// ---------- HISTÓRICO da vendedora (ícone papel) ----------
+// ---------- HISTÓRICO da vendedora (ícone papel): Vendas (como sempre) + Horas (ponto) ----------
 async function viewHistory(app) {
   const me = store.user;
+  const t = todayISO();
   app.innerHTML = `
     <h2 style="margin:4px 0">Meu histórico</h2>
-    <div class="hist-filters">
-      <div class="mini-pills" id="hPills">
-        <button data-k="mes" class="on">Mês</button>
-        <button data-k="semana">Semana</button>
-        <button data-k="ontem">Ontem</button>
-        <button data-k="hoje">Hoje</button>
+    <div class="mini-pills" id="hMainTabs" style="margin-bottom:10px">
+      <button data-m="vendas" class="on">Vendas</button>
+      <button data-m="horas">⏱ Horas</button>
+    </div>
+    <div id="hSalesWrap">
+      <div class="hist-filters">
+        <div class="mini-pills" id="hPills">
+          <button data-k="mes" class="on">Mês</button>
+          <button data-k="semana">Semana</button>
+          <button data-k="ontem">Ontem</button>
+          <button data-k="hoje">Hoje</button>
+        </div>
+        <div class="search-row">
+          <input id="hQ" placeholder="Buscar cliente, produto…">
+        </div>
       </div>
-      <div class="search-row">
-        <input id="hQ" placeholder="Buscar cliente, produto…">
+      <div id="hList"><div class="card empty">Carregando…</div></div>
+    </div>
+    <div id="hHoursWrap" style="display:none">
+      <div class="card">
+        <div class="row" style="flex-wrap:nowrap;align-items:end">
+          <div style="flex:1"><label>Mês</label><input type="month" id="hhMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}"></div>
+          <button class="btn btn-primary" id="hhGo">Ver mês</button>
+        </div>
+        <div id="hhTotal" style="margin-top:12px"></div>
+        <div id="hhList" style="margin-top:8px"><p class="muted">Carregando…</p></div>
       </div>
     </div>
-    <div id="hList"><div class="card empty">Carregando…</div></div>
     <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
   let key = 'mes';
@@ -1042,6 +1060,32 @@ async function viewHistory(app) {
   let deb = null;
   $('#hQ').oninput = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
   load();
+  // aba Horas: entradas/saídas + hora extra do mês (mesmo relatório do funcionário)
+  let hoursLoaded = false;
+  const loadHours = async () => {
+    const month = $('#hhMonth').value || t.slice(0, 7);
+    const box = $('#hhList');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const { punches } = await api(`/api/ponto/eu?month=${month}`);
+      const total = (punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
+      $('#hhTotal').innerHTML = `<p class="muted" style="font-size:13px;margin:0">Extra no mês: <b class="mono">${Math.floor(total / 60)}h ${total % 60}min</b> • ${punches.length} dia(s)</p>`;
+      box.innerHTML = punches.length
+        ? compactListHTML(punches, (x) => staffPunchRow(x), 10)
+        : '<div class="card empty">Nenhum ponto neste mês.</div>';
+      bindCompactList(box);
+    } catch (e) { box.innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
+  };
+  $('#hhGo').onclick = loadHours;
+  $('#hhMonth').onchange = loadHours;
+  $('#hMainTabs').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    $$('#hMainTabs button').forEach((x) => x.classList.toggle('on', x === b));
+    const isHours = b.dataset.m === 'horas';
+    $('#hSalesWrap').style.display = isHours ? 'none' : '';
+    $('#hHoursWrap').style.display = isHours ? '' : 'none';
+    if (isHours && !hoursLoaded) { hoursLoaded = true; loadHours(); }
+  };
 }
 
 async function viewMySales(app) {
@@ -1863,7 +1907,12 @@ async function tabPontoDia(body, t) {
     }
     box.innerHTML = `
       <p class="muted" style="font-size:13px">✅ Presentes: <b>${present.length}</b> • ⬜ Ausentes: <b>${absent.length}</b>${q ? ` • 🔍 filtro: “${esc($('#pSearch').value)}”` : ''}</p>
-      ${metaDay.is_holiday ? `<p class="muted" style="font-size:13px">🎉 Feriado (${esc(metaDay.holiday.label)}) — padrão 5h${metaDay.auto_holiday ? ' • <span style="color:var(--brand)">detectado automaticamente 🤖</span>' : ''}</p>` : ''}
+      ${(() => {
+        if (!metaDay.is_holiday) return '';
+        const hs = (metaDay.holidays && metaDay.holidays.length ? metaDay.holidays : (metaDay.holiday ? [metaDay.holiday] : []));
+        const parts = hs.map((h) => `${esc(h.label)}${Number(h.store_id) ? ` (${esc(h.store_name || 'loja')})` : ' (Todas)'}`).join(' • ');
+        return `<p class="muted" style="font-size:13px">🎉 Feriado (${parts}) — padrão 5h${metaDay.auto_holiday ? ' • <span style="color:var(--brand)">detectado automaticamente 🤖</span>' : ''}</p>`;
+      })()}
       ${present.length ? compactListHTML(present, rowHTML, 8) : (q ? '' : '<div class="card empty">Ninguém presente neste dia.</div>')}
       ${absent.length ? `<h3 class="section-title" style="font-size:15px">Ausentes (${absent.length})</h3>
         ${compactListHTML(absent, absentHTML, 8)}` : ''}`;
@@ -1983,21 +2032,29 @@ function printExtrasPDF(month, r) {
 
 async function tabPontoFeriados(body) {
   const readOnly = store.user?.role === 'manager';
+  let stores = [];
+  if (!readOnly) {
+    try { stores = (await api('/api/stores')).stores || []; } catch {}
+  }
   body.innerHTML = `
     <div class="card">
-      <p class="muted" style="font-size:13px;margin-top:0">🤖 Dias com saída geral ~13h são marcados <b>automaticamente</b> como feriado.${readOnly ? '' : ' Abaixo dá para adicionar manual ou remover se marcar errado.'}</p>
-      ${readOnly ? '' : `<form id="fHol" class="row" style="flex-wrap:nowrap;align-items:end">
-        <div style="flex:1"><label>Data</label><input type="date" id="hDate" required></div>
-        <div style="flex:2"><label>Rótulo</label><input id="hLabel" placeholder="Ex: Natal" value="Feriado"></div>
-        <button class="btn btn-primary" type="submit">Marcar</button>
+      <p class="muted" style="font-size:13px;margin-top:0">🤖 Dias com saída geral ~13h são marcados <b>automaticamente</b> como feriado <b>da loja</b>.${readOnly ? '' : ' Abaixo dá para adicionar manual ou remover se marcar errado.'}</p>
+      ${readOnly ? '' : `<form id="fHol">
+        <div class="row" style="flex-wrap:nowrap;align-items:end">
+          <div style="flex:1"><label>Data</label><input type="date" id="hDate" required></div>
+          <div style="flex:1"><label>Loja</label><select id="hStore"><option value="0">Todas as lojas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
+        </div>
+        <label>Rótulo</label><input id="hLabel" placeholder="Ex: Natal" value="Feriado">
+        <button class="btn btn-primary btn-big" type="submit" style="width:100%">Marcar feriado</button>
       </form>`}
       <div id="hList" style="margin-top:12px"></div>
     </div>`;
+  const storeTagOf = (h) => Number(h.store_id) ? esc(h.store_name || 'Loja') : 'Todas';
   const loadHols = async () => {
     try {
       const { holidays } = await api('/api/ponto/feriados');
       $('#hList').innerHTML = holidays.length
-        ? `<div>${compactListHTML(holidays, (h) => `<span class="chip" style="margin:0 6px 6px 0">${fmtDateBR(h.date)} • ${esc(h.label)}${readOnly ? '' : ` <button data-hdel="${h.date}" style="border:none;background:none;cursor:pointer;font-weight:800" title="Remover">×</button>`}</span>`, 12)}</div>`
+        ? `<div>${compactListHTML(holidays, (h) => `<span class="chip" style="margin:0 6px 6px 0">${fmtDateBR(h.date)} • ${esc(h.label)} • ${storeTagOf(h)}${h.label === 'Feriado (auto)' ? ' 🤖' : ''}${readOnly ? '' : ` <button data-hdel="${h.date}" data-hstore="${Number(h.store_id) || 0}" style="border:none;background:none;cursor:pointer;font-weight:800" title="Remover">×</button>`}</span>`, 12)}</div>`
         : '<div class="empty">Nenhum feriado marcado.</div>';
       bindCompactList($('#hList'));
       if (readOnly) return;
@@ -2005,7 +2062,7 @@ async function tabPontoFeriados(body) {
         const b = e.target.closest('[data-hdel]');
         if (!b) return;
         if (!confirm('Remover este feriado?')) return;
-        await api(`/api/ponto/feriados/${b.dataset.hdel}`, { method: 'DELETE' });
+        await api(`/api/ponto/feriados/${b.dataset.hdel}?store_id=${b.dataset.hstore}`, { method: 'DELETE' });
         toast('Feriado removido.'); loadHols();
       };
     } catch (e) { $('#hList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -2014,7 +2071,7 @@ async function tabPontoFeriados(body) {
   if (fHol) fHol.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api('/api/ponto/feriados', { method: 'POST', body: JSON.stringify({ date: $('#hDate').value, label: $('#hLabel').value || 'Feriado' }) });
+      await api('/api/ponto/feriados', { method: 'POST', body: JSON.stringify({ date: $('#hDate').value, label: $('#hLabel').value || 'Feriado', store_id: Number($('#hStore').value) || 0 }) });
       toast('Feriado marcado!'); $('#hDate').value = ''; loadHols();
     } catch (err) { toast(err.message, 'err'); }
   };

@@ -1085,6 +1085,46 @@ function punchCalc(p, isHoliday) {
     extra_label: fmtDur(extra),
   };
 }
+// ---------- Feriados por loja ----------
+// store_id 0 = Todas as lojas. A específica da loja tem prioridade sobre a global.
+async function holidayFor(dateISO, storeId) {
+  const sid = Number(storeId) || 0;
+  try {
+    return await db.get(
+      'SELECT h.*, s.name AS store_name FROM holidays h LEFT JOIN stores s ON s.id=h.store_id WHERE h.date=? AND (h.store_id=0 OR h.store_id=?) ORDER BY h.store_id DESC LIMIT 1',
+      dateISO, sid
+    ) || null;
+  } catch { return null; }
+}
+// veto da detecção automática: (date,0) veta todas; (date,loja) veta só ela
+async function holidaySkipped(dateISO, storeId) {
+  const sid = Number(storeId) || 0;
+  try {
+    return !!(await db.get('SELECT 1 AS x FROM holiday_skips WHERE date=? AND (store_id=0 OR store_id=?) LIMIT 1', dateISO, sid));
+  } catch { return false; }
+}
+// feriados de um mês indexados por data (lista: global + específicas), p/ cálculo por ponto
+async function holidaysOfMonth(month) {
+  try {
+    return await db.all(
+      'SELECT h.*, s.name AS store_name FROM holidays h LEFT JOIN stores s ON s.id=h.store_id WHERE h.date LIKE ? ORDER BY h.date, h.store_id DESC',
+      `${month}%`
+    );
+  } catch { return []; }
+}
+// feriado aplicável a um ponto (loja onde bateu; cai p/ o global quando não há específico)
+function holidayForPunch(monthHols, punch, fallbackStoreId) {
+  const pst = Number((punch && punch.store_id) ?? fallbackStoreId) || 0;
+  const list = monthHols.filter((h) => h.date === punch.date);
+  return list.find((h) => Number(h.store_id) === pst && pst !== 0)
+    || list.find((h) => Number(h.store_id) === 0)
+    || null;
+}
+// regra do feriado automático: maioria saindo 12:30–13:30 (horário SP)
+function looksLikeHoliday(outsSPMin, base) {
+  const inWindow = outsSPMin.filter((m) => m >= 750 && m <= 810).length;
+  return inWindow >= 3 || (base >= 3 && inWindow / base >= 0.6);
+}
 async function getPontoConfig() {
   let cfg = await db.get('SELECT * FROM ponto_config WHERE id=1');
   if (!cfg) {
@@ -1168,7 +1208,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
     await db.run('INSERT INTO punches (seller_id, store_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?,?)',
       req.user.id, store.id, today, now, nLat, nLng, acc);
     p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
-    const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
+    const hol = await holidayFor(today, store.id);
     return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
   }
   if (p.check_in_at && !p.check_out_at) {
@@ -1177,7 +1217,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
     await db.run('UPDATE punches SET check_out_at=?, check_out_lat=?, check_out_lng=?, check_out_acc=?, updated_at=datetime(\'now\') WHERE id=?',
       now, nLat, nLng, acc, p.id);
     p = await db.get('SELECT * FROM punches WHERE id=?', p.id);
-    const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
+    const hol = await holidayFor(today, p.store_id ?? store.id);
     return res.json({ type: 'out', punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
   }
   return res.status(409).json({ error: 'Dia já encerrado (entrada e saída registradas).' });
@@ -1188,7 +1228,7 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
   const today = todayISO();
   const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
-  const hol = await db.get('SELECT * FROM holidays WHERE date=?', today);
+  const hol = await holidayFor(today, (p && p.store_id) ?? req.user.store_id);
   res.json({ date: today, punch: p ? punchCalc(p, !!hol) : null, is_holiday: !!hol });
 }));
 
@@ -1197,13 +1237,13 @@ app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
   const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date DESC', req.user.id, `${month}%`);
-  const hols = await db.all('SELECT date FROM holidays WHERE date LIKE ?', `${month}%`);
-  const holSet = new Set(hols.map((h) => h.date));
+  const monthHols = await holidaysOfMonth(month);
   res.json({
     month,
     punches: ps.map((p) => {
-      const c = punchCalc(p, holSet.has(p.date));
-      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, is_holiday: holSet.has(p.date) };
+      const hol = holidayForPunch(monthHols, p, req.user.store_id);
+      const c = punchCalc(p, !!hol);
+      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null };
     }),
   });
 }));
@@ -1217,7 +1257,6 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   if (scope.error) return res.status(403).json({ error: scope.error });
   // kind: vendedoras (seller) | funcionários (staff) | todos
   const kindFilter = kind === 'staff' ? ` AND u.role='staff'` : kind === 'seller' ? ` AND u.role='seller'` : ` AND u.role IN ('seller','staff')`;
-  let hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
   let sellers = await db.all(
     `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.active=1${kindFilter}${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
@@ -1244,56 +1283,106 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
     }
     return storeNames[p.store_id];
   };
-  const buildRows = async (isHol) => Promise.all(sellers.map(async (s) => {
+  // cada ponto usa o feriado da loja onde bateu (cai p/ o global "Todas" se não houver específico)
+  const buildRows = async () => Promise.all(sellers.map(async (s) => {
     const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', s.id, date);
+    const holRow = p ? await holidayFor(date, p.store_id ?? s.store_id) : null;
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online',
       store_id: s.store_id, store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
-      punch: p ? { ...punchCalc(p, isHol), punch_store: await punchStore(p) } : null,
+      punch: p ? { ...punchCalc(p, !!holRow), punch_store: await punchStore(p) } : null,
     };
   }));
-  let rows = await buildRows(!!hol);
-  // feriado automático: seg–sáb (ainda não marcado, sem veto do admin) com
-  // maioria saindo 12:30–13:30 → marca sozinho (idempotente).
+  let rows = await buildRows();
+  // feriado automático POR LOJA: seg–sáb (ainda não marcado na loja, sem veto do admin)
+  // com maioria saindo 12:30–13:30 → marca sozinho (idempotente).
+  // Ex: Sede+Magé saem às 13h (feriado municipal) e Guapimirim trabalha normal →
+  // só Sede e Magé ganham o feriado automático.
   let auto_holiday = false;
   const dow = new Date(date + 'T12:00:00Z').getUTCDay();
-  const skipped = await db.get('SELECT 1 AS x FROM holiday_skips WHERE date=?', date).catch(() => null);
-  if (!hol && dow !== 0 && !skipped) {
-    const outs = rows.map((r) => r.punch?.check_out_at).filter(Boolean).map(spMinOfISO).filter((m) => m != null);
-    const inWindow = outs.filter((m) => m >= 750 && m <= 810).length; // 12:30–13:30 SP
-    const base = rows.filter((r) => r.punch).length;
-    if ((inWindow >= 3 || (base >= 3 && inWindow / base >= 0.6))) {
-      await db.run('INSERT INTO holidays (date, label) VALUES (?,?) ON CONFLICT(date) DO NOTHING', date, 'Feriado (auto)');
-      hol = await db.get('SELECT * FROM holidays WHERE date=?', date);
-      auto_holiday = true;
-      rows = await buildRows(true);
+  const autoDetect = async (storeId, punchRows) => {
+    if (dow === 0) return false;
+    if (await holidayFor(date, storeId)) return false;
+    if (await holidaySkipped(date, storeId)) return false;
+    const outs = punchRows.map((r) => r.punch?.check_out_at).filter(Boolean).map(spMinOfISO).filter((m) => m != null);
+    const base = punchRows.filter((r) => r.punch).length;
+    if (!looksLikeHoliday(outs, base)) return false;
+    await db.run('INSERT INTO holidays (date, store_id, label) VALUES (?,?,?) ON CONFLICT(date, store_id) DO NOTHING',
+      date, Number(storeId) || 0, 'Feriado (auto)');
+    return true;
+  };
+  if (scope.storeId != null) {
+    if (await autoDetect(scope.storeId, rows)) { auto_holiday = true; rows = await buildRows(); }
+  } else {
+    // visão "Todas": detecta loja a loja, pelos pontos batidos em cada uma
+    const byStore = new Map();
+    for (const r of rows) {
+      if (!r.punch) continue;
+      const key = Number(r.punch.store_id) || 0;
+      if (!byStore.has(key)) byStore.set(key, []);
+      byStore.get(key).push(r);
     }
+    for (const [storeKey, group] of byStore) {
+      if (storeKey === 0) continue; // sem loja identificada: não infere sozinho
+      if (await autoDetect(storeKey, group)) auto_holiday = true;
+    }
+    if (auto_holiday) rows = await buildRows();
   }
+  const dayHols = await db.all(
+    'SELECT h.*, s.name AS store_name FROM holidays h LEFT JOIN stores s ON s.id=h.store_id WHERE h.date=? ORDER BY h.store_id', date
+  ).catch(() => []);
+  const scopedHol = scope.storeId != null ? await holidayFor(date, scope.storeId) : null;
+  const holiday = scopedHol || dayHols[0] || null;
   const present = rows.filter((r) => r.punch).length;
   const absent = rows.length - present;
-  res.json({ date, is_holiday: !!hol, holiday: hol || null, auto_holiday, present, absent, rows });
+  res.json({ date, is_holiday: dayHols.length > 0 && (scope.storeId != null ? !!scopedHol : true), holiday: holiday || null, holidays: dayHols, auto_holiday, present, absent, rows });
 }));
 
-// feriados (leitura p/ gerente; escrita só admin)
+// feriados (leitura p/ gerente — só a dele + globais; escrita só admin)
+// store_id 0 = Todas as lojas. Filtro opcional ?store_id= e ?month=YYYY-MM.
 app.get('/api/ponto/feriados', requireAuth, requireManager, ah(async (req, res) => {
-  const { month } = req.query;
-  if (month && /^\d{4}-\d{2}$/.test(month)) {
-    return res.json({ holidays: await db.all('SELECT * FROM holidays WHERE date LIKE ? ORDER BY date', `${month}%`) });
+  const { month, store_id } = req.query;
+  const conds = [];
+  const params = [];
+  if (month && /^\d{4}-\d{2}$/.test(month)) { conds.push('h.date LIKE ?'); params.push(`${month}%`); }
+  if (req.user.role === 'manager') {
+    conds.push('(h.store_id=0 OR h.store_id=?)'); params.push(Number(req.user.store_id));
+  } else if (store_id != null && store_id !== '') {
+    conds.push('(h.store_id=0 OR h.store_id=?)'); params.push(Number(store_id));
   }
-  res.json({ holidays: await db.all('SELECT * FROM holidays ORDER BY date DESC LIMIT 100') });
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  res.json({ holidays: await db.all(
+    `SELECT h.*, s.name AS store_name FROM holidays h LEFT JOIN stores s ON s.id=h.store_id ${where} ORDER BY h.date DESC LIMIT 200`,
+    ...params
+  ) });
 }));
 app.post('/api/ponto/feriados', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { date, label } = req.body || {};
+  const { date, label, store_id } = req.body || {};
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
-  await db.run('INSERT INTO holidays (date, label) VALUES (?,?) ON CONFLICT(date) DO UPDATE SET label=excluded.label',
-    date, String(label || 'Feriado').slice(0, 80));
-  try { await db.run('DELETE FROM holiday_skips WHERE date=?', date); } catch {}
-  res.status(201).json({ holiday: await db.get('SELECT * FROM holidays WHERE date=?', date) });
+  let sid = 0; // 0 = Todas as lojas
+  if (store_id != null && store_id !== '' && Number(store_id) !== 0) {
+    const st = await getStore(store_id);
+    if (!st || !st.active) return res.status(400).json({ error: 'Loja inválida.' });
+    sid = st.id;
+  }
+  await db.run('INSERT INTO holidays (date, store_id, label) VALUES (?,?,?) ON CONFLICT(date, store_id) DO UPDATE SET label=excluded.label',
+    date, sid, String(label || 'Feriado').slice(0, 80));
+  try { await db.run('DELETE FROM holiday_skips WHERE date=? AND store_id=?', date, sid); } catch {}
+  res.status(201).json({ holiday: await db.get('SELECT h.*, s.name AS store_name FROM holidays h LEFT JOIN stores s ON s.id=h.store_id WHERE h.date=? AND h.store_id=?', date, sid) });
 }));
 app.delete('/api/ponto/feriados/:date', requireAuth, requireAdmin, ah(async (req, res) => {
-  await db.run('DELETE FROM holidays WHERE date=?', req.params.date);
-  // veta a detecção automática de remarcar sozinha (admin mandou não ser feriado)
-  try { await db.run('INSERT INTO holiday_skips (date) VALUES (?) ON CONFLICT(date) DO NOTHING', req.params.date); } catch {}
+  const date = req.params.date;
+  const q = req.query.store_id;
+  if (q != null && q !== '' && Number(q) !== 0) {
+    const sid = Number(q);
+    await db.run('DELETE FROM holidays WHERE date=? AND store_id=?', date, sid);
+    // veta a detecção automática de remarcar sozinha SÓ nesta loja
+    try { await db.run('INSERT INTO holiday_skips (date, store_id) VALUES (?,?) ON CONFLICT(date, store_id) DO NOTHING', date, sid); } catch {}
+  } else {
+    // global ("Todas"): remove o global e veta geral
+    await db.run('DELETE FROM holidays WHERE date=? AND store_id=0', date);
+    try { await db.run('INSERT INTO holiday_skips (date, store_id) VALUES (?,0) ON CONFLICT(date, store_id) DO NOTHING', date); } catch {}
+  }
   res.json({ ok: true });
 }));
 
@@ -1322,8 +1411,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     for (const v of visitors) if (!homeIds.has(v.id)) { homeIds.add(v.id); sellers.push(v); }
     sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
   }
-  const hols = await db.all('SELECT date FROM holidays WHERE date LIKE ?', `${month}%`);
-  const holSet = new Set(hols.map((h) => h.date));
+  const monthHols = await holidaysOfMonth(month);
   const rows = await Promise.all(sellers.map(async (s) => {
     // extras contam onde bateu o ponto (filtro por loja quando escopado)
     const ps = await db.all(
@@ -1332,7 +1420,8 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     );
     let extra = 0, worked = 0, days = 0;
     for (const p of ps) {
-      const c = punchCalc(p, holSet.has(p.date));
+      const hol = holidayForPunch(monthHols, p, s.store_id);
+      const c = punchCalc(p, !!hol);
       if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
     }
     return {
@@ -1376,7 +1465,7 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   const t = normalizePunchTimes(p.date, check_in_hhmm, check_out_hhmm);
   if (t.error) return res.status(400).json({ error: t.error });
   await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
-  const hol = await db.get('SELECT * FROM holidays WHERE date=?', p.date);
+  const hol = await holidayFor(p.date, p.store_id ?? p.seller_store);
   res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol) });
 }));
 
@@ -1399,7 +1488,7 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
      ON CONFLICT(seller_id, date) DO UPDATE SET store_id=excluded.store_id, check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, updated_at=datetime('now')`,
     seller.id, punchStoreId, d, t.inISO, t.outISO
   );
-  const hol = await db.get('SELECT * FROM holidays WHERE date=?', d);
+  const hol = await holidayFor(d, punchStoreId);
   res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol) });
 }));
 
