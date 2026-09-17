@@ -1969,7 +1969,7 @@ async function tabPontoDia(body, t) {
     const wd = weekdayShortBR(currentDate);
     return `
       <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${elsewhere}<br>
+        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
         <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
@@ -2641,6 +2641,18 @@ async function modalUser(u, reload) {
       <select id="uStore">${stores.map((s) => `<option value="${s.id}" ${Number(u?.store_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
+      <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
+        <h4 class="section-title" style="font-size:14px">Carga horária especial (opcional)</h4>
+        <p class="muted" style="font-size:12px">Vazio = padrão (seg–sex 10h • sáb 9h • dom 4h • feriado 5h). Ex: quem faz 8h–17h seg–sex = 09:00. Sair mais cedo nunca gera hora negativa.</p>
+        <div class="row" style="flex-wrap:nowrap">
+          <div style="flex:1"><label>Seg–sex</label><input id="uStdW" placeholder="10:00" inputmode="numeric"></div>
+          <div style="flex:1"><label>Sábado</label><input id="uStdSa" placeholder="09:00" inputmode="numeric"></div>
+        </div>
+        <div class="row" style="flex-wrap:nowrap">
+          <div style="flex:1"><label>Domingo</label><input id="uStdSu" placeholder="04:00" inputmode="numeric"></div>
+          <div style="flex:1"><label>Feriado</label><input id="uStdH" placeholder="05:00" inputmode="numeric"></div>
+        </div>
+      </div>
       <div style="height:12px"></div>
       <button class="btn btn-primary btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
@@ -2652,7 +2664,30 @@ async function modalUser(u, reload) {
     $('#sellerFields').style.display = role === 'seller' ? 'block' : 'none';
     $('#mgrHint').style.display = role === 'manager' ? 'block' : 'none';
     $('#staffHint').style.display = role === 'staff' ? 'block' : 'none';
+    $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
   };
+  // helpers carga horária (HH:MM <-> minutos)
+  const minToHHMM = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  const hhmmToMin = (s) => {
+    s = String(s || '').trim();
+    if (!s) return null;
+    const m = s.match(/^(\d{1,2}):([0-5]\d)$/);
+    if (!m) return { error: true };
+    const t = Number(m[1]) * 60 + Number(m[2]);
+    if (t < 60 || t > 1440) return { error: true };
+    return t;
+  };
+  ['uStdW', 'uStdSa', 'uStdSu', 'uStdH'].forEach((id) => { try { maskHHMM($('#' + id)); } catch {} });
+  // carrega carga atual (só edição)
+  if (u) {
+    api(`/api/users/${u.id}/schedule`).then((r) => {
+      const s = r.schedule || {};
+      if ($('#uStdW')) $('#uStdW').value = minToHHMM(s.weekday_min);
+      if ($('#uStdSa')) $('#uStdSa').value = minToHHMM(s.saturday_min);
+      if ($('#uStdSu')) $('#uStdSu').value = minToHHMM(s.sunday_min);
+      if ($('#uStdH')) $('#uStdH').value = minToHHMM(s.holiday_min);
+    }).catch(() => {});
+  }
   $('#fUser').onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -2663,8 +2698,23 @@ async function modalUser(u, reload) {
         store_id: Number($('#uStore').value),
         ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
       };
+      let uid = u?.id;
       if (u) await api(`/api/users/${u.id}`, { method: 'PUT', body: JSON.stringify(payload) });
-      else await api('/api/users', { method: 'POST', body: JSON.stringify({ ...payload, password: $('#uPass').value }) });
+      else {
+        const created = await api('/api/users', { method: 'POST', body: JSON.stringify({ ...payload, password: $('#uPass').value }) });
+        uid = created.user.id;
+      }
+      // carga horária especial (só quem bate ponto)
+      if ((role === 'seller' || role === 'staff') && uid) {
+        const sched = {
+          weekday_min: hhmmToMin($('#uStdW').value),
+          saturday_min: hhmmToMin($('#uStdSa').value),
+          sunday_min: hhmmToMin($('#uStdSu').value),
+          holiday_min: hhmmToMin($('#uStdH').value),
+        };
+        if (Object.values(sched).some((v) => v && v.error)) throw new Error('Carga horária inválida (use HH:MM entre 01:00 e 24:00, ou deixe vazio).');
+        await api(`/api/users/${uid}/schedule`, { method: 'PUT', body: JSON.stringify(sched) });
+      }
       closeModal(); toast('Salvo com sucesso!'); reload();
     } catch (err) { toast(err.message, 'err'); }
   };

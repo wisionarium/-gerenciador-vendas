@@ -90,8 +90,8 @@ const nowSPMinutes = () => {
   return Math.floor(ms / 60000 - 180) % 1440;
 };
 // fim padrão do expediente em minutos SP: 8h + std (600→18h, 540→17h, 240→12h, feriado 300→13h)
-const stdEndMinutes = (isHoliday, dateISO) => {
-  const std = stdMinutesFor(dateISO, isHoliday);
+const stdEndMinutes = (isHoliday, dateISO, sched) => {
+  const std = stdMinutesFor(dateISO, isHoliday, sched);
   return 8 * 60 + std;
 };
 
@@ -318,12 +318,13 @@ async function cronNotify(req, res) {
   // 3) saída: 10min antes do fim padrão (só quem tem entrada e sem saída)
   try {
     const team = await db.all("SELECT * FROM users WHERE role IN ('seller','staff') AND active=1").catch(() => []);
+    const scheds = await schedulesMap(team.map((m) => m.id));
     for (const member of team) {
       if (await alreadyNotified(today, 'ponto_saida', member.id)) continue;
       const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', member.id, today).catch(() => null);
       if (!p || !p.check_in_at || p.check_out_at) continue;
       const hol = await holidayFor(today, p.store_id ?? member.store_id).catch(() => null);
-      const reminderMin = stdEndMinutes(!!hol, today) - 10;
+      const reminderMin = stdEndMinutes(!!hol, today, scheds[member.id]) - 10;
       if (nowMin < reminderMin) continue;
       const idx = pickTemplate(SAIDA_TEMPLATES, member.id, today);
       const r = await sendPushToUser(member.id, { title: 'Bater ponto 🕒', body: fillTpl(SAIDA_TEMPLATES[idx], member), url: '/', tag: `saida-${today}` });
@@ -498,6 +499,40 @@ app.patch('/api/users/:id/status', requireAuth, requireAdmin, ah(async (req, res
   await db.run('UPDATE users SET active=? WHERE id=?', active ? 1 : 0, target.id);
   const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', target.id);
   res.json({ user: toPublicUser(u) });
+}));
+
+// ---------- CARGA HORÁRIA ESPECIAL (por pessoa) ----------
+// Ex: Juliana trabalha seg–sex 8h–17h (9h = 540min) em vez do padrão 10h.
+// Vazio (null) = padrão global. Extra nunca é negativo (max(0, trabalhado − padrão)).
+const SCHED_LABELS = { weekday_min: 'seg–sex', saturday_min: 'sábado', sunday_min: 'domingo', holiday_min: 'feriado' };
+app.get('/api/users/:id/schedule', requireAuth, ah(async (req, res) => {
+  const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
+  if (!target) return res.status(404).json({ error: 'Pessoa não encontrada.' });
+  if (req.user.role === 'manager' && Number(target.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  if ((req.user.role === 'seller' || req.user.role === 'staff') && Number(target.id) !== Number(req.user.id))
+    return res.status(403).json({ error: 'Sem permissão.' });
+  res.json({ schedule: await scheduleFor(target.id), defaults: STD_DEFAULTS });
+}));
+
+app.put('/api/users/:id/schedule', requireAuth, requireManager, ah(async (req, res) => {
+  const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
+  if (!target) return res.status(404).json({ error: 'Pessoa não encontrada.' });
+  if (req.user.role === 'manager' && Number(target.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  const body = req.body || {};
+  const parsed = {};
+  for (const k of Object.keys(SCHED_LABELS)) {
+    const v = parseStdMin(body[k]);
+    if (v && v.error) return res.status(400).json({ error: `Carga de ${SCHED_LABELS[k]} deve ser entre 1h e 24h (vazio = padrão).` });
+    parsed[k] = v;
+  }
+  await db.run(
+    `INSERT INTO work_schedules (user_id, weekday_min, saturday_min, sunday_min, holiday_min, updated_at) VALUES (?,?,?,?,?,datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET weekday_min=excluded.weekday_min, saturday_min=excluded.saturday_min, sunday_min=excluded.sunday_min, holiday_min=excluded.holiday_min, updated_at=datetime('now')`,
+    target.id, parsed.weekday_min, parsed.saturday_min, parsed.sunday_min, parsed.holiday_min
+  );
+  res.json({ schedule: await scheduleFor(target.id) });
 }));
 
 // ---------- GOALS (meta mensal da vendedora) ----------
@@ -1243,13 +1278,36 @@ app.post('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, r
 }));
 
 // ---------- PONTO (QR + localização) ----------
-// Padrão do dia em minutos: seg–sex 600 (8–18), sáb 540 (8–17), dom 240 (8–12), feriado 300 (8–13)
-function stdMinutesFor(dateISO, isHoliday) {
-  if (isHoliday) return 300;
+// Padrão do dia em minutos: seg–sex 600 (8–18), sáb 540 (8–17), dom 240 (8–12), feriado 300 (8–13).
+// `sched` = carga horária especial da pessoa (work_schedules; null = padrão global).
+const STD_DEFAULTS = { weekday: 600, saturday: 540, sunday: 240, holiday: 300 };
+function stdMinutesFor(dateISO, isHoliday, sched) {
+  if (isHoliday) return Number(sched?.holiday_min) || STD_DEFAULTS.holiday;
   const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
-  if (dow === 0) return 240;
-  if (dow === 6) return 540;
-  return 600;
+  if (dow === 0) return Number(sched?.sunday_min) || STD_DEFAULTS.sunday;
+  if (dow === 6) return Number(sched?.saturday_min) || STD_DEFAULTS.saturday;
+  return Number(sched?.weekday_min) || STD_DEFAULTS.weekday;
+}
+// carga horária especial (minutos ou null=padrão). Aceita 60–1440 (1h–24h).
+function parseStdMin(v) {
+  if (v == null || v === '') return null;
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < 60 || n > 1440) return { error: true };
+  return n;
+}
+async function scheduleFor(userId) {
+  try { return await db.get('SELECT * FROM work_schedules WHERE user_id=?', Number(userId)); }
+  catch { return null; }
+}
+async function schedulesMap(ids) {
+  const map = {};
+  const list = [...new Set((ids || []).map(Number).filter(Boolean))];
+  if (!list.length) return map;
+  try {
+    const rows = await db.all(`SELECT * FROM work_schedules WHERE user_id IN (${list.map(() => '?').join(',')})`, ...list);
+    for (const r of rows) map[r.user_id] = r;
+  } catch {}
+  return map;
 }
 const fmtDur = (min) => `${Math.floor(min / 60)}h ${min % 60}min`;
 // minutos do dia em São Paulo (UTC-3) a partir de ISO
@@ -1273,10 +1331,10 @@ function haversineM(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
-function punchCalc(p, isHoliday) {
-  const std = stdMinutesFor(p.date, isHoliday);
+function punchCalc(p, isHoliday, sched) {
+  const std = stdMinutesFor(p.date, isHoliday, sched);
   let worked = null;
-  let extra = 0;
+  let extra = 0; // nunca negativo: saiu cedo => 0, não "hora negativa"
   if (p.check_in_at && p.check_out_at) {
     worked = Math.max(0, Math.round((Date.parse(p.check_out_at) - Date.parse(p.check_in_at)) / 60000));
     extra = Math.max(0, worked - std);
@@ -1417,13 +1475,14 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
     return res.status(403).json({ error: `Você está a ${Math.round(dist)}m da loja ${store.name} (raio ${store.radius_m}m). Aproxime-se para bater o ponto.` });
   const today = todaySP();
   const now = new Date().toISOString();
+  const mySched = await scheduleFor(req.user.id);
   let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   if (!p) {
     await db.run('INSERT INTO punches (seller_id, store_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?,?)',
       req.user.id, store.id, today, now, nLat, nLng, acc);
     p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
     const hol = await holidayFor(today, store.id);
-    return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
+    return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
   }
   if (p.check_in_at && !p.check_out_at) {
     if (Date.parse(now) - Date.parse(p.check_in_at) < 3 * 60000)
@@ -1432,7 +1491,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
       now, nLat, nLng, acc, p.id);
     p = await db.get('SELECT * FROM punches WHERE id=?', p.id);
     const hol = await holidayFor(today, p.store_id ?? store.id);
-    return res.json({ type: 'out', punch: punchCalc(p, !!hol), distance_m: Math.round(dist) });
+    return res.json({ type: 'out', punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
   }
   return res.status(409).json({ error: 'Dia já encerrado (entrada e saída registradas).' });
 }));
@@ -1443,7 +1502,7 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
   const today = todaySP();
   const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   const hol = await holidayFor(today, (p && p.store_id) ?? req.user.store_id);
-  res.json({ date: today, punch: p ? punchCalc(p, !!hol) : null, is_holiday: !!hol });
+  res.json({ date: today, punch: p ? punchCalc(p, !!hol, await scheduleFor(req.user.id)) : null, is_holiday: !!hol });
 }));
 
 // meu mês de ponto (vendedora e funcionário): batidas dia a dia + extras
@@ -1452,11 +1511,12 @@ app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todaySP().slice(0, 7);
   const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date DESC', req.user.id, `${month}%`);
   const monthHols = await holidaysOfMonth(month);
+  const mySched = await scheduleFor(req.user.id);
   res.json({
     month,
     punches: ps.map((p) => {
       const hol = holidayForPunch(monthHols, p, req.user.store_id);
-      const c = punchCalc(p, !!hol);
+      const c = punchCalc(p, !!hol, mySched);
       return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null };
     }),
   });
@@ -1498,13 +1558,16 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
     return storeNames[p.store_id];
   };
   // cada ponto usa o feriado da loja onde bateu (cai p/ o global "Todas" se não houver específico)
+  // e a carga horária especial da pessoa (quando houver)
+  const scheds = await schedulesMap(sellers.map((s) => s.id));
   const buildRows = async () => Promise.all(sellers.map(async (s) => {
     const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', s.id, date);
     const holRow = p ? await holidayFor(date, p.store_id ?? s.store_id) : null;
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online',
       store_id: s.store_id, store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
-      punch: p ? { ...punchCalc(p, !!holRow), punch_store: await punchStore(p) } : null,
+      custom_schedule: !!scheds[s.id],
+      punch: p ? { ...punchCalc(p, !!holRow, scheds[s.id]), punch_store: await punchStore(p) } : null,
     };
   }));
   let rows = await buildRows();
@@ -1631,6 +1694,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;
   if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
   const wantDetail = req.query.detail === '1' || req.query.detail === 'true';
+  const schedsAll = await schedulesMap(sellers.map((s) => s.id));
   const storeNames = {};
   const punchStoreName = async (p) => {
     if (!p || !p.store_id) return 'Sede';
@@ -1646,12 +1710,13 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       `SELECT * FROM punches WHERE seller_id=? AND date LIKE ?${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY date`,
       s.id, `${month}%`, ...(scope.storeId != null ? [scope.storeId] : [])
     );
+    const sched = schedsAll[s.id] || null;
     let extra = 0, worked = 0, days = 0;
     let detail = null;
     if (wantDetail) detail = [];
     for (const p of ps) {
       const hol = holidayForPunch(monthHols, p, s.store_id);
-      const c = punchCalc(p, !!hol);
+      const c = punchCalc(p, !!hol, sched);
       if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
       if (wantDetail) {
         detail.push({
@@ -1666,6 +1731,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     }
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
+      custom_schedule: !!sched,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
       ...(wantDetail ? { punches: detail } : {}),
@@ -1707,7 +1773,7 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (t.error) return res.status(400).json({ error: t.error });
   await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
   const hol = await holidayFor(p.date, p.store_id ?? p.seller_store);
-  res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol) });
+  res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol, await scheduleFor(p.seller_id)) });
 }));
 
 // lançamento manual / contingência (admin/gerente): cria ou ajusta o dia sem QR/GPS
@@ -1730,7 +1796,7 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
     seller.id, punchStoreId, d, t.inISO, t.outISO
   );
   const hol = await holidayFor(d, punchStoreId);
-  res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol) });
+  res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol, await scheduleFor(seller.id)) });
 }));
 
 // ---------- STATS ----------

@@ -103,7 +103,17 @@ const SCHEMA = [
     pool_size INTEGER NOT NULL DEFAULT 0,
     locked_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
-  // ponto: config da loja (linha única id=1) + feriados + batidas
+  // carga horária especial por pessoa (minutos; NULL = padrão global):
+  // seg–sex 600 (10h), sáb 540 (9h), dom 240 (4h), feriado 300 (5h).
+  // Ex: quem faz 8h–17h seg–sex tem weekday_min=540. Extra nunca é negativo.
+  `CREATE TABLE IF NOT EXISTS work_schedules (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    weekday_min INTEGER CHECK (weekday_min IS NULL OR (weekday_min >= 60 AND weekday_min <= 1440)),
+    saturday_min INTEGER CHECK (saturday_min IS NULL OR (saturday_min >= 60 AND saturday_min <= 1440)),
+    sunday_min INTEGER CHECK (sunday_min IS NULL OR (sunday_min >= 60 AND sunday_min <= 1440)),
+    holiday_min INTEGER CHECK (holiday_min IS NULL OR (holiday_min >= 60 AND holiday_min <= 1440)),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
   `CREATE TABLE IF NOT EXISTS ponto_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     store_name TEXT NOT NULL DEFAULT 'Loja',
