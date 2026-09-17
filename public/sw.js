@@ -1,5 +1,5 @@
-const CACHE = 'sellday-v44';
-const CORE = ['/', '/index.html', '/version.json', '/css/styles.css', '/js/app.js', '/js/vendor/html5-qrcode.min.js', '/manifest.webmanifest', '/icons/logo.png'];
+const CACHE = 'sellday-v46';
+const CORE = ['/', '/index.html', '/version.json', '/css/styles.css', '/js/app.js', '/js/vendor/html5-qrcode.min.js', '/manifest.webmanifest', '/icons/logo.png', '/sfx/love-alarm-notification.mp3'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
 });
@@ -22,5 +22,42 @@ self.addEventListener('fetch', (e) => {
       caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
       return res;
     }).catch(() => caches.match(e.request).then((m) => m || caches.match('/index.html')))
+  );
+});
+// ---------- Web Push ----------
+self.addEventListener('push', (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch {}
+  const title = data.title || 'SellDay';
+  const body = data.body || 'Você tem um aviso novo no SellDay.';
+  const tag = data.tag || ('sellday-' + Date.now());
+  // som personalizado: com o app fechado o SO toca o som padrão do canal
+  // (limite do Web Push); com o app aberto a página toca o SFX (msg abaixo).
+  self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    for (const c of clients) { try { c.postMessage({ type: 'sellday-push-sound' }); } catch {} }
+  }).catch(() => {});
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body, tag,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      sound: '/sfx/love-alarm-notification.mp3',
+      silent: false,
+      data: { url: data.url || '/' },
+    })
+  );
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const c of clients) {
+        if (c.url === self.location.origin + url || c.url.startsWith(self.location.origin + url)) {
+          if ('focus' in c) return c.focus();
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
   );
 });

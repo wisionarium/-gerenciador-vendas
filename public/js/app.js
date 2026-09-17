@@ -25,7 +25,13 @@ async function api(path, opts = {}) {
 }
 
 // ---------- utils ----------
-const todayISO = () => { const d = new Date(); return d.toISOString().slice(0, 10); };
+// data local do aparelho (horário de parede, ex: SP): evita virar o dia 3h antes,
+// às 21h, como acontecia com toISOString (UTC) — dessincronizava ponto e mês do banco
+const todayISO = () => {
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+};
 const fmtV = (n) => (Number(n) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
 const fmtInt = (n) => (Number(n) || 0).toLocaleString('pt-BR');
 const fmtPct = (n) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%');
@@ -38,6 +44,13 @@ const weekdayBR = (iso) => {
   return isNaN(dt) ? '' : WEEKDAYS_BR[dt.getDay()];
 };
 const fmtDateBRWeek = (iso) => (weekdayBR(iso) ? `${fmtDateBR(iso)} - ${weekdayBR(iso)}` : fmtDateBR(iso));
+// forma curta p/ chips: Dom, Seg, Ter, Qua, Qui, Sex, Sáb
+const WEEKDAYS_BR_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const weekdayShortBR = (iso) => {
+  if (!iso) return '';
+  const dt = new Date(iso + 'T12:00:00');
+  return isNaN(dt) ? '' : WEEKDAYS_BR_SHORT[dt.getDay()];
+};
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
 const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
@@ -857,6 +870,14 @@ async function viewConfig(app, back = '#/vendedora') {
       <button class="btn btn-big" id="cfgPhoto">📷 Trocar foto de perfil</button>
       <input type="file" id="cfgAvaInput" accept="image/*" style="display:none">
     </div>
+    <h3 class="section-title">Notificações</h3>
+    <div class="card" id="pushCard">
+      <p class="muted" style="font-size:13px;line-height:1.5">Receba avisos de ponto e da frase do dia mesmo com o app fechado.</p>
+      <div id="pushStatus" class="muted" style="font-size:13px">Verificando…</div>
+      <div style="height:8px"></div>
+      <button class="btn btn-big" id="pushEnable">🔔 Ativar notificações</button>
+      <button class="btn btn-ghost btn-big" id="pushDisable" style="display:none;margin-top:8px">Desativar neste aparelho</button>
+    </div>
     <h3 class="section-title">Cor principal (fundo escuro)</h3>
     <div class="card">
       <div class="check-list" id="darkGrid"><p class="muted">Carregando…</p></div>
@@ -913,6 +934,68 @@ async function viewConfig(app, back = '#/vendedora') {
   } catch (e) {
     $('#darkGrid').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
+  // ---------- Push opt-in ----------
+  const pushSupported = () => ('Notification' in window) && ('PushManager' in window) && ('serviceWorker' in navigator);
+  const b64ToU8 = (b64) => {
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const bin = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
+  const playPushSound = () => {
+    try { const a = new Audio('/sfx/love-alarm-notification.mp3'); a.play().catch(() => {}); } catch {}
+  };
+  const pushSet = (st, showEnable, showDisable) => {    const s = $('#pushStatus');
+    if (s) s.textContent = st;
+    if ($('#pushEnable')) $('#pushEnable').style.display = showEnable ? '' : 'none';
+    if ($('#pushDisable')) $('#pushDisable').style.display = showDisable ? '' : 'none';
+  };
+  const refreshPushUI = async () => {
+    if (!pushSupported()) { pushSet('Este aparelho/navegador não suporta notificações push.', false, false); return; }
+    if (Notification.permission === 'denied') {
+      pushSet('Notificações bloqueadas. iPhone: Ajustes → SellDay → Notificações → Permitir. Android: Configurações → Apps → SellDay/Chrome → Notificações → Permitir.', false, false);
+      return;
+    }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) pushSet('Ativadas neste aparelho ✅', false, true);
+      else pushSet(Notification.permission === 'granted' ? 'Permissão ok, falta ativar neste aparelho.' : 'Desativadas. Toque em Ativar e permita.', true, false);
+    } catch { pushSet('Não foi possível verificar. Tente de novo.', true, false); }
+  };
+  $('#pushEnable').onclick = async () => {
+    const btn = $('#pushEnable');
+    try {
+      if (!pushSupported()) { toast('Aparelho sem suporte a push.', 'err'); return; }
+      btn.disabled = true;
+      pushSet('Ativando…', false, false);
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { toast('Permissão negada. Libere nas configurações do celular.', 'err'); refreshPushUI(); btn.disabled = false; return; }
+      const { publicKey } = await api('/api/push/vapid-public');
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(publicKey) });
+      const raw = sub.toJSON();
+      await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint, keys: raw.keys, ua: navigator.userAgent }) });
+      toast('Notificações ativadas! 🔔');
+      playPushSound();
+    } catch (e) { toast(e.message || 'Não foi possível ativar.', 'err'); }
+    btn.disabled = false;
+    refreshPushUI();
+  };
+  $('#pushDisable').onclick = async () => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      const endpoint = sub ? sub.endpoint : undefined;
+      if (sub) await sub.unsubscribe().catch(() => {});
+      await api('/api/push/unsubscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }).catch(() => {});
+      toast('Notificações desativadas neste aparelho.');
+    } catch (e) { toast(e.message || 'Erro ao desativar.', 'err'); }
+    refreshPushUI();
+  };
+  refreshPushUI();
 }
 
 // ---------- HOME do funcionário (só ponto, padrão vendedora) ----------
@@ -1883,9 +1966,11 @@ async function tabPontoDia(body, t) {
     const ava = `<span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
     const extra = r.punch && r.punch.extra_min > 0 ? ` <span class="chip lime">＋${esc(r.punch.extra_label)}</span>` : '';
     const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
+    const wd = weekdayShortBR(currentDate);
     return `
       <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
         <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${elsewhere}<br>
+        <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
       </div></div>`;
@@ -1910,7 +1995,7 @@ async function tabPontoDia(body, t) {
       return;
     }
     box.innerHTML = `
-      <p class="muted" style="font-size:13px">✅ Presentes: <b>${present.length}</b> • ⬜ Ausentes: <b>${absent.length}</b>${q ? ` • 🔍 filtro: “${esc($('#pSearch').value)}”` : ''}</p>
+      <p class="muted" style="font-size:13px">📅 <b>${esc(fmtDateBRWeek(currentDate))}</b> • ✅ Presentes: <b>${present.length}</b> • ⬜ Ausentes: <b>${absent.length}</b>${q ? ` • 🔍 filtro: “${esc($('#pSearch').value)}”` : ''}</p>
       ${(() => {
         if (!metaDay.is_holiday) return '';
         const hs = (metaDay.holidays && metaDay.holidays.length ? metaDay.holidays : (metaDay.holiday ? [metaDay.holiday] : []));
@@ -1991,12 +2076,14 @@ async function tabPontoExtras(body, t) {
           <div class="mono" style="font-size:30px;font-weight:800">${r.total_extra_label}</div>
         </div>
         ${compactListHTML(r.rows, (x, i) => `
-          <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+          <div class="sale-card" data-extra-sid="${x.seller_id}" style="cursor:pointer" title="Toque para ver o dia a dia">
+          <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
             <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
             <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
             <span><b>${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}</span></span>
             <b class="mono" style="font-size:17px">${x.extra_label}</b>
           </div></div>`, 8)}
+        <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o dia a dia que formou o total (entradas, saídas e feriados).</p>
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="exPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
         <div style="height:10px"></div>
@@ -2009,10 +2096,47 @@ async function tabPontoExtras(body, t) {
       $('#exPhone').oninput = (e) => { localStorage.setItem('ec_wa_phone', e.target.value); $('#exWa').href = waLink(e.target.value); };
       $('#copyExtra').onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Resumo copiado!'); };
       $('#printExtra').onclick = () => printExtrasPDF(month, r);
+      // auditoria: toque no nome abre o dia a dia que compôs o total (direto do banco)
+      box.onclick = async (e) => {
+        const card = e.target.closest('[data-extra-sid]');
+        if (!card || e.target.closest('[data-more]')) return;
+        const sid = Number(card.dataset.extraSid);
+        const person = r.rows.find((x) => Number(x.seller_id) === sid);
+        if (!person) return;
+        try {
+          toast('Buscando dia a dia…');
+          const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&seller_id=${sid}&detail=1`);
+          const row = (det.rows || [])[0];
+          modalExtraDetail(month, row || { ...person, punches: [] });
+        } catch (err) { toast(err.message, 'err'); }
+      };
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
   $('#pMonthGo').onclick = loadMonth;
   await loadMonth();
+}
+
+// auditoria de horas extras: dia a dia que compôs o total (lido na hora, direto do banco)
+function modalExtraDetail(month, row) {
+  const ps = row.punches || [];
+  const mm = month.slice(5, 7) + '/' + month.slice(0, 4);
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal" style="max-height:85vh;overflow:auto">
+    <h3 style="margin:0">${esc(row.name)} — ${mm}</h3>
+    <p class="muted" style="font-size:13px">Total: <b class="mono">${esc(row.extra_label)}</b> em ${row.days || 0} dia(s) • ${esc(row.worked_label || '')} trabalhados</p>
+    ${ps.length ? ps.map((p) => `
+      <div class="sale-card" style="padding:10px 12px">
+        <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+          <span style="font-size:13px"><b>${fmtDateBRWeek(p.date)}</b>${p.is_holiday ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(p.holiday_label || 'Feriado')}">🎉 Feriado${p.holiday_label && p.holiday_label.includes('auto') ? ' (auto)' : ''}</span>` : ''}<br>
+          <span class="muted">${p.in_hhmm || '—'} → ${p.out_hhmm || '—'} • trab. ${p.worked_label || '—'} • padrão ${p.std_label || '—'}${p.punch_store ? ` • ${esc(p.punch_store)}` : ''}</span></span>
+          <b class="mono" style="font-size:14px">${p.extra_min > 0 ? `+${esc(p.extra_label)}` : '—'}</b>
+        </div>
+      </div>`).join('') : '<div class="card empty">Sem batidas completas neste mês.</div>'}
+    <p class="muted" style="font-size:12px">Padrão do dia: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Extra = trabalhado − padrão. Dias com 🎉 Feriado (auto) foram marcados sozinhos pelo sistema (maioria saiu ~13h) — se marcou errado, remova na aba Feriados e o total recalcula.</p>
+    <button class="btn btn-ghost btn-big" id="cancel">Fechar</button>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
 }
 
 // PDF simples de horas extras (totais por vendedora) via impressão do sistema
@@ -2116,7 +2240,7 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Lançar ponto — ${esc(sellerName)}</h3>
-    <p class="muted" style="font-size:13px">${esc(date)} — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Use quando o QR falhar.</p>
+    <p class="muted" style="font-size:13px">📅 <b>${esc(fmtDateBRWeek(date))}</b> — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Use quando o QR falhar.</p>
     <form id="fManual">
       <label>Entrada (até 12:59)</label><input id="mIn" placeholder="08:00" inputmode="numeric">
       <label>Saída (vazio = só entrada)</label><input id="mOut" placeholder="18:00" inputmode="numeric">
@@ -2143,7 +2267,7 @@ function modalFixPonto(p, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Corrigir ponto #${p.id}</h3>
-    <p class="muted" style="font-size:13px">${esc(p.date)} — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Apague a saída para deixar pendente.</p>
+    <p class="muted" style="font-size:13px">📅 <b>${esc(fmtDateBRWeek(p.date))}</b> — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Apague a saída para deixar pendente.</p>
     <form id="fFix">
       <label>Entrada (até 12:59)</label><input id="fxIn" placeholder="08:00" value="${esc(p.in_hhmm || '')}">
       <label>Saída (vazio = pendente)</label><input id="fxOut" placeholder="18:00" value="${esc(p.out_hhmm || '')}">
@@ -2706,6 +2830,12 @@ async function checkAppUpdate() {
 }
 fetchAppVersion().then((v) => { bootVersion = v; });
 if ('serviceWorker' in navigator) {
+  // som personalizado quando o push chega com o app aberto
+  navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.type === 'sellday-push-sound') {
+      try { const a = new Audio('/sfx/love-alarm-notification.mp3'); a.play().catch(() => {}); } catch {}
+    }
+  });
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js')
     .then((reg) => {
       reg.update().catch(() => {});

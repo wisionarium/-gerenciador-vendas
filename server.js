@@ -1,3 +1,4 @@
+try { require('dotenv').config(); } catch {}
 const express = require('express');
 const path = require('path');
 const bcrypt = require('bcryptjs');
@@ -9,6 +10,90 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'troque-este-segredo-em-producao';
 const JWT_EXPIRES = '7d';
+
+// ---------- PUSH (Web Push / VAPID) ----------
+let webpush = null;
+try { webpush = require('web-push'); } catch {}
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_CONTACT = process.env.VAPID_CONTACT || 'mailto:admin@sellday.app';
+const CRON_SECRET = process.env.CRON_SECRET || '';
+if (webpush && VAPID_PUBLIC && VAPID_PRIVATE) {
+  try { webpush.setVapidDetails(VAPID_CONTACT, VAPID_PUBLIC, VAPID_PRIVATE); }
+  catch (e) { console.log('[push] VAPID inválido:', e.message); }
+}
+const pushReady = () => !!(webpush && VAPID_PUBLIC && VAPID_PRIVATE);
+
+// Textos fixos aprovados (com {nome}). Variação por dia+vendedora, sem repetir.
+const ENTRADA_TEMPLATES = [
+  'Bom dia, {nome}! ☀️ São 08:10 e seu ponto ainda não apareceu. Bate lá no SellDay rapidinho?',
+  '{nome}, o dia já começou e faltou você no ponto! Escaneie o QR da loja pra garantir sua presença.',
+  'Ei, esqueceu? 😅 Ainda dá tempo de bater a entrada de hoje. Abre o SellDay > Bater ponto.',
+  '08:10 e nada do seu ponto, {nome}. Não deixa pra depois, garante agora.',
+  'O time já batendo ponto e você ainda não, {nome}! 30 segundinhos e resolve.',
+  'Bom dia! 🌤️ Sem entrada registrada até agora. Bate o ponto pra não cair no relatório de atraso.',
+  '{nome}, sua loja já abriu! Registre sua entrada no app pra valer o dia.',
+  'Opa, faltou seu check-in! Bate o ponto agora e começa o dia 100%.',
+];
+const SAIDA_TEMPLATES = [
+  '{nome}, faltam 10 min pra fechar! Não esquece de bater a saída no SellDay. 👋',
+  'Quase lá! 🕒 Registre sua saída antes de ir embora, senão o dia fica incompleto.',
+  'Ei, antes de sair: bate o ponto de saída? São 10 min pro fechamento.',
+  'Não vai embora sem bater a saída, {nome}! Garanta suas horas de hoje.',
+  'Fim de expediente chegando. 30 segundos pra registrar a saída e pronto. ✅',
+  '{nome}, seu ponto tá só com entrada. Complete com a saída agora?',
+  'Última chamada do ponto! 🛎️ Faltam 10 min — registre a saída no app.',
+  'Fechando o dia? Passe no SellDay e bata a saída pra não esquecer amanhã.',
+];
+const firstName = (n) => String(n || 'você').trim().split(/\s+/)[0] || 'você';
+const fillTpl = (tpl, user) => tpl.replace(/\{nome\}/g, firstName(user && user.name));
+// índice determinístico: (dias desde epoch + userId) % len — não repete no dia seguinte
+function pickTemplate(list, userId, dateISO) {
+  const [y, m, d] = String(dateISO).split('-').map(Number);
+  const days = Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+  return Number.isFinite(days) ? (days + Number(userId || 0)) % list.length : 0;
+}
+async function alreadyNotified(dateISO, type, userId) {
+  try { return !!(await db.get('SELECT 1 AS x FROM notification_log WHERE date=? AND type=? AND user_id=?', dateISO, type, Number(userId))); }
+  catch { return false; }
+}
+async function markNotified(dateISO, type, userId, idx) {
+  try { await db.run('INSERT INTO notification_log (date, type, user_id, template_idx) VALUES (?,?,?,?) ON CONFLICT(date,type,user_id) DO NOTHING', dateISO, type, Number(userId), idx || 0); } catch {}
+}
+async function sendPushToUser(userId, payload) {
+  if (!pushReady()) return { sent: 0, reason: 'push-nao-configurado' };
+  let subs = [];
+  try { subs = await db.all('SELECT * FROM push_subscriptions WHERE user_id=?', Number(userId)); } catch { return { sent: 0 }; }
+  if (!subs.length) return { sent: 0, reason: 'sem-inscricao' };
+  let sent = 0;
+  for (const s of subs) {
+    try {
+      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload));
+      sent++;
+    } catch (e) {
+      const code = e && (e.statusCode || e.status_code);
+      if (code === 404 || code === 410) { try { await db.run('DELETE FROM push_subscriptions WHERE endpoint=?', s.endpoint); } catch {} }
+    }
+  }
+  return { sent };
+}
+async function sendPushToUsers(userIds, payload) {
+  let sent = 0;
+  for (const id of [...new Set(userIds.map(Number).filter(Boolean))]) {
+    try { sent += (await sendPushToUser(id, payload)).sent; } catch {}
+  }
+  return { sent };
+}
+// minutos de SP (0-1439) a partir de agora
+const nowSPMinutes = () => {
+  const ms = Date.parse(new Date().toISOString());
+  return Math.floor(ms / 60000 - 180) % 1440;
+};
+// fim padrão do expediente em minutos SP: 8h + std (600→18h, 540→17h, 240→12h, feriado 300→13h)
+const stdEndMinutes = (isHoliday, dateISO) => {
+  const std = stdMinutesFor(dateISO, isHoliday);
+  return 8 * 60 + std;
+};
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -140,6 +225,115 @@ app.put('/api/me/avatar', requireAuth, ah(async (req, res) => {
   if (!u) return res.status(404).json({ error: 'Usuária não encontrada.' });
   res.json({ user: toPublicUser(u) });
 }));
+
+// ---------- PUSH (inscrição do aparelho + cron) ----------
+app.get('/api/push/vapid-public', ah(async (req, res) => {
+  if (!VAPID_PUBLIC) return res.status(503).json({ error: 'Push não configurado no servidor.' });
+  res.json({ publicKey: VAPID_PUBLIC });
+}));
+
+app.post('/api/push/subscribe', requireAuth, ah(async (req, res) => {
+  const { endpoint, keys, ua } = req.body || {};
+  if (!endpoint || !keys || !keys.p256dh || !keys.auth)
+    return res.status(400).json({ error: 'Inscrição inválida.' });
+  if (String(endpoint).length > 2000 || String(keys.p256dh).length > 500 || String(keys.auth).length > 200)
+    return res.status(400).json({ error: 'Inscrição inválida.' });
+  await db.run('DELETE FROM push_subscriptions WHERE endpoint=?', String(endpoint));
+  await db.run('INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, ua) VALUES (?,?,?,?,?)',
+    req.user.id, String(endpoint), String(keys.p256dh), String(keys.auth), String(ua || '').slice(0, 200));
+  // máximo 5 aparelhos por pessoa (remove os mais antigos)
+  try {
+    const rows = await db.all('SELECT id FROM push_subscriptions WHERE user_id=? ORDER BY id DESC', req.user.id);
+    if (rows.length > 5) {
+      const old = rows.slice(5).map((r) => r.id);
+      await db.run(`DELETE FROM push_subscriptions WHERE id IN (${old.map(() => '?').join(',')})`, ...old);
+    }
+  } catch {}
+  res.json({ ok: true });
+}));
+
+app.delete('/api/push/unsubscribe', requireAuth, ah(async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (endpoint) await db.run('DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=?', String(endpoint), req.user.id);
+  else await db.run('DELETE FROM push_subscriptions WHERE user_id=?', req.user.id);
+  res.json({ ok: true });
+}));
+
+app.get('/api/push/status', requireAuth, ah(async (req, res) => {
+  let count = 0;
+  try { count = Number((await db.get('SELECT COUNT(*) AS c FROM push_subscriptions WHERE user_id=?', req.user.id)).c) || 0; }
+  catch {}
+  res.json({ configured: pushReady(), devices: count });
+}));
+
+app.post('/api/push/test', requireAuth, requireAdmin, ah(async (req, res) => {
+  if (!pushReady()) return res.status(503).json({ error: 'Configure VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no servidor.' });
+  const target = Number((req.body || {}).user_id) || req.user.id;
+  const r = await sendPushToUser(target, { title: 'SellDay 🔔', body: 'Notificações ativadas! Você vai receber os avisos de ponto e frase por aqui.', url: '/', tag: 'sellday-test' });
+  if (!r.sent) return res.status(404).json({ error: r.reason === 'sem-inscricao' ? 'Aparelho não inscrito. Ative as notificações no celular primeiro.' : 'Push indisponível agora.' });
+  res.json({ ok: true, sent: r.sent });
+}));
+
+// cron de notificações: sorteada, 08:10 sem ponto, saída 10min antes.
+// Vercel Cron não manda header custom por padrão → aceita Bearer, x-cron-secret ou ?secret=.
+async function cronNotify(req, res) {
+  if (CRON_SECRET) {
+    const h = req.headers.authorization || '';
+    const ok = h === 'Bearer ' + CRON_SECRET || req.headers['x-cron-secret'] === CRON_SECRET || req.query.secret === CRON_SECRET;
+    if (!ok) return res.status(401).json({ error: 'Não autorizado.' });
+  }
+  const today = todaySP();
+  const nowT = nowSPTime();
+  const nowMin = nowSPMinutes();
+  const out = { date: today, now: nowT, frase_sorteada: 0, ponto_entrada: 0, ponto_saida: 0, frase_escrita_broadcast: 0 };
+  // 1) sorteada da frase (só se ainda não escreveu)
+  try {
+    const draw = await ensureDraw(today);
+    if (draw && draw.seller && draw.locked) {
+      const written = await db.get('SELECT 1 AS x FROM daily_phrases WHERE date=?', today).catch(() => null);
+      if (!written && !(await alreadyNotified(today, 'frase_sorteada', draw.seller.id))) {
+        const r = await sendPushToUser(draw.seller.id, {
+          title: 'Você foi sorteada! ✨',
+          body: `Bom dia, ${firstName(draw.seller.name)}! Hoje é seu dia de escrever a frase do dia no SellDay. 💛`,
+          url: '/', tag: `frase-${today}`,
+        });
+        if (r.sent) { await markNotified(today, 'frase_sorteada', draw.seller.id, 0); out.frase_sorteada = r.sent; }
+      }
+    }
+  } catch (e) { console.log('[cron] frase_sorteada pulado:', e.message); }
+  // 2) 08:10: quem não bateu entrada
+  try {
+    if (nowT >= '08:10:00') {
+      const team = await db.all("SELECT * FROM users WHERE role IN ('seller','staff') AND active=1").catch(() => []);
+      for (const member of team) {
+        if (await alreadyNotified(today, 'ponto_entrada', member.id)) continue;
+        const p = await db.get('SELECT check_in_at FROM punches WHERE seller_id=? AND date=?', member.id, today).catch(() => null);
+        if (p && p.check_in_at) continue;
+        const idx = pickTemplate(ENTRADA_TEMPLATES, member.id, today);
+        const r = await sendPushToUser(member.id, { title: 'Bater ponto 🕒', body: fillTpl(ENTRADA_TEMPLATES[idx], member), url: '/', tag: `entrada-${today}` });
+        if (r.sent) { await markNotified(today, 'ponto_entrada', member.id, idx); out.ponto_entrada += r.sent; }
+      }
+    }
+  } catch (e) { console.log('[cron] ponto_entrada pulado:', e.message); }
+  // 3) saída: 10min antes do fim padrão (só quem tem entrada e sem saída)
+  try {
+    const team = await db.all("SELECT * FROM users WHERE role IN ('seller','staff') AND active=1").catch(() => []);
+    for (const member of team) {
+      if (await alreadyNotified(today, 'ponto_saida', member.id)) continue;
+      const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', member.id, today).catch(() => null);
+      if (!p || !p.check_in_at || p.check_out_at) continue;
+      const hol = await holidayFor(today, p.store_id ?? member.store_id).catch(() => null);
+      const reminderMin = stdEndMinutes(!!hol, today) - 10;
+      if (nowMin < reminderMin) continue;
+      const idx = pickTemplate(SAIDA_TEMPLATES, member.id, today);
+      const r = await sendPushToUser(member.id, { title: 'Bater ponto 🕒', body: fillTpl(SAIDA_TEMPLATES[idx], member), url: '/', tag: `saida-${today}` });
+      if (r.sent) { await markNotified(today, 'ponto_saida', member.id, idx); out.ponto_saida += r.sent; }
+    }
+  } catch (e) { console.log('[cron] ponto_saida pulado:', e.message); }
+  res.json({ ok: true, ...out });
+}
+app.post('/api/cron/notify', ah(cronNotify));
+app.get('/api/cron/notify', ah(cronNotify));
 
 // ---------- SELLERS / USERS ----------
 app.get('/api/sellers', requireAuth, ah(async (req, res) => {
@@ -491,6 +685,20 @@ app.post('/api/phrases/daily', requireAuth, ah(async (req, res) => {
     'INSERT INTO daily_phrases (date, seller_id, text) VALUES (?,?,?) ON CONFLICT(date) DO UPDATE SET text=excluded.text, seller_id=excluded.seller_id',
     today, req.user.id, clean
   );
+  // broadcast (fire-and-forget, 1x/dia): todas sabem que a frase saiu
+  (async () => {
+    try {
+      if (await alreadyNotified(today, 'frase_escrita', 0)) return;
+      const team = await db.all("SELECT id FROM users WHERE role IN ('seller','staff','manager') AND active=1 AND id<>?", req.user.id).catch(() => []);
+      const preview = clean.length > 90 ? clean.slice(0, 90) + '…' : clean;
+      await sendPushToUsers(team.map((t) => t.id), {
+        title: 'Nova frase do dia 💛',
+        body: `“${preview}” — ${req.user.name}`,
+        url: '/', tag: `frase-escrita-${today}`,
+      });
+      await markNotified(today, 'frase_escrita', 0, 0);
+    } catch (e) { console.log('[push] broadcast frase pulado:', e.message); }
+  })();
   res.status(201).json({ ok: true });
 }));
 
@@ -1120,10 +1328,16 @@ function holidayForPunch(monthHols, punch, fallbackStoreId) {
     || list.find((h) => Number(h.store_id) === 0)
     || null;
 }
-// regra do feriado automático: maioria saindo 12:30–13:30 (horário SP)
+// regra do feriado automático: maioria saindo 12:30–13:30 (horário SP).
+// Em times grandes exige maioria (>=60%); em times pequenos (<=4 presentes)
+// 3 saídas nesse intervalo bastam. Evita que 3 saídas avulsas num time de
+// 15 pessoas marquem feriado sozinho e inflem o extra de quem fez dia cheio
+// (dia cheio 600min - padrão de feriado 300min = +5h fantasma).
 function looksLikeHoliday(outsSPMin, base) {
   const inWindow = outsSPMin.filter((m) => m >= 750 && m <= 810).length;
-  return inWindow >= 3 || (base >= 3 && inWindow / base >= 0.6);
+  if (inWindow < 3) return false;
+  if (base <= 4) return true;
+  return inWindow / base >= 0.6;
 }
 async function getPontoConfig() {
   let cfg = await db.get('SELECT * FROM ponto_config WHERE id=1');
@@ -1201,7 +1415,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   const dist = haversineM(nLat, nLng, Number(store.lat), Number(store.lng));
   if (dist > Number(store.radius_m || 150))
     return res.status(403).json({ error: `Você está a ${Math.round(dist)}m da loja ${store.name} (raio ${store.radius_m}m). Aproxime-se para bater o ponto.` });
-  const today = todayISO();
+  const today = todaySP();
   const now = new Date().toISOString();
   let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   if (!p) {
@@ -1226,7 +1440,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
 // ponto de hoje (vendedora e funcionário)
 app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
-  const today = todayISO();
+  const today = todaySP();
   const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   const hol = await holidayFor(today, (p && p.store_id) ?? req.user.store_id);
   res.json({ date: today, punch: p ? punchCalc(p, !!hol) : null, is_holiday: !!hol });
@@ -1235,7 +1449,7 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
 // meu mês de ponto (vendedora e funcionário): batidas dia a dia + extras
 app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
-  const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todayISO().slice(0, 7);
+  const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todaySP().slice(0, 7);
   const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date DESC', req.user.id, `${month}%`);
   const monthHols = await holidaysOfMonth(month);
   res.json({
@@ -1250,7 +1464,7 @@ app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
 
 // relatório do dia (admin/gerente) + feriado automático
 app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
-  const date = req.query.date || todayISO();
+  const date = req.query.date || todaySP();
   const { store_id, kind } = req.query;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   const scope = scopedStoreId(req, store_id);
@@ -1388,7 +1602,7 @@ app.delete('/api/ponto/feriados/:date', requireAuth, requireAdmin, ah(async (req
 
 // resumo mensal de extras (admin/gerente)
 app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) => {
-  const month = req.query.month || todayISO().slice(0, 7);
+  const month = req.query.month || todaySP().slice(0, 7);
   const { kind } = req.query;
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido.' });
   const scope = scopedStoreId(req, req.query.store_id);
@@ -1412,6 +1626,20 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
   }
   const monthHols = await holidaysOfMonth(month);
+  // auditoria: ?seller_id= + ?detail=1 devolve o dia a dia que compõe o total
+  // (data, entrada, saída, trabalhado, padrão do dia, extra e feriado aplicado).
+  const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;
+  if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
+  const wantDetail = req.query.detail === '1' || req.query.detail === 'true';
+  const storeNames = {};
+  const punchStoreName = async (p) => {
+    if (!p || !p.store_id) return 'Sede';
+    if (!storeNames[p.store_id]) {
+      const st = await getStore(p.store_id);
+      storeNames[p.store_id] = st ? st.name : 'Sede';
+    }
+    return storeNames[p.store_id];
+  };
   const rows = await Promise.all(sellers.map(async (s) => {
     // extras contam onde bateu o ponto (filtro por loja quando escopado)
     const ps = await db.all(
@@ -1419,15 +1647,28 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       s.id, `${month}%`, ...(scope.storeId != null ? [scope.storeId] : [])
     );
     let extra = 0, worked = 0, days = 0;
+    let detail = null;
+    if (wantDetail) detail = [];
     for (const p of ps) {
       const hol = holidayForPunch(monthHols, p, s.store_id);
       const c = punchCalc(p, !!hol);
       if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
+      if (wantDetail) {
+        detail.push({
+          date: p.date,
+          in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
+          worked_label: c.worked_label, std_label: c.std_label,
+          extra_min: c.extra_min, extra_label: c.extra_label,
+          is_holiday: !!hol, holiday_label: hol ? hol.label : null,
+          punch_store: await punchStoreName(p),
+        });
+      }
     }
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
+      ...(wantDetail ? { punches: detail } : {}),
     };
   }));
   rows.sort((a, b) => b.extra_min - a.extra_min);
@@ -1479,7 +1720,7 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const punchStoreId = scope.storeId != null ? scope.storeId : (seller.store_id || await sedeId());
-  const d = date || todayISO();
+  const d = date || todaySP();
   if (!isValidDate(d)) return res.status(400).json({ error: 'Data inválida.' });
   const t = normalizePunchTimes(d, check_in_hhmm, check_out_hhmm);
   if (t.error) return res.status(400).json({ error: t.error });
@@ -1912,6 +2153,15 @@ if (require.main === module) {
       } catch {}
     };
     scheduleDraw();
+    // push local: verifica as janelas de notificação a cada 1min (na Vercel, o Cron faz esse papel)
+    setInterval(async () => {
+      try {
+        await fetch(`http://localhost:${PORT}/api/cron/notify`, {
+          method: 'POST',
+          headers: CRON_SECRET ? { Authorization: 'Bearer ' + CRON_SECRET } : {},
+        }).catch(() => {});
+      } catch {}
+    }, 60 * 1000);
   }).catch((e) => {
     console.error('[db] Falha ao inicializar:', e);
     process.exit(1);

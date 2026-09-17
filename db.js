@@ -235,6 +235,26 @@ const SCHEMA = [
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (date, store_id)
   )`,
+  // push notifications (Web Push/VAPID): 1 linha por aparelho inscrito
+  `CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    ua TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)`,
+  // evita reenvio no retry do cron (1 tipo por usuário/dia)
+  `CREATE TABLE IF NOT EXISTS notification_log (
+    date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    template_idx INTEGER NOT NULL DEFAULT 0,
+    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (date, type, user_id)
+  )`,
 ];
 
 let all;
