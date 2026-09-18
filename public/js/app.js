@@ -2434,19 +2434,14 @@ async function viewReport(app) {
       <button data-m="dia" class="${reportMode === 'dia' ? 'on' : ''}">Dia</button>
       <button data-m="mes" class="${reportMode === 'mes' ? 'on' : ''}">Mês</button>
     </div>
-    <div id="repDateWrap" style="display:${reportMode === 'dia' ? 'block' : 'none'}"><label>Data</label><input type="date" id="rDate" value="${t}" max="${t}"></div>
-    <div id="repMonthWrap" style="display:${reportMode === 'mes' ? 'block' : 'none'}"><label>Mês</label><input type="month" id="rMonth" value="${mk}" max="${mk}"></div>
-    ${isManager ? '' : `<div class="mini-pills" id="repStore" style="margin-top:10px">
-      <button data-st="" class="${!reportStore ? 'on' : ''}">Todas</button>
-      ${stores.map((s) => `<button data-st="${s.id}" class="${String(reportStore) === String(s.id) ? 'on' : ''}">${esc(s.name)}</button>`).join('')}
-    </div>`}
-    <div class="mini-pills" id="repSector" style="margin-top:10px">
-      <button data-s="" class="${!reportSector ? 'on' : ''}">Todos</button>
-      <button data-s="online" class="${reportSector === 'online' ? 'on' : ''}">Online</button>
-      <button data-s="presencial" class="${reportSector === 'presencial' ? 'on' : ''}">Presencial</button>
+    <div class="row" style="margin:10px 0">
+      <div id="repDateWrap" style="flex:1;min-width:0;display:${reportMode === 'dia' ? 'block' : 'none'}"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Data:</span><input type="date" id="rDate" value="${t}" max="${t}" style="width:100%"></div>
+      <div id="repMonthWrap" style="flex:1;min-width:0;display:${reportMode === 'mes' ? 'block' : 'none'}"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Mês:</span><input type="month" id="rMonth" value="${mk}" max="${mk}" style="width:100%"></div>
+      ${isManager ? '' : `<div id="repStoreWrap" style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Empresa:</span><select id="rStore" style="width:100%"><option value="">Todas</option>${stores.map((s) => `<option value="${s.id}" ${String(reportStore) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>`}
+      <div id="repSectorWrap" style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Online / Presencial:</span><select id="rSector" style="width:100%"><option value="">Todos</option><option value="online" ${reportSector === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${reportSector === 'presencial' ? 'selected' : ''}>Presencial</option></select></div>
     </div>
     <div style="height:10px"></div><button class="btn btn-primary" id="rGo">Gerar</button></div><div id="rBody" style="margin-top:12px"></div>`;
-  // filial é tudo presencial: sem pílulas Online/Presencial (só em Todas/Sede)
+  // filial é tudo presencial: sem filtro Online/Presencial (só em Todas/Sede)
   const syncSectorPills = () => {
     let branch = false;
     if (isManager) branch = (store.user.store_name || 'Sede') !== 'Sede';
@@ -2456,17 +2451,21 @@ async function viewReport(app) {
     }
     if (branch && reportSector) {
       reportSector = '';
-      $$('#repSector button').forEach((x) => x.classList.toggle('on', x.dataset.s === ''));
+      const rs = $('#rSector');
+      if (rs) rs.value = '';
     }
-    const el = $('#repSector');
+    const el = $('#repSectorWrap');
     if (el) el.style.display = branch ? 'none' : '';
   };
-  const repStoreEl = $('#repStore');
-  if (repStoreEl) repStoreEl.onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    reportStore = b.dataset.st;
-    $$('#repStore button').forEach((x) => x.classList.toggle('on', x === b));
+  const repStoreEl = $('#rStore');
+  if (repStoreEl) repStoreEl.onchange = () => {
+    reportStore = repStoreEl.value;
     syncSectorPills();
+    load();
+  };
+  const repSectorEl = $('#rSector');
+  if (repSectorEl) repSectorEl.onchange = () => {
+    reportSector = repSectorEl.value;
     load();
   };
   syncSectorPills();
@@ -2476,12 +2475,6 @@ async function viewReport(app) {
     $$('#repMode button').forEach((x) => x.classList.toggle('on', x === b));
     $('#repDateWrap').style.display = reportMode === 'dia' ? 'block' : 'none';
     $('#repMonthWrap').style.display = reportMode === 'mes' ? 'block' : 'none';
-    load();
-  };
-  $('#repSector').onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    reportSector = b.dataset.s;
-    $$('#repSector button').forEach((x) => x.classList.toggle('on', x === b));
     load();
   };
   const load = async () => {
