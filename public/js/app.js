@@ -2495,9 +2495,12 @@ async function viewReport(app) {
     const saleLine = (s) => `• ${fmtV(s.credit)} ${s.product}${s.partners.length ? ' + ' + s.partners.join(', ') : ''}`;
     const sectorTitle = `${sector && sector !== 'all' ? ` (${sectorLabel(sector).toUpperCase()})` : ''}${store ? ` [${store.toUpperCase()}]` : ''}`;
     const title = isMonth ? 'RELATÓRIO MENSAL' : 'RELATÓRIO COMERCIAL';
+    // presencial atende no balcão: sem "Chamadas" (só o online tem contagem de chamadas)
+    const showCallsHead = sector !== 'presencial';
+    const callsLine = (d) => ((d.sector || 'online') === 'presencial' ? '' : ` - Chamadas ${fmtInt(d.calls)}`);
     const msg =
-      `*${title}${sectorTitle} - ${periodLabel}*\n\nChamadas: ${fmtInt(summary.calls)}\nVendas: ${fmtInt(summary.records)}\nWhatsApp: ${fmtInt(summary.waRecords ?? 0)} | CRM: ${fmtInt(summary.crmRecords ?? 0)} | Presencial: ${fmtInt(summary.presRecords ?? 0)}` +
-      details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)} - Chamadas ${fmtInt(d.calls)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
+      `*${title}${sectorTitle} - ${periodLabel}*\n\n${showCallsHead ? `Chamadas: ${fmtInt(summary.calls)}\n` : ''}Vendas: ${fmtInt(summary.records)}\nWhatsApp: ${fmtInt(summary.waRecords ?? 0)} | CRM: ${fmtInt(summary.crmRecords ?? 0)} | Presencial: ${fmtInt(summary.presRecords ?? 0)}` +
+      details.map((d) => `\n\n*${d.name.toUpperCase()}${d.active ? '' : ' (INATIVA)'} - Vendas: ${fmtV(d.credit)}${callsLine(d)}*` + (d.sales.length ? `\n${d.sales.map(saleLine).join('\n')}` : '')).join('');
     const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
     $('#rBody').innerHTML = `
       <div class="card">
@@ -2508,7 +2511,7 @@ async function viewReport(app) {
           <div class="sale-card" style="padding:10px 12px">
             <div class="row" style="justify-content:space-between;align-items:center">
               <span><b>${esc(d.name)}</b> ${sectorTag(d.sector)}${d.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
-              <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas • ${fmtInt(d.calls)} chamadas</span>
+              <span class="muted" style="font-size:13px">${fmtV(d.credit)} vendas${(d.sector || 'online') === 'presencial' ? '' : ` • ${fmtInt(d.calls)} chamadas`}</span>
             </div>
             ${d.sales.length ? `<div style="margin-top:4px;font-size:13px">${d.sales.map((s) => `<div>• ${fmtV(s.credit)} ${esc(s.product)}${s.partners.length ? ' + ' + esc(s.partners.join(', ')) : ''} <b class="${s.channel === 'WhatsApp' ? 'ch-wa' : s.channel === 'Presencial' ? 'ch-pres' : 'ch-crm'}">${esc(s.channel)}</b>${s.store_name && s.store_name !== (d.store_name || 'Sede') ? ` ${storeTag(s.store_name)}` : ''}</div>`).join('')}</div>` : `<div class="muted" style="font-size:13px;margin-top:4px">${isMonth ? 'Sem vendas neste mês.' : 'Sem vendas neste dia.'}</div>`}
           </div>`, 5)}
