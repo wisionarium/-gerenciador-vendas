@@ -1489,12 +1489,23 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   const mySched = await scheduleFor(req.user.id);
   let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   if (!p) {
+    // primeira batida: até 12:59 vira entrada; a partir de 13h vira saída
+    // (esqueceu a entrada — o dia fica incompleto p/ o admin completar)
+    if (firstPunchType(nowSPMinutes()) === 'out') {
+      await db.run('INSERT INTO punches (seller_id, store_id, date, check_out_at, check_out_lat, check_out_lng, check_out_acc) VALUES (?,?,?,?,?,?,?)',
+        req.user.id, store.id, today, now, nLat, nLng, acc);
+      p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+      const hol = await holidayFor(today, store.id);
+      return res.status(201).json({ type: 'out', incomplete: true, store: store.name, punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
+    }
     await db.run('INSERT INTO punches (seller_id, store_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?,?)',
       req.user.id, store.id, today, now, nLat, nLng, acc);
     p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
     const hol = await holidayFor(today, store.id);
     return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
   }
+  if (!p.check_in_at && p.check_out_at)
+    return res.status(409).json({ error: 'Saída já registrada (sem entrada hoje). Fale com o admin para completar sua entrada.' });
   if (p.check_in_at && !p.check_out_at) {
     if (Date.parse(now) - Date.parse(p.check_in_at) < 3 * 60000)
       return res.status(409).json({ error: 'Entrada registrada agora mesmo. Aguarde alguns minutos antes da saída.' });
@@ -1752,8 +1763,15 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   res.json({ month, rows, total_extra_min: rows.reduce((a, r) => a + r.extra_min, 0), total_extra_label: fmtDur(rows.reduce((a, r) => a + r.extra_min, 0)) });
 }));
 
-// regra 13h (igual ao app): entrada só até 12:59; horário >=13h sem saída vira saída
-// (para registrar a saída de quem esqueceu a entrada). Retorna {inISO, outISO, moved} ou {error}.
+// regra 13h (igual ao lançamento manual e à correção): primeira batida do dia
+// até 12:59 = entrada; a partir de 13h sem entrada = saída (a pessoa esqueceu
+// a entrada). Evita que a saída das 17h/18h seja gravada como entrada.
+function firstPunchType(spMinutes) {
+  return spMinutes < 13 * 60 ? 'in' : 'out';
+}
+// normaliza horários manuais (igual ao app): entrada só até 12:59; horário
+// >=13h sem saída vira saída (para registrar a saída de quem esqueceu a
+// entrada). Retorna {inISO, outISO, moved} ou {error}.
 function normalizePunchTimes(dateISO, check_in_hhmm, check_out_hhmm) {
   const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
   if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return { error: 'Horário inválido (use HH:MM).' };

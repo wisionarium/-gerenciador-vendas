@@ -546,7 +546,7 @@ function modalPonto(onSaved) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Bater ponto 🕒</h3>
-    <p class="muted" style="font-size:13px">Toque em Escanear e <b>permita a câmera</b> (marque "Ao usar o app"). Vale para entrada e saída — a localização é usada <b>só agora</b>.</p>
+    <p class="muted" style="font-size:13px">Toque em Escanear e <b>permita a câmera</b> (marque "Ao usar o app"). Vale para entrada e saída — a localização é usada <b>só agora</b>. Esqueceu a entrada e já passou das 13h? Registra como <b>saída</b>.</p>
     <button class="btn btn-big" id="scanBtn">📷 Escanear QR</button>
     <div id="scanBox" style="display:none;margin-top:10px"><div id="qrReader" style="width:100%"></div><video id="scanVideo" playsinline muted style="width:100%;border-radius:14px;background:#000;display:none"></video>
     <p class="muted" id="scanStatus" style="font-size:12px">Aponte para o QR…</p></div>
@@ -577,7 +577,7 @@ function modalPonto(onSaved) {
         }),
       });
       stopScan(); closeModal();
-      toast(r.type === 'in' ? `Entrada registrada: ${r.punch.in_hhmm}` : `Saída registrada: ${r.punch.out_hhmm}`);
+      toast(r.type === 'in' ? `Entrada registrada: ${r.punch.in_hhmm}` : (r.incomplete ? `Saída ${r.punch.out_hhmm} registrada sem entrada hoje — avise o admin para completar.` : `Saída registrada: ${r.punch.out_hhmm}`));
       if (onSaved) onSaved();
     } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
   };
