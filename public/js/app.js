@@ -870,6 +870,14 @@ async function viewConfig(app, back = '#/vendedora') {
       <button class="btn btn-big" id="cfgPhoto">📷 Trocar foto de perfil</button>
       <input type="file" id="cfgAvaInput" accept="image/*" style="display:none">
     </div>
+    <h3 class="section-title">Chave PIX</h3>
+    <div class="card">
+      <p class="muted" style="font-size:13px">Para receber suas comissões. O admin vê essa chave na hora do pagamento.</p>
+      <div class="row" style="flex-wrap:nowrap;align-items:end">
+        <div style="flex:1"><label>Sua chave PIX</label><input id="pixKey" placeholder="CPF, telefone, e-mail ou aleatória" value="${esc(me.pix_key || '')}" maxlength="120"></div>
+        <button class="btn btn-primary" id="pixSave">Salvar</button>
+      </div>
+    </div>
     <h3 class="section-title">Notificações</h3>
     <div class="card" id="pushCard">
       <p class="muted" style="font-size:13px;line-height:1.5">Receba avisos de ponto e da frase do dia mesmo com o app fechado.</p>
@@ -900,6 +908,20 @@ async function viewConfig(app, back = '#/vendedora') {
       .catch((e) => toast(e.message, 'err'));
   };
   $('#cfgLogout').onclick = () => modalConfirmLogout();
+  // chave PIX (carrega fresca do banco e salva)
+  api('/api/me').then(({ user }) => {
+    if (user && $('#pixKey') && document.body.contains($('#pixKey'))) {
+      $('#pixKey').value = user.pix_key || '';
+      store.user = user;
+    }
+  }).catch(() => {});
+  $('#pixSave').onclick = async () => {
+    try {
+      const { user } = await api('/api/me/pix', { method: 'PUT', body: JSON.stringify({ pix_key: $('#pixKey').value }) });
+      store.user = user;
+      toast('Chave PIX salva!');
+    } catch (err) { toast(err.message, 'err'); }
+  };
   try {
     const { darks, lights, dark, light } = await api('/api/settings/theme');
     const paint = (gridId, map, current, colorOf) => {
@@ -2332,6 +2354,7 @@ async function viewComissoes(app) {
             <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
           </div>
           <div class="muted" style="font-size:13px;margin-top:2px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
+          ${r.pix_key ? `<div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🔑 PIX: <b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button></div>` : ''}
           ${r.pending_cents > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-pay="${r.seller_id}">Marcar como pago</button></div>` : ''}
           </div>`, 8)}
         <button class="btn btn-big" id="copyComm">Copiar resumo</button>`;
@@ -2345,6 +2368,11 @@ async function viewComissoes(app) {
       $$('#cBody [data-pay]').forEach((b) => (b.onclick = () => {
         const row = s.rows.find((x) => String(x.seller_id) === String(b.dataset.pay));
         modalPagar(row, month, () => { load(); loadPays(); });
+      }));
+      $$('#cBody [data-pix]').forEach((b) => (b.onclick = async (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
+        toast('Chave PIX copiada!');
       }));
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
@@ -2368,7 +2396,7 @@ function modalPagar(row, month, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Pagar — ${esc(row.name)}</h3>
-    <p class="muted" style="font-size:13px">Pendente total: <b class="mono">${fmtBRL(row.pending_cents)}</b></p>
+    <p class="muted" style="font-size:13px">Pendente total: <b class="mono">${fmtBRL(row.pending_cents)}</b>${row.pix_key ? `<br>🔑 PIX: <b class="mono">${esc(row.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" type="button" id="payPixCopy">copiar</button>` : '<br><span style="font-size:12px">Sem chave PIX cadastrada.</span>'}</p>
     <form id="fPay">
       <label>Valor (R$) *</label><input id="payVal" type="number" min="0.01" step="0.01" max="${maxReais}" value="${maxReais}" required>
       <div style="height:12px"></div>
@@ -2378,6 +2406,7 @@ function modalPagar(row, month, reload) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#payPixCopy') && ($('#payPixCopy').onclick = async () => { await navigator.clipboard.writeText(row.pix_key || '').catch(() => {}); toast('Chave PIX copiada!'); });
   $('#fPay').onsubmit = async (e) => {
     e.preventDefault();
     const cents = Math.round(Number($('#payVal').value) * 100);

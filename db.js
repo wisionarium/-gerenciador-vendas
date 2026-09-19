@@ -365,6 +365,8 @@ const ready = (async () => {
   for (const sql of SCHEMA) await run(sql);
   // migração leve: foto de perfil (ignora se a coluna já existir)
   try { await run('ALTER TABLE users ADD COLUMN avatar_url TEXT'); } catch {}
+  // migração leve: chave PIX da pessoa (ignora se a coluna já existir)
+  try { await run('ALTER TABLE users ADD COLUMN pix_key TEXT'); } catch {}
   // migração leve: tema em duas cores (ignora se já existir)
   try { await run('ALTER TABLE seller_settings ADD COLUMN theme_dark TEXT'); } catch {}
   try { await run('ALTER TABLE seller_settings ADD COLUMN theme_light TEXT'); } catch {}
@@ -527,11 +529,12 @@ async function migrateTableChecks() {
       sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
       store_id INTEGER,
       avatar_url TEXT,
+      pix_key TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
-    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, active, created_at)
-      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, active, created_at FROM users`);
+    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, active, created_at)
+      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, active, created_at FROM users`);
       await run('DROP TABLE users');
       await run('ALTER TABLE users_new RENAME TO users');
       try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}

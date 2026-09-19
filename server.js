@@ -207,7 +207,18 @@ app.post('/api/auth/login', ah(async (req, res) => {
 }));
 
 app.get('/api/me', requireAuth, ah(async (req, res) => {
-  res.json({ user: toPublicUser(req.user) });
+  res.json({ user: { ...toPublicUser(req.user), pix_key: req.user.pix_key || null } });
+}));
+
+// chave PIX da própria pessoa (vendedora e funcionário): texto livre até 120 caracteres; vazio remove
+app.put('/api/me/pix', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
+  const { pix_key } = req.body || {};
+  const clean = String(pix_key ?? '').trim();
+  if (clean.length > 120) return res.status(400).json({ error: 'Chave PIX muito longa (máx. 120 caracteres).' });
+  await db.run('UPDATE users SET pix_key=? WHERE id=?', clean || null, req.user.id);
+  const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', req.user.id);
+  res.json({ user: { ...toPublicUser(u), pix_key: (u && u.pix_key) || null } });
 }));
 
 // foto de perfil (data URL pequena, redimensionada no app)
@@ -1234,7 +1245,7 @@ app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, re
     const pm = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM payouts WHERE seller_id=? AND month=?', s.id, month);
     return {
       seller_id: s.id, name: s.name, sector: s.sector || 'online', store_id: s.store_id, store_name: s.store_name || 'Sede',
-      active: !!s.active, avatar_url: s.avatar_url || null,
+      active: !!s.active, avatar_url: s.avatar_url || null, pix_key: s.pix_key || null,
       month_cents: Number(m.t), paid_month_cents: Number(pm.t),
       pending_cents: await pendingCents(s.id),
     };
