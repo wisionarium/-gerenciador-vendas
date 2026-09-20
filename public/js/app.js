@@ -1023,9 +1023,10 @@ async function viewConfig(app, back = '#/vendedora') {
 // ---------- HOME do funcionário (só ponto, padrão vendedora) ----------
 function staffPunchRow(x, showDate = true) {
   const hol = x.is_holiday ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(x.holiday_label || 'Feriado')}">🎉 Feriado</span>` : '';
+  const auto = x.auto_closed ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖 auto</span>` : '';
   return `
   <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span>${hol}<br>
+    <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span>${hol}${auto}<br>
     <span style="font-size:13px">Entrada: ${x.in_hhmm || '—'} • Saída: ${x.out_hhmm || '—'}</span></span>
     <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}</span>
   </div></div>`;
@@ -1992,7 +1993,7 @@ async function tabPontoDia(body, t) {
     return `
       <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
         <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
-        <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>
+        <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
       </div></div>`;
@@ -2158,7 +2159,7 @@ function modalExtraDetail(month, row) {
     ${ps.length ? ps.map((p) => `
       <div class="sale-card" style="padding:10px 12px">
         <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-          <span style="font-size:13px"><b>${fmtDateBRWeek(p.date)}</b>${p.is_holiday ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(p.holiday_label || 'Feriado')}">🎉 Feriado${p.holiday_label && p.holiday_label.includes('auto') ? ' (auto)' : ''}</span>` : ''}<br>
+          <span style="font-size:13px"><b>${fmtDateBRWeek(p.date)}</b>${p.is_holiday ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(p.holiday_label || 'Feriado')}">🎉 Feriado${p.holiday_label && p.holiday_label.includes('auto') ? ' (auto)' : ''}</span>` : ''}${p.auto_closed ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖 auto</span>` : ''}<br>
           <span class="muted">${p.in_hhmm || '—'} → ${p.out_hhmm || '—'} • trab. ${p.worked_label || '—'} • padrão ${p.std_label || '—'}${p.punch_store ? ` • ${esc(p.punch_store)}` : ''}</span></span>
           <b class="mono" style="font-size:14px">${p.extra_min > 0 ? `+${esc(p.extra_label)}` : '—'}</b>
         </div>

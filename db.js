@@ -413,6 +413,8 @@ const ready = (async () => {
   try { await run("UPDATE users SET sector='online' WHERE sector IS NULL OR sector NOT IN ('online','presencial')"); } catch {}
   // loja do usuário/venda/ponto
   try { await run('ALTER TABLE users ADD COLUMN store_id INTEGER'); } catch {}
+  // selo de saída automática (ponto esquecido fechado sozinho no fim do expediente)
+  try { await run('ALTER TABLE punches ADD COLUMN auto_closed INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE sales ADD COLUMN store_id INTEGER'); } catch {}
   try { await run('ALTER TABLE punches ADD COLUMN store_id INTEGER'); } catch {}
   // bônus na venda + auditoria de canceladas (ANTES dos rebuilds, que copiam essas colunas)

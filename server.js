@@ -347,6 +347,21 @@ async function cronNotify(req, res) {
 app.post('/api/cron/notify', ah(cronNotify));
 app.get('/api/cron/notify', ah(cronNotify));
 
+// cron de fechamento automático (agendar 00:05 SP no cron-job.org):
+// fecha os pontos esquecidos da véspera no fim do expediente padrão.
+// Mesmo auth do /api/cron/notify (?secret=, Bearer ou x-cron-secret).
+async function cronFechar(req, res) {
+  if (CRON_SECRET) {
+    const h = req.headers.authorization || '';
+    const ok = h === 'Bearer ' + CRON_SECRET || req.headers['x-cron-secret'] === CRON_SECRET || req.query.secret === CRON_SECRET;
+    if (!ok) return res.status(401).json({ error: 'Não autorizado.' });
+  }
+  const r = await autoClosePunches();
+  res.json({ ok: true, date: todaySP(), ...r });
+}
+app.post('/api/cron/fechar', ah(cronFechar));
+app.get('/api/cron/fechar', ah(cronFechar));
+
 // ---------- SELLERS / USERS ----------
 app.get('/api/sellers', requireAuth, ah(async (req, res) => {
   const { sector } = req.query;
@@ -1487,6 +1502,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   const today = todaySP();
   const now = new Date().toISOString();
   const mySched = await scheduleFor(req.user.id);
+  await autoClosePunches(); // rede de segurança: fecha esquecidos de dias passados
   let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   if (!p) {
     // primeira batida: até 12:59 vira entrada; a partir de 13h vira saída
@@ -1534,12 +1550,13 @@ app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
   const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date DESC', req.user.id, `${month}%`);
   const monthHols = await holidaysOfMonth(month);
   const mySched = await scheduleFor(req.user.id);
+  await autoClosePunches(); // rede de segurança antes de listar o mês
   res.json({
     month,
     punches: ps.map((p) => {
       const hol = holidayForPunch(monthHols, p, req.user.store_id);
       const c = punchCalc(p, !!hol, mySched);
-      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null };
+      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: !!p.auto_closed };
     }),
   });
 }));
@@ -1571,8 +1588,7 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
     sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
   }
   const storeNames = {};
-  const punchStore = async (p) => {
-    if (!p || !p.store_id) return 'Sede';
+  const punchStore = async (p) => {    if (!p || !p.store_id) return 'Sede';
     if (!storeNames[p.store_id]) {
       const st = await getStore(p.store_id);
       storeNames[p.store_id] = st ? st.name : 'Sede';
@@ -1658,6 +1674,48 @@ async function monthExtra(sellerId, month) {
   return { extra, paid, pending: Math.max(0, extra - paid) };
 }
 
+// fechamento automático de pontos esquecidos (dias passados com entrada e sem
+// saída): saída = fim do expediente padrão daquele dia (18h seg–sex, 17h sáb,
+// 12h dom, 13h feriado, ou fim da carga especial). Teto punitivo: hora além do
+// padrão é perdida. Marca auto_closed=1 (o admin pode corrigir depois).
+// Roda no agendador da 00:05 + de segurança nas telas de ponto.
+async function autoClosePunches() {
+  const today = todaySP();
+  let open = [];
+  try { open = await db.all('SELECT * FROM punches WHERE date < ? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY date', today); }
+  catch (e) { console.log('[ponto] auto-close pulado:', e.message); return { closed: 0 }; }
+  if (!open.length) return { closed: 0 };
+  const ids = [...new Set(open.map((p) => p.seller_id))];
+  const scheds = await schedulesMap(ids);
+  const usersById = {};
+  try {
+    const us = await db.all(`SELECT * FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids);
+    for (const u of us) usersById[u.id] = u;
+  } catch {}
+  const monthCache = {};
+  const monthHols = async (month) => {
+    if (!monthCache[month]) monthCache[month] = await holidaysOfMonth(month);
+    return monthCache[month];
+  };
+  let closed = 0;
+  for (const p of open) {
+    try {
+      const u = usersById[p.seller_id] || {};
+      const hols = await monthHols(p.date.slice(0, 7));
+      const hol = holidayForPunch(hols, p, u.store_id);
+      const endMin = stdEndMinutes(!!hol, p.date, scheds[p.seller_id]);
+      const hh = String(Math.floor(endMin / 60)).padStart(2, '0');
+      const mm = String(endMin % 60).padStart(2, '0');
+      let outISO = new Date(`${p.date}T${hh}:${mm}:00-03:00`).toISOString();
+      if (p.check_in_at && Date.parse(outISO) <= Date.parse(p.check_in_at)) outISO = p.check_in_at;
+      await db.run("UPDATE punches SET check_out_at=?, updated_at=datetime('now'), auto_closed=1 WHERE id=? AND check_out_at IS NULL", outISO, p.id);
+      closed++;
+    } catch (e) { console.log('[ponto] auto-close falhou p/', p.id, e.message); }
+  }
+  if (closed) console.log(`[ponto] auto-close: ${closed} ponto(s) fechado(s).`);
+  return { closed };
+}
+
 // feriados (leitura p/ gerente — só a dele + globais; escrita só admin)
 // store_id 0 = Todas as lojas. Filtro opcional ?store_id= e ?month=YYYY-MM.
 app.get('/api/ponto/feriados', requireAuth, requireManager, ah(async (req, res) => {
@@ -1731,15 +1789,16 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     for (const v of visitors) if (!homeIds.has(v.id)) { homeIds.add(v.id); sellers.push(v); }
     sellers.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
   }
+  await autoClosePunches(); // rede de segurança antes de somar o mês
   const monthHols = await holidaysOfMonth(month);
   // auditoria: ?seller_id= + ?detail=1 devolve o dia a dia que compõe o total
   // (data, entrada, saída, trabalhado, padrão do dia, extra e feriado aplicado).
-  const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;
-  if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
+  const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;  if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
   const wantDetail = req.query.detail === '1' || req.query.detail === 'true';
   const schedsAll = await schedulesMap(sellers.map((s) => s.id));
+  await autoClosePunches(); // rede de segurança antes de montar o dia
   const storeNames = {};
-  const punchStoreName = async (p) => {
+  const punchStore = async (p) => {
     if (!p || !p.store_id) return 'Sede';
     if (!storeNames[p.store_id]) {
       const st = await getStore(p.store_id);
@@ -1768,6 +1827,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
           worked_label: c.worked_label, std_label: c.std_label,
           extra_min: c.extra_min, extra_label: c.extra_label,
           is_holiday: !!hol, holiday_label: hol ? hol.label : null,
+          auto_closed: !!p.auto_closed,
           punch_store: await punchStoreName(p),
         });
       }
@@ -1844,7 +1904,7 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   const { check_in_hhmm, check_out_hhmm } = req.body || {};
   const t = normalizePunchTimes(p.date, check_in_hhmm, check_out_hhmm);
   if (t.error) return res.status(400).json({ error: t.error });
-  await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
+  await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, auto_closed=0, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
   const hol = await holidayFor(p.date, p.store_id ?? p.seller_store);
   res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol, await scheduleFor(p.seller_id)) });
 }));
@@ -1865,7 +1925,7 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
   if (t.error) return res.status(400).json({ error: t.error });
   await db.run(
     `INSERT INTO punches (seller_id, store_id, date, check_in_at, check_out_at) VALUES (?,?,?,?,?)
-     ON CONFLICT(seller_id, date) DO UPDATE SET store_id=excluded.store_id, check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, updated_at=datetime('now')`,
+     ON CONFLICT(seller_id, date) DO UPDATE SET store_id=excluded.store_id, check_in_at=excluded.check_in_at, check_out_at=excluded.check_out_at, auto_closed=0, updated_at=datetime('now')`,
     seller.id, punchStoreId, d, t.inISO, t.outISO
   );
   const hol = await holidayFor(d, punchStoreId);
