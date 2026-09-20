@@ -2089,22 +2089,22 @@ async function tabPontoExtras(body, t) {
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const r = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}`);
-      const msg = `*HORAS EXTRAS — ${month.slice(5, 7)}/${month.slice(0, 4)}*\nTotal: ${r.total_extra_label}\n` +
-        r.rows.map((x) => `• ${x.name}: ${x.extra_label}`).join('\n');
+      const msg = `*HORAS EXTRAS — ${month.slice(5, 7)}/${month.slice(0, 4)}*\n` +
+        r.rows.map((x) => `• ${x.name}: ${x.extra_label}${x.paid_min > 0 ? ` (pago ${x.paid_label})` : ''}${x.pix_key ? ` • PIX ${x.pix_key}` : ''}`).join('\n');
       const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
+      const fmtHM = (m) => `${Math.floor((m || 0) / 60)}h ${(m || 0) % 60}min`;
       box.innerHTML = `
-        <div class="card" style="background:var(--brand-soft);text-align:center;margin-bottom:12px">
-          <div class="muted" style="font-size:12px">Total do mês</div>
-          <div class="mono" style="font-size:30px;font-weight:800">${r.total_extra_label}</div>
-        </div>
         ${compactListHTML(r.rows, (x, i) => `
-          <div class="sale-card" data-extra-sid="${x.seller_id}" style="cursor:pointer" title="Toque para ver o dia a dia">
+          <div class="sale-card" data-extra-sid="${x.seller_id}" style="cursor:pointer;padding:10px 12px" title="Toque para ver o dia a dia">
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
             <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
             <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
-            <span><b>${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}</span></span>
-            <b class="mono" style="font-size:17px">${x.extra_label}</b>
-          </div></div>`, 8)}
+            <span><b>${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
+            <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
+            <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
+          </div>
+          ${x.pending_min > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
+          </div>`, 8)}
         <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o dia a dia que formou o total (entradas, saídas e feriados).</p>
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="exPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
@@ -2120,8 +2120,17 @@ async function tabPontoExtras(body, t) {
       $('#printExtra').onclick = () => printExtrasPDF(month, r);
       // auditoria: toque no nome abre o dia a dia que compôs o total (direto do banco)
       box.onclick = async (e) => {
+        if (e.target.closest('[data-more]')) return;
+        const px = e.target.closest('[data-pix]');
+        if (px) { await navigator.clipboard.writeText(px.dataset.pix || '').catch(() => {}); toast('Chave PIX copiada!'); return; }
+        const pe = e.target.closest('[data-payextra]');
+        if (pe) {
+          const person = r.rows.find((x) => String(x.seller_id) === String(pe.dataset.payextra));
+          if (person) modalPagarExtra(person, month, loadMonth);
+          return;
+        }
         const card = e.target.closest('[data-extra-sid]');
-        if (!card || e.target.closest('[data-more]')) return;
+        if (!card) return;
         const sid = Number(card.dataset.extraSid);
         const person = r.rows.find((x) => Number(x.seller_id) === sid);
         if (!person) return;
@@ -2161,20 +2170,51 @@ function modalExtraDetail(month, row) {
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
 }
 
-// PDF simples de horas extras (totais por vendedora) via impressão do sistema
+// baixa de horas extras: registra as horas pagas/compensadas no mês (HH:MM)
+function modalPagarExtra(row, month, reload) {
+  const pend = row.pending_min || 0;
+  const def = `${String(Math.floor(pend / 60)).padStart(2, '0')}:${String(pend % 60).padStart(2, '0')}`;
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">Pagar horas — ${esc(row.name)}</h3>
+    <p class="muted" style="font-size:13px">Extra no mês: <b class="mono">${esc(row.extra_label)}</b>${row.paid_min > 0 ? ` • Já pago: <b class="mono">${esc(row.paid_label)}</b>` : ''} • Restam: <b class="mono">${Math.floor(pend / 60)}h ${pend % 60}min</b>${row.pix_key ? `<br><b class="mono">${esc(row.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" type="button" id="pePixCopy">copiar</button>` : ''}</p>
+    <form id="fPayExtra">
+      <label>Horas pagas (HH:MM) *</label><input id="peVal" placeholder="00:00" value="${def}" inputmode="numeric" required>
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Confirmar pagamento</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  try { maskHHMM($('#peVal')); } catch {}
+  $('#pePixCopy') && ($('#pePixCopy').onclick = async () => { await navigator.clipboard.writeText(row.pix_key || '').catch(() => {}); toast('Chave PIX copiada!'); });
+  $('#fPayExtra').onsubmit = async (e) => {
+    e.preventDefault();
+    const m = String($('#peVal').value || '').match(/^(\d{1,2}):([0-5]\d)$/);
+    if (!m) return toast('Horas inválidas (use HH:MM).', 'err');
+    const mins = Number(m[1]) * 60 + Number(m[2]);
+    if (mins <= 0 || mins > pend) return toast(`Informe de 00:01 até ${def}.`, 'err');
+    try {
+      await api('/api/ponto/extra-payouts', { method: 'POST', body: JSON.stringify({ seller_id: row.seller_id, month, minutes: mins }) });
+      closeModal(); toast('Horas marcadas como pagas!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+// PDF simples de horas extras (totais por pessoa) via impressão do sistema
 function printExtrasPDF(month, r) {
   const [y, m] = month.split('-');
-  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
+  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.pix_key || '—')}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Horas Extras — ${m}/${y}</title><style>
     body{font-family:sans-serif;padding:40px;color:#111} h1{font-size:22px;margin:0} p{color:#555;font-size:13px}
     table{width:100%;border-collapse:collapse;margin-top:16px} th,td{border:1px solid #999;padding:8px;font-size:14px;text-align:left}
-    tfoot td{font-weight:800} .sign{margin-top:48px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:13px;text-align:center}
+    .sign{margin-top:48px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:13px;text-align:center}
     </style></head><body>
     <h1>Horas Extras — ${m}/${y}</h1><p>Gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
-    <table><thead><tr><th>#</th><th>Vendedora</th><th>Setor</th><th style="text-align:right">Extras</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="4">Sem registros no mês.</td></tr>'}</tbody>
-    <tfoot><tr><td colspan="3">Total geral</td><td style="text-align:right">${r.total_extra_label}</td></tr></tfoot></table>
+    <table><thead><tr><th>#</th><th>Nome</th><th>Setor</th><th>PIX</th><th style="text-align:right">Extras</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="5">Sem registros no mês.</td></tr>'}</tbody></table>
     <div class="sign"><div>Responsável</div><div>Conferência</div></div>
     <script>onload=()=>{print();}<\/script></body></html>`);
   w.document.close();
@@ -2354,14 +2394,14 @@ async function viewComissoes(app) {
             <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
           </div>
           <div class="muted" style="font-size:13px;margin-top:2px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
-          ${r.pix_key ? `<div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🔑 PIX: <b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button></div>` : ''}
-          ${r.pending_cents > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-pay="${r.seller_id}">Marcar como pago</button></div>` : ''}
+          <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
+          ${r.pending_cents > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-pay="${r.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
           </div>`, 8)}
         <button class="btn btn-big" id="copyComm">Copiar resumo</button>`;
       bindCompactList(box);
       $('#copyComm').onclick = async () => {
         const msg = `*COMISSÕES — ${month}*\nMês: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\nPendente: ${(s.total_pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n` +
-          s.rows.map((r) => `• ${r.name}: mês ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • pendente ${(r.pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`).join('\n');
+          s.rows.map((r) => `• ${r.name}: mês ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • pendente ${(r.pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}${r.pix_key ? ` • PIX ${r.pix_key}` : ''}`).join('\n');
         await navigator.clipboard.writeText(msg).catch(() => {});
         toast('Resumo copiado!');
       };
@@ -2396,7 +2436,7 @@ function modalPagar(row, month, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Pagar — ${esc(row.name)}</h3>
-    <p class="muted" style="font-size:13px">Pendente total: <b class="mono">${fmtBRL(row.pending_cents)}</b>${row.pix_key ? `<br>🔑 PIX: <b class="mono">${esc(row.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" type="button" id="payPixCopy">copiar</button>` : '<br><span style="font-size:12px">Sem chave PIX cadastrada.</span>'}</p>
+    <p class="muted" style="font-size:13px">Pendente total: <b class="mono">${fmtBRL(row.pending_cents)}</b>${row.pix_key ? `<br><b class="mono">${esc(row.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" type="button" id="payPixCopy">copiar</button>` : '<br><span style="font-size:12px">Sem chave PIX cadastrada.</span>'}</p>
     <form id="fPay">
       <label>Valor (R$) *</label><input id="payVal" type="number" min="0.01" step="0.01" max="${maxReais}" value="${maxReais}" required>
       <div style="height:12px"></div>

@@ -1637,6 +1637,27 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ date, is_holiday: dayHols.length > 0 && (scope.storeId != null ? !!scopedHol : true), holiday: holiday || null, holidays: dayHols, auto_holiday, present, absent, rows });
 }));
 
+// total de extras de uma pessoa no mês (todas as lojas) + baixas pagas.
+// Usado na validação da baixa de horas; o resumo mensal usa o mesmo cálculo
+// com filtro de loja quando escopado.
+async function monthExtra(sellerId, month) {
+  const person = await db.get('SELECT * FROM users WHERE id=?', Number(sellerId));
+  if (!person) return { extra: 0, paid: 0, pending: 0 };
+  const sched = await scheduleFor(person.id);
+  const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ?', person.id, `${month}%`);
+  const monthHols = await holidaysOfMonth(month);
+  let extra = 0;
+  for (const p of ps) {
+    const hol = holidayForPunch(monthHols, p, person.store_id);
+    const c = punchCalc(p, !!hol, sched);
+    if (c.worked_min != null) extra += c.extra_min;
+  }
+  let paid = 0;
+  try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', person.id, month)).t) || 0; }
+  catch {}
+  return { extra, paid, pending: Math.max(0, extra - paid) };
+}
+
 // feriados (leitura p/ gerente — só a dele + globais; escrita só admin)
 // store_id 0 = Todas as lojas. Filtro opcional ?store_id= e ?month=YYYY-MM.
 app.get('/api/ponto/feriados', requireAuth, requireManager, ah(async (req, res) => {
@@ -1733,7 +1754,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       s.id, `${month}%`, ...(scope.storeId != null ? [scope.storeId] : [])
     );
     const sched = schedsAll[s.id] || null;
-    let extra = 0, worked = 0, days = 0;
+    let extra = 0, worked = 0, days = 0, paid = 0;
     let detail = null;
     if (wantDetail) detail = [];
     for (const p of ps) {
@@ -1751,16 +1772,39 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
         });
       }
     }
+    try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', s.id, month)).t) || 0; }
+    catch {}
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
-      custom_schedule: !!sched,
+      custom_schedule: !!sched, pix_key: s.pix_key || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
+      paid_min: paid, paid_label: fmtDur(paid),
+      pending_min: Math.max(0, extra - paid), pending_label: fmtDur(Math.max(0, extra - paid)),
       ...(wantDetail ? { punches: detail } : {}),
     };
   }));
   rows.sort((a, b) => b.extra_min - a.extra_min);
   res.json({ month, rows, total_extra_min: rows.reduce((a, r) => a + r.extra_min, 0), total_extra_label: fmtDur(rows.reduce((a, r) => a + r.extra_min, 0)) });
+}));
+
+// baixa de horas extras (admin/gerente): registra horas pagas/compensadas no mês (em minutos)
+app.post('/api/ponto/extra-payouts', requireAuth, requireManager, ah(async (req, res) => {
+  const { seller_id, month, minutes } = req.body || {};
+  const person = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff') AND active=1", Number(seller_id));
+  if (!person) return res.status(400).json({ error: 'Pessoa inválida.' });
+  if (req.user.role === 'manager' && Number(person.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  const m = (month && /^\d{4}-\d{2}$/.test(month)) ? month : null;
+  if (!m) return res.status(400).json({ error: 'Mês inválido.' });
+  const mins = Math.round(Number(minutes));
+  if (!Number.isFinite(mins) || mins <= 0) return res.status(400).json({ error: 'Informe as horas pagas.' });
+  const cur = await monthExtra(person.id, m);
+  if (mins > cur.pending) return res.status(400).json({ error: `Valor maior que o restante (${fmtDur(cur.pending)}).` });
+  const r = await db.run('INSERT INTO extra_payouts (seller_id, month, minutes, created_by) VALUES (?,?,?,?)',
+    person.id, m, mins, req.user.id);
+  const after = await monthExtra(person.id, m);
+  res.status(201).json({ payout: await db.get('SELECT * FROM extra_payouts WHERE id=?', r.lastInsertRowid), pending_min: after.pending, pending_label: fmtDur(after.pending) });
 }));
 
 // regra 13h (igual ao lançamento manual e à correção): primeira batida do dia

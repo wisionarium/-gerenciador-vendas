@@ -163,7 +163,16 @@ const SCHEMA = [
     UNIQUE (sale_id, seller_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_comm_seller_month ON commissions(seller_id, month)`,
-  // baixas de pagamento feitas pelo admin
+  // baixas de horas extras pagas/compensadas pelo admin (em minutos)
+  `CREATE TABLE IF NOT EXISTS extra_payouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    minutes INTEGER NOT NULL CHECK (minutes > 0 AND minutes <= 60000),
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_epayout_seller_month ON extra_payouts(seller_id, month)`,
   `CREATE TABLE IF NOT EXISTS payouts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
