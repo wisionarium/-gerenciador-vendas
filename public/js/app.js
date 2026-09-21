@@ -2818,7 +2818,7 @@ async function modalUser(u, reload) {
   setTimeout(exit, 3000);
 })();
 
-// ---------- pull-to-refresh (só vendedora/funcionário, só no topo) ----------
+// ---------- pull-to-refresh (todos os perfis, só no topo) ----------
 // Gesto intencional: exige scroll no topo + arrasto vertical p/ baixo com
 // limiar mínimo e resistência, p/ não disparar em qualquer toque na tela.
 (function initPullToRefresh() {
@@ -2831,9 +2831,9 @@ async function modalUser(u, reload) {
   const ptr = () => $('#ptr');
   const allowed = () => {
     const u = store.user;
-    if (!u || (u.role !== 'seller' && u.role !== 'staff')) return false;
+    if (!u) return false;
     const h = location.hash || '';
-    if (!h.startsWith('#/vendedora') && !h.startsWith('#/funcionario')) return false;
+    if (!h.startsWith('#/vendedora') && !h.startsWith('#/funcionario') && !h.startsWith('#/admin')) return false;
     if (refreshing) return false;
     if ($('#modalRoot') && $('#modalRoot').firstChild) return false;
     if (document.querySelector('.modal-bg')) return false;
