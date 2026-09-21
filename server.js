@@ -47,6 +47,27 @@ const SAIDA_TEMPLATES = [
 ];
 const firstName = (n) => String(n || 'você').trim().split(/\s+/)[0] || 'você';
 const fillTpl = (tpl, user) => tpl.replace(/\{nome\}/g, firstName(user && user.name));
+const fillFraseTpl = (tpl, user, frase) => tpl.replace(/\{nome\}/g, firstName(user && user.name)).replace(/\{frase\}/g, String(frase || ''));
+const FRASE_SORTEADA_TEMPLATES = [
+  'Bom dia, {nome}! ✨ Hoje é seu dia de escrever a frase do dia no SellDay. 💛',
+  '{nome}, você foi sorteada! 🍀 Escreva a frase de hoje e inspire o time.',
+  'É o seu dia, {nome}! ✍️ Deixe a frase do dia com a sua cara.',
+  'Sorteio feito: hoje a frase é com você, {nome}! 💪 Manda aquela motivação.',
+  'Bom dia! ☀️ {nome}, o time espera sua frase de hoje. Capricha! 💛',
+  '{nome}, sua vez de brilhar! 🌟 Escreva a frase do dia no SellDay.',
+  'O sorteio te escolheu, {nome}! 🎯 Qual vai ser a frase de hoje?',
+  'Ei, {nome}! 😊 Hoje você inspira a equipe: escreva a frase do dia.',
+];
+const FRASE_ESCRITA_TEMPLATES = [
+  '“{frase}” — {nome}',
+  '{nome} escreveu: “{frase}”',
+  'Frase de hoje por {nome}: “{frase}” 💛',
+  '“{frase}” 💬 ({nome})',
+  'Inspiração do dia de {nome}: “{frase}” ✨',
+  '{nome} mandou: “{frase}” 🌟',
+  'Acabou de sair: “{frase}” — {nome} 💛',
+  'Olha a frase de hoje! “{frase}” — por {nome} 😊',
+];
 // índice determinístico: (dias desde epoch + userId) % len — não repete no dia seguinte
 function pickTemplate(list, userId, dateISO) {
   const [y, m, d] = String(dateISO).split('-').map(Number);
@@ -298,18 +319,21 @@ async function cronNotify(req, res) {
   const nowMin = nowSPMinutes();
   const morning = nowMin < 12 * 60; // avisos de entrada/frase só de manhã
   const out = { date: today, now: nowT, frase_sorteada: 0, ponto_entrada: 0, ponto_saida: 0, frase_escrita_broadcast: 0 };
-  // 1) sorteada da frase (só se ainda não escreveu) — só de manhã
-  if (morning) try {
+  // 1) sorteada da frase (só se ainda não escreveu). Sem trava de horário:
+  // o dedupe (1x/dia) já impede repetição, e assim cobre os dias em que o
+  // sorteio trava tarde (time que bate ponto depois das 8h).
+  try {
     const draw = await ensureDraw(today);
     if (draw && draw.seller && draw.locked) {
       const written = await db.get('SELECT 1 AS x FROM daily_phrases WHERE date=?', today).catch(() => null);
       if (!written && !(await alreadyNotified(today, 'frase_sorteada', draw.seller.id))) {
+        const idx = pickTemplate(FRASE_SORTEADA_TEMPLATES, draw.seller.id, today);
         const r = await sendPushToUser(draw.seller.id, {
           title: 'Você foi sorteada! ✨',
-          body: `Bom dia, ${firstName(draw.seller.name)}! Hoje é seu dia de escrever a frase do dia no SellDay. 💛`,
+          body: fillTpl(FRASE_SORTEADA_TEMPLATES[idx], draw.seller),
           url: '/', tag: `frase-${today}`,
         });
-        if (r.sent) { await markNotified(today, 'frase_sorteada', draw.seller.id, 0); out.frase_sorteada = r.sent; }
+        if (r.sent) { await markNotified(today, 'frase_sorteada', draw.seller.id, idx); out.frase_sorteada = r.sent; }
       }
     }
   } catch (e) { console.log('[cron] frase_sorteada pulado:', e.message); }
@@ -756,12 +780,13 @@ app.post('/api/phrases/daily', requireAuth, ah(async (req, res) => {
       if (await alreadyNotified(today, 'frase_escrita', 0)) return;
       const team = await db.all("SELECT id FROM users WHERE role IN ('seller','staff','manager') AND active=1 AND id<>?", req.user.id).catch(() => []);
       const preview = clean.length > 90 ? clean.slice(0, 90) + '…' : clean;
+      const idx = pickTemplate(FRASE_ESCRITA_TEMPLATES, req.user.id, today);
       await sendPushToUsers(team.map((t) => t.id), {
         title: 'Nova frase do dia 💛',
-        body: `“${preview}” — ${req.user.name}`,
+        body: fillFraseTpl(FRASE_ESCRITA_TEMPLATES[idx], req.user, preview),
         url: '/', tag: `frase-escrita-${today}`,
       });
-      await markNotified(today, 'frase_escrita', 0, 0);
+      await markNotified(today, 'frase_escrita', 0, idx);
     } catch (e) { console.log('[push] broadcast frase pulado:', e.message); }
   })();
   res.status(201).json({ ok: true });
