@@ -296,9 +296,10 @@ async function cronNotify(req, res) {
   const today = todaySP();
   const nowT = nowSPTime();
   const nowMin = nowSPMinutes();
+  const morning = nowMin < 12 * 60; // avisos de entrada/frase só de manhã
   const out = { date: today, now: nowT, frase_sorteada: 0, ponto_entrada: 0, ponto_saida: 0, frase_escrita_broadcast: 0 };
-  // 1) sorteada da frase (só se ainda não escreveu)
-  try {
+  // 1) sorteada da frase (só se ainda não escreveu) — só de manhã
+  if (morning) try {
     const draw = await ensureDraw(today);
     if (draw && draw.seller && draw.locked) {
       const written = await db.get('SELECT 1 AS x FROM daily_phrases WHERE date=?', today).catch(() => null);
@@ -312,8 +313,8 @@ async function cronNotify(req, res) {
       }
     }
   } catch (e) { console.log('[cron] frase_sorteada pulado:', e.message); }
-  // 2) 08:10: quem não bateu entrada
-  try {
+  // 2) 08:10: quem não bateu entrada — só de manhã (à tarde seria spam p/ faltante)
+  if (morning) try {
     if (nowT >= '08:10:00') {
       const team = await db.all("SELECT * FROM users WHERE role IN ('seller','staff') AND active=1").catch(() => []);
       for (const member of team) {
@@ -326,7 +327,10 @@ async function cronNotify(req, res) {
       }
     }
   } catch (e) { console.log('[cron] ponto_entrada pulado:', e.message); }
-  // 3) saída: 10min antes do fim padrão (só quem tem entrada e sem saída)
+  // 3) saída: 10min antes do fim de CADA UM (carga especial incluída).
+  // Roda em horários fixos (11:50 dom, 12:50 feriado, 16:50 p/ fim 17h,
+  // 17:50 p/ fim 18h) e pega quem está na janela de 70min após o seu aviso.
+  // Fora da janela não avisa (evita spam tardio). 1x por pessoa/dia.
   try {
     const team = await db.all("SELECT * FROM users WHERE role IN ('seller','staff') AND active=1").catch(() => []);
     const scheds = await schedulesMap(team.map((m) => m.id));
@@ -336,7 +340,7 @@ async function cronNotify(req, res) {
       if (!p || !p.check_in_at || p.check_out_at) continue;
       const hol = await holidayFor(today, p.store_id ?? member.store_id).catch(() => null);
       const reminderMin = stdEndMinutes(!!hol, today, scheds[member.id]) - 10;
-      if (nowMin < reminderMin) continue;
+      if (nowMin < reminderMin || nowMin - reminderMin > 70) continue;
       const idx = pickTemplate(SAIDA_TEMPLATES, member.id, today);
       const r = await sendPushToUser(member.id, { title: 'Bater ponto 🕒', body: fillTpl(SAIDA_TEMPLATES[idx], member), url: '/', tag: `saida-${today}` });
       if (r.sent) { await markNotified(today, 'ponto_saida', member.id, idx); out.ponto_saida += r.sent; }
@@ -347,7 +351,7 @@ async function cronNotify(req, res) {
 app.post('/api/cron/notify', ah(cronNotify));
 app.get('/api/cron/notify', ah(cronNotify));
 
-// cron de fechamento automático (agendar 00:05 SP no cron-job.org):
+// cron de fechamento automático (nativo, 00:05 SP):
 // fecha os pontos esquecidos da véspera no fim do expediente padrão.
 // Mesmo auth do /api/cron/notify (?secret=, Bearer ou x-cron-secret).
 async function cronFechar(req, res) {

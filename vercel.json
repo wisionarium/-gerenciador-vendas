@@ -3,6 +3,10 @@
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
   "crons": [
     { "path": "/api/cron/fechar", "schedule": "5 3 * * *" },
-    { "path": "/api/cron/notify", "schedule": "10 11 * * *" }
+    { "path": "/api/cron/notify", "schedule": "10 11 * * *" },
+    { "path": "/api/cron/notify", "schedule": "50 14 * * *" },
+    { "path": "/api/cron/notify", "schedule": "50 15 * * *" },
+    { "path": "/api/cron/notify", "schedule": "50 19 * * *" },
+    { "path": "/api/cron/notify", "schedule": "50 20 * * *" }
   ]
 }
