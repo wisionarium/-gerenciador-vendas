@@ -2360,7 +2360,11 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
     <h3 style="margin:0">Lançar ponto — ${esc(sellerName)}</h3>
     <p class="muted" style="font-size:13px">📅 <b>${esc(fmtDateBRWeek(date))}</b> — horário de São Paulo (HH:MM). Entrada só até 12:59; após 13h é saída. Use quando o QR falhar.</p>
     <form id="fManual">
-      <label>Entrada (até 12:59)</label><input id="mIn" placeholder="08:00" inputmode="numeric">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <label style="margin:12px 0 6px">Entrada (até 12:59)</label>
+        <button class="btn" type="button" id="mAuto" style="font-size:12px;padding:6px 12px;flex:none" title="Preencher horário comercial do dia (08:00 → saída padrão)">🕒 Automático</button>
+      </div>
+      <input id="mIn" placeholder="08:00" inputmode="numeric">
       <label>Saída (vazio = só entrada)</label><input id="mOut" placeholder="18:00" inputmode="numeric">
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar</button>
@@ -2370,6 +2374,29 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   maskHHMM($('#mIn')); maskHHMM($('#mOut'));
+  // horário comercial do dia: entrada 08:00 + carga padrão
+  // (seg–sex 10h, sáb 9h, dom 4h, feriado 5h ou carga especial da pessoa)
+  $('#mAuto').onclick = async () => {
+    const btn = $('#mAuto');
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      let sched = null, defaults = null;
+      try { const r = await api(`/api/users/${sellerId}/schedule`); sched = r.schedule; defaults = r.defaults; } catch {}
+      let isHol = false;
+      try { const d = await api(`/api/ponto/dia?date=${date}`); isHol = !!d.is_holiday; } catch {}
+      const def = defaults || { weekday: 600, saturday: 540, sunday: 240, holiday: 300 };
+      const dow = new Date(date + 'T12:00:00').getDay();
+      const std = isHol ? (Number(sched?.holiday_min) || def.holiday)
+        : dow === 0 ? (Number(sched?.sunday_min) || def.sunday)
+        : dow === 6 ? (Number(sched?.saturday_min) || def.saturday)
+        : (Number(sched?.weekday_min) || def.weekday);
+      const out = `${String(Math.floor((8 * 60 + std) / 60)).padStart(2, '0')}:${String((8 * 60 + std) % 60).padStart(2, '0')}`;
+      $('#mIn').value = '08:00';
+      $('#mOut').value = out;
+      toast(`Horário comercial aplicado: 08:00 → ${out}.`);
+    } finally { btn.disabled = false; btn.textContent = old; }
+  };
   $('#fManual').onsubmit = async (e) => {
     e.preventDefault();
     const t = splitEntryExit($('#mIn').value, $('#mOut').value);
