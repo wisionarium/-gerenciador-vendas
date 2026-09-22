@@ -1993,7 +1993,7 @@ async function tabPontoDia(body, t) {
     const wd = weekdayShortBR(currentDate);
     return `
       <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
+        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer;text-decoration:underline dotted" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
         <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
@@ -2001,7 +2001,7 @@ async function tabPontoDia(body, t) {
   };
   const absentHTML = (r) => `
     <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-      <span><b>${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
+      <span><b data-ponto-user="${r.seller_id}" style="cursor:pointer;text-decoration:underline dotted" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
       <button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>
     </div></div>`;
   const renderDayLists = () => {
@@ -2043,6 +2043,7 @@ async function tabPontoDia(body, t) {
       metaDay = d;
       renderDayLists();
       box.onclick = (e) => {
+        if (e.target.closest('[data-more]')) return;
         const fx = e.target.closest('[data-fix]');
         if (fx) {
           const row = (box._rows || []).flatMap((x) => x.punch ? [x.punch] : []).find((p) => String(p.id) === String(fx.dataset.fix));
@@ -2053,6 +2054,11 @@ async function tabPontoDia(body, t) {
         if (lc) {
           const row = (box._rows || []).find((x) => String(x.seller_id) === String(lc.dataset.lancar));
           if (row) modalManualPonto(row.seller_id, row.name, currentDate, loadDay);
+          return;
+        }
+        const un = e.target.closest('[data-ponto-user]');
+        if (un) {
+          openPontoUserPopup(Number(un.dataset.pontoUser), String(currentDate).slice(0, 7));
         }
       };
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -2101,13 +2107,13 @@ async function tabPontoExtras(body, t) {
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
             <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
             <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
-            <span><b>${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
+            <span><b style="text-decoration:underline dotted" title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
             <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
             <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
           </div>
           ${x.pending_min > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
           </div>`, 8)}
-        <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o dia a dia que formou o total (entradas, saídas e feriados).</p>
+        <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o mês completo: datas, horários, folgas, feriados e faltas.</p>
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="exPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
         <div style="height:10px"></div>
@@ -2120,7 +2126,7 @@ async function tabPontoExtras(body, t) {
       $('#exPhone').oninput = (e) => { localStorage.setItem('ec_wa_phone', e.target.value); $('#exWa').href = waLink(e.target.value); };
       $('#copyExtra').onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Resumo copiado!'); };
       $('#printExtra').onclick = () => printExtrasPDF(month, r);
-      // auditoria: toque no nome abre o dia a dia que compôs o total (direto do banco)
+      // popup: clique no nome/ cartão abre o mês completo da pessoa (direto do banco)
       box.onclick = async (e) => {
         if (e.target.closest('[data-more]')) return;
         const px = e.target.closest('[data-pix]');
@@ -2134,14 +2140,8 @@ async function tabPontoExtras(body, t) {
         const card = e.target.closest('[data-extra-sid]');
         if (!card) return;
         const sid = Number(card.dataset.extraSid);
-        const person = r.rows.find((x) => Number(x.seller_id) === sid);
-        if (!person) return;
-        try {
-          toast('Buscando dia a dia…');
-          const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&seller_id=${sid}&detail=1`);
-          const row = (det.rows || [])[0];
-          modalExtraDetail(month, row || { ...person, punches: [] });
-        } catch (err) { toast(err.message, 'err'); }
+        if (!sid) return;
+        openPontoUserPopup(sid, month);
       };
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
@@ -2149,24 +2149,74 @@ async function tabPontoExtras(body, t) {
   await loadMonth();
 }
 
-// auditoria de horas extras: dia a dia que compôs o total (lido na hora, direto do banco)
+// popup do usuário (aba PONTO): clique no nome abre todas as datas do mês —
+// trabalhados, incompletos, folgas (dom), feriados, faltas e horários, tudo organizado.
+// Popup simples, sem vazar informação (layout contido + rolagem interna).
+async function openPontoUserPopup(sellerId, month) {
+  try {
+    toast('Buscando dados…');
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&seller_id=${Number(sellerId)}&detail=1`);
+    const row = (det.rows || [])[0];
+    if (!row) return toast('Usuário não encontrado no mês.', 'err');
+    modalExtraDetail(month, row);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+// auditoria de horas extras: mês completo da pessoa (lido na hora, direto do banco)
 function modalExtraDetail(month, row) {
-  const ps = row.punches || [];
   const mm = month.slice(5, 7) + '/' + month.slice(0, 4);
-  $('#modalRoot').innerHTML = `
-  <div class="modal-bg anim-up" id="mbg"><div class="modal" style="max-height:85vh;overflow:auto">
-    <h3 style="margin:0">${esc(row.name)} — ${mm}</h3>
-    <p class="muted" style="font-size:13px">Total: <b class="mono">${esc(row.extra_label)}</b> em ${row.days || 0} dia(s) • ${esc(row.worked_label || '')} trabalhados</p>
-    ${ps.length ? ps.map((p) => `
-      <div class="sale-card" style="padding:10px 12px">
-        <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-          <span style="font-size:13px"><b>${fmtDateBRWeek(p.date)}</b>${p.is_holiday ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(p.holiday_label || 'Feriado')}">🎉 Feriado${p.holiday_label && p.holiday_label.includes('auto') ? ' (auto)' : ''}</span>` : ''}${p.auto_closed ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖 auto</span>` : ''}<br>
-          <span class="muted">${p.in_hhmm || '—'} → ${p.out_hhmm || '—'} • trab. ${p.worked_label || '—'} • padrão ${p.std_label || '—'}${p.punch_store ? ` • ${esc(p.punch_store)}` : ''}</span></span>
-          <b class="mono" style="font-size:14px">${p.extra_min > 0 ? `+${esc(p.extra_label)}` : '—'}</b>
+  const list = (row.days_list && row.days_list.length ? row.days_list : (row.punches || [])).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const sum = row.summary || null;
+  const statusMeta = {
+    trabalhado: { label: 'Trabalhou', bg: '#dcfce7', fg: '#166534' },
+    incompleto: { label: 'Incompleto', bg: '#fef3c7', fg: '#92400e' },
+    falta: { label: 'Não trabalhou', bg: '#fee2e2', fg: '#991b1b' },
+    folga: { label: 'Folga', bg: '#f3f4f6', fg: '#374151' },
+    feriado: { label: 'Feriado', bg: '#ede9fe', fg: '#5b21b6' },
+    futuro: { label: '—', bg: '#f3f4f6', fg: '#9ca3af' },
+    'outra-loja': { label: 'Outra loja', bg: '#f3f4f6', fg: '#6b7280' },
+  };
+  const dayRow = (d) => {
+    const m = statusMeta[d.status] || statusMeta.trabalhado;
+    const isFuture = d.status === 'futuro';
+    const left = (() => {
+      if (d.status === 'trabalhado' || d.status === 'incompleto' || d.status === 'outra-loja') {
+        return `${esc(d.in_hhmm || '—')} → ${esc(d.out_hhmm || '—')} • trab. ${esc(d.worked_label || '—')} • padrão ${esc(d.std_label || '—')}`;
+      }
+      if (d.status === 'feriado') return `Feriado${d.holiday_label ? ` • ${esc(d.holiday_label)}` : ''} • padrão ${esc(d.std_label || '—')}`;
+      if (d.status === 'folga') return `Domingo • folga • padrão ${esc(d.std_label || '—')}`;
+      if (d.status === 'falta') return `Sem ponto • padrão ${esc(d.std_label || '—')}`;
+      return '';
+    })();
+    const extra = (d.extra_min > 0 && !isFuture) ? `+${esc(d.extra_label)}` : '—';
+    return `
+      <div style="border:1px solid var(--line);border-radius:14px;padding:9px 11px;margin-bottom:8px;background:#fff;max-width:100%;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div style="min-width:0;flex:1">
+            <div style="font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDateBR(d.date))} • ${esc(weekdayShortBR(d.date))}</div>
+            <div style="margin-top:3px"><span class="chip" style="font-size:10px;padding:1px 8px;background:${m.bg};color:${m.fg}">${m.label}</span>${d.is_holiday && d.status !== 'feriado' ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(d.holiday_label || 'Feriado')}">🎉</span>` : ''}${d.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖</span>' : ''}${d.punch_store ? ` <span class="muted" style="font-size:11px">${esc(d.punch_store)}</span>` : ''}</div>
+            ${left && !isFuture ? `<div class="muted" style="font-size:12px;margin-top:3px;overflow-wrap:anywhere">${left}</div>` : ''}
+          </div>
+          <b class="mono" style="font-size:13px;flex:none">${extra}</b>
         </div>
-      </div>`).join('') : '<div class="card empty">Sem batidas completas neste mês.</div>'}
-    <p class="muted" style="font-size:12px">Padrão do dia: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Extra = trabalhado − padrão. Dias com 🎉 Feriado (auto) foram marcados sozinhos pelo sistema (maioria saiu ~13h) — se marcou errado, remova na aba Feriados e o total recalcula.</p>
-    <button class="btn btn-ghost btn-big" id="cancel">Fechar</button>
+      </div>`;
+  };
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal" style="max-height:85vh;overflow:hidden;display:flex;flex-direction:column;max-width:520px;width:100%">
+    <div style="flex:none;min-width:0">
+      <h3 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.name)} — ${mm}</h3>
+      <p class="muted" style="font-size:13px;margin:6px 0 0">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}</p>
+      ${sum ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        <span class="chip" style="font-size:11px">✅ ${sum.trabalhados} trab.</span>
+        <span class="chip" style="font-size:11px">⬜ ${sum.faltas} faltas</span>
+        <span class="chip" style="font-size:11px">💤 ${sum.folgas} folgas</span>
+        <span class="chip" style="font-size:11px">🎉 ${sum.feriados} feriados</span>
+        ${sum.incompletos ? `<span class="chip" style="font-size:11px">⚠️ ${sum.incompletos} incompl.</span>` : ''}
+      </div>` : ''}
+    </div>
+    <div style="overflow-y:auto;margin-top:10px;padding-right:2px;min-height:0">${list.length ? list.map(dayRow).join('') : '<div class="card empty">Sem registros neste mês.</div>'}</div>
+    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Extra = trabalhado − padrão.</p>
+    <button class="btn btn-ghost btn-big" id="cancel" style="flex:none">Fechar</button>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };

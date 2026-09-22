@@ -1890,7 +1890,6 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;  if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
   const wantDetail = req.query.detail === '1' || req.query.detail === 'true';
   const schedsAll = await schedulesMap(sellers.map((s) => s.id));
-  await autoClosePunches(); // rede de segurança antes de montar o dia
   const storeNames = {};
   const punchStore = async (p) => {
     if (!p || !p.store_id) return 'Sede';
@@ -1899,6 +1898,15 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       storeNames[p.store_id] = st ? st.name : 'Sede';
     }
     return storeNames[p.store_id];
+  };
+  // feriado de um dia sem ponto: específica da loja da pessoa tem prioridade sobre a global
+  const holidayForDay = (dateISO, fallbackStoreId) => {
+    const pst = Number(fallbackStoreId) || 0;
+    const list = (monthHols || []).filter((h) => h.date === dateISO);
+    if (!list.length) return null;
+    return list.find((h) => Number(h.store_id) === pst && pst !== 0)
+      || list.find((h) => Number(h.store_id) === 0)
+      || null;
   };
   const rows = await Promise.all(sellers.map(async (s) => {
     // extras contam onde bateu o ponto (filtro por loja quando escopado)
@@ -1909,7 +1917,10 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     const sched = schedsAll[s.id] || null;
     let extra = 0, worked = 0, days = 0, paid = 0;
     let detail = null;
-    if (wantDetail) detail = [];
+    let fullDays = null;
+    let summary = null;
+    if (wantDetail) { detail = []; fullDays = []; }
+    const byDate = new Map(ps.map((p) => [p.date, p]));
     for (const p of ps) {
       const hol = holidayForPunch(monthHols, p, s.store_id);
       const c = punchCalc(p, !!hol, sched);
@@ -1918,13 +1929,81 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
         detail.push({
           date: p.date,
           in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
-          worked_label: c.worked_label, std_label: c.std_label,
+          worked_min: c.worked_min, worked_label: c.worked_label, std_min: c.std_min, std_label: c.std_label,
           extra_min: c.extra_min, extra_label: c.extra_label,
           is_holiday: !!hol, holiday_label: hol ? hol.label : null,
           auto_closed: !!p.auto_closed,
-          punch_store: await punchStoreName(p),
+          incomplete: c.worked_min == null,
+          punch_store: await punchStore(p),
         });
       }
+    }
+    if (wantDetail) {
+      // calendário completo do mês: trabalhados, incompletos, folgas (dom),
+      // feriados, faltas (dias passados sem ponto) e futuros — p/ o popup do nome.
+      const [yy, mm] = month.split('-').map(Number);
+      const lastDay = new Date(yy, mm, 0).getDate();
+      const today = todaySP();
+      const pad2 = (n) => String(n).padStart(2, '0');
+      let nTrab = 0, nInc = 0, nFalta = 0, nFolga = 0, nFer = 0;
+      for (let d = 1; d <= lastDay; d++) {
+        const dateISO = `${month}-${pad2(d)}`;
+        if (scope.storeId != null) {
+          const pp = byDate.get(dateISO);
+          if (pp && Number(pp.store_id) !== Number(scope.storeId)) {
+            // ponto batido em outra loja: não conta neste escopo, mas aparece como info
+          }
+        }
+        const p = byDate.get(dateISO);
+        const inScope = !p || scope.storeId == null || Number(p.store_id) === Number(scope.storeId) || !scope.storeId;
+        const hol = p ? holidayForPunch(monthHols, p, s.store_id) : holidayForDay(dateISO, s.store_id);
+        const std = stdMinutesFor(dateISO, !!hol, sched);
+        const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
+        const isFuture = dateISO > today;
+        if (p && inScope) {
+          const c = punchCalc(p, !!hol, sched);
+          const incomplete = c.worked_min == null;
+          let status = 'trabalhado';
+          if (incomplete) status = 'incompleto';
+          if (incomplete) nInc++; else nTrab++;
+          if (hol) nFer++;
+          fullDays.push({
+            date: dateISO, dow, status,
+            in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
+            worked_min: c.worked_min, worked_label: c.worked_label,
+            std_min: c.std_min, std_label: c.std_label,
+            extra_min: c.extra_min, extra_label: c.extra_label,
+            is_holiday: !!hol, holiday_label: hol ? hol.label : null,
+            auto_closed: !!p.auto_closed, incomplete,
+            punch_store: await punchStore(p),
+          });
+        } else if (p && !inScope) {
+          // batida fora do escopo: mostra só como referência (não soma)
+          const c = punchCalc(p, !!hol, sched);
+          fullDays.push({
+            date: dateISO, dow, status: 'outra-loja',
+            in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
+            worked_min: c.worked_min, worked_label: c.worked_label,
+            std_min: c.std_min, std_label: c.std_label,
+            extra_min: 0, extra_label: fmtDur(0),
+            is_holiday: !!hol, holiday_label: hol ? hol.label : null,
+            auto_closed: !!p.auto_closed, incomplete: c.worked_min == null,
+            punch_store: await punchStore(p),
+          });
+        } else if (isFuture) {
+          fullDays.push({ date: dateISO, dow, status: 'futuro', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: false, incomplete: false, punch_store: null });
+        } else if (hol) {
+          nFer++;
+          fullDays.push({ date: dateISO, dow, status: 'feriado', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: true, holiday_label: hol.label, auto_closed: false, incomplete: false, punch_store: null });
+        } else if (dow === 0) {
+          nFolga++;
+          fullDays.push({ date: dateISO, dow, status: 'folga', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
+        } else {
+          nFalta++;
+          fullDays.push({ date: dateISO, dow, status: 'falta', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
+        }
+      }
+      summary = { trabalhados: nTrab, incompletos: nInc, faltas: nFalta, folgas: nFolga, feriados: nFer };
     }
     try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', s.id, month)).t) || 0; }
     catch {}
@@ -1935,7 +2014,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       extra_min: extra, extra_label: fmtDur(extra),
       paid_min: paid, paid_label: fmtDur(paid),
       pending_min: Math.max(0, extra - paid), pending_label: fmtDur(Math.max(0, extra - paid)),
-      ...(wantDetail ? { punches: detail } : {}),
+      ...(wantDetail ? { punches: detail, days_list: fullDays, summary } : {}),
     };
   }));
   rows.sort((a, b) => b.extra_min - a.extra_min);
