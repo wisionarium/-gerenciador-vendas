@@ -1987,21 +1987,21 @@ async function tabPontoDia(body, t) {
   let metaDay = null;
   let currentDate = t;
   const rowHTML = (r) => {
-    const ava = `<span class="ava sm">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
+    const ava = `<span class="ava sm" data-ponto-user="${r.seller_id}" style="cursor:pointer">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
     const extra = r.punch && r.punch.extra_min > 0 ? ` <span class="chip lime">＋${esc(r.punch.extra_label)}</span>` : '';
     const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
     const wd = weekdayShortBR(currentDate);
     return `
-      <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer;text-decoration:underline dotted" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
+      <div class="sale-card" data-ponto-card="${r.seller_id}" style="cursor:pointer" title="Ver mês completo"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
         <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
       </div></div>`;
   };
   const absentHTML = (r) => `
-    <div class="sale-card"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-      <span><b data-ponto-user="${r.seller_id}" style="cursor:pointer;text-decoration:underline dotted" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
+    <div class="sale-card" data-ponto-card="${r.seller_id}" style="cursor:pointer" title="Ver mês completo"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+      <span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
       <button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>
     </div></div>`;
   const renderDayLists = () => {
@@ -2057,8 +2057,11 @@ async function tabPontoDia(body, t) {
           return;
         }
         const un = e.target.closest('[data-ponto-user]');
-        if (un) {
-          openPontoUserPopup(Number(un.dataset.pontoUser), String(currentDate).slice(0, 7));
+        const card = e.target.closest('[data-ponto-card]');
+        const target = un || card;
+        if (target) {
+          const sid = Number(un ? un.dataset.pontoUser : card.dataset.pontoCard);
+          if (sid) openPontoUserPopup(sid, String(currentDate).slice(0, 7));
         }
       };
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -2107,7 +2110,7 @@ async function tabPontoExtras(body, t) {
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
             <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
             <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
-            <span><b style="text-decoration:underline dotted" title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
+            <span><b title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
             <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
             <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
           </div>
@@ -2166,7 +2169,9 @@ async function openPontoUserPopup(sellerId, month) {
 function modalExtraDetail(month, row) {
   const mm = month.slice(5, 7) + '/' + month.slice(0, 4);
   const list = (row.days_list && row.days_list.length ? row.days_list : (row.punches || [])).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  const sum = row.summary || null;
+  const ava = row.avatar_url
+    ? `<span class="ava" style="width:44px;height:44px;font-size:19px;flex:none"><img src="${row.avatar_url}" alt=""></span>`
+    : `<span class="ava" style="width:44px;height:44px;font-size:19px;flex:none">${esc((row.name || '?')[0].toUpperCase())}</span>`;
   const statusMeta = {
     trabalhado: { label: 'Trabalhou', bg: '#dcfce7', fg: '#166534' },
     incompleto: { label: 'Incompleto', bg: '#fef3c7', fg: '#92400e' },
@@ -2204,15 +2209,14 @@ function modalExtraDetail(month, row) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal" style="max-height:85vh;overflow:hidden;display:flex;flex-direction:column;max-width:520px;width:100%">
     <div style="flex:none;min-width:0">
-      <h3 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.name)} — ${mm}</h3>
-      <p class="muted" style="font-size:13px;margin:6px 0 0">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}</p>
-      ${sum ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-        <span class="chip" style="font-size:11px">✅ ${sum.trabalhados} trab.</span>
-        <span class="chip" style="font-size:11px">⬜ ${sum.faltas} faltas</span>
-        <span class="chip" style="font-size:11px">💤 ${sum.folgas} folgas</span>
-        <span class="chip" style="font-size:11px">🎉 ${sum.feriados} feriados</span>
-        ${sum.incompletos ? `<span class="chip" style="font-size:11px">⚠️ ${sum.incompletos} incompl.</span>` : ''}
-      </div>` : ''}
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+        ${ava}
+        <div style="min-width:0;text-align:center">
+          <h3 style="margin:0;text-align:center;overflow:hidden;text-overflow:ellipsis">${esc(row.name)}</h3>
+          <div class="muted" style="font-size:13px;text-align:center">${mm}</div>
+        </div>
+      </div>
+      <p class="muted" style="font-size:13px;margin:8px 0 0;text-align:center">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}</p>
     </div>
     <div style="overflow-y:auto;margin-top:10px;padding-right:2px;min-height:0">${list.length ? list.map(dayRow).join('') : '<div class="card empty">Sem registros neste mês.</div>'}</div>
     <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Extra = trabalhado − padrão.</p>
