@@ -555,6 +555,71 @@ app.patch('/api/users/:id/status', requireAuth, requireAdmin, ah(async (req, res
   res.json({ user: toPublicUser(u) });
 }));
 
+// exclusão de pessoa (admin): conta duplicada sai direto; demitido com
+// movimento pede confirmação (?force=1) e preserva as vendas do time
+// (created_by vai para quem excluiu; participações/comissões/ponto da
+// pessoa são removidos). Sem force + com movimento → 409 com contagens.
+app.delete('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
+  if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
+  if (Number(target.id) === Number(req.user.id)) return res.status(400).json({ error: 'Você não pode excluir a si mesma.' });
+  if (target.role === 'admin') {
+    const nAdmins = Number((await db.get("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND active=1").catch(() => ({ c: 1 }))).c) || 0;
+    if (nAdmins <= 1) return res.status(400).json({ error: 'Não é possível excluir o último administrador.' });
+  }
+  const count = async (sql, ...p) => {
+    try { return Number((await db.get(sql, ...p)).c) || 0; } catch { return 0; }
+  };
+  const usage = {
+    sales_created: await count('SELECT COUNT(*) AS c FROM sales WHERE created_by=?', target.id),
+    participations: await count('SELECT COUNT(*) AS c FROM sale_participants WHERE seller_id=?', target.id),
+    punches: await count('SELECT COUNT(*) AS c FROM punches WHERE seller_id=?', target.id),
+    calls: await count('SELECT COUNT(*) AS c FROM call_records WHERE seller_id=?', target.id),
+    commissions: await count('SELECT COUNT(*) AS c FROM commissions WHERE seller_id=?', target.id),
+    payouts: await count('SELECT COUNT(*) AS c FROM payouts WHERE seller_id=?', target.id),
+  };
+  const total = Object.values(usage).reduce((a, b) => a + b, 0);
+  const force = String((req.query || {}).force || '') === '1';
+  if (total > 0 && !force) {
+    const parts = [];
+    if (usage.sales_created) parts.push(`${usage.sales_created} venda(s) criada(s)`);
+    if (usage.participations) parts.push(`${usage.participations} participação(ões)`);
+    if (usage.punches) parts.push(`${usage.punches} dia(s) de ponto`);
+    if (usage.calls) parts.push(`${usage.calls} registro(s) de chamadas`);
+    if (usage.commissions) parts.push(`${usage.commissions} comissão(ões)`);
+    if (usage.payouts) parts.push(`${usage.payouts} pagamento(s)`);
+    return res.status(409).json({
+      error: `Esta pessoa tem histórico (${parts.join(', ')}). Desative para manter o histórico, ou confirme a exclusão definitiva.`,
+      usage, total,
+    });
+  }
+  if (total > 0) {
+    // limpa vínculos da pessoa; vendas criadas por ela passam para quem excluiu
+    try { await db.run('UPDATE sales SET created_by=? WHERE created_by=?', req.user.id, target.id); } catch {}
+    try { await db.run('UPDATE canceled_sales SET canceled_by=? WHERE canceled_by=?', req.user.id, target.id); } catch {}
+    try { await db.run('UPDATE extra_payouts SET created_by=? WHERE created_by=?', req.user.id, target.id); } catch {}
+    try { await db.run('UPDATE payouts SET created_by=? WHERE created_by=?', req.user.id, target.id); } catch {}
+    for (const sql of [
+      'DELETE FROM push_subscriptions WHERE user_id=?',
+      'DELETE FROM work_schedules WHERE user_id=?',
+      'DELETE FROM seller_settings WHERE seller_id=?',
+      'DELETE FROM seller_goals WHERE seller_id=?',
+      'DELETE FROM call_records WHERE seller_id=?',
+      'DELETE FROM commissions WHERE seller_id=?',
+      'DELETE FROM extra_payouts WHERE seller_id=?',
+      'DELETE FROM payouts WHERE seller_id=?',
+      'DELETE FROM punches WHERE seller_id=?',
+      'DELETE FROM sale_participants WHERE seller_id=?',
+      'DELETE FROM notification_log WHERE user_id=?',
+      'DELETE FROM daily_phrases WHERE seller_id=?',
+    ]) { try { await db.run(sql, target.id); } catch {} }
+    // sorteios travados de outros dias referenciam a pessoa: remove só os dela
+    try { await db.run('DELETE FROM daily_draws WHERE seller_id=?', target.id); } catch {}
+  }
+  await db.run('DELETE FROM users WHERE id=?', target.id);
+  res.json({ ok: true, removed: { id: target.id, name: target.name }, usage, total });
+}));
+
 // ---------- CARGA HORÁRIA ESPECIAL (por pessoa) ----------
 // Ex: Juliana trabalha seg–sex 8h–17h (9h = 540min) em vez do padrão 10h.
 // Vazio (null) = padrão global. Extra nunca é negativo (max(0, trabalhado − padrão)).
@@ -1936,6 +2001,19 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, auto_closed=0, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
   const hol = await holidayFor(p.date, p.store_id ?? p.seller_store);
   res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol, await scheduleFor(p.seller_id)) });
+}));
+
+// zerar o dia (admin/gerente): exclui o punch — o dia volta para Ausentes.
+// Mesma trava de loja da correção (PUT /api/ponto/:id).
+app.delete('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
+  const p = await db.get(
+    'SELECT pu.*, u.store_id AS seller_store, u.name AS seller_name FROM punches pu JOIN users u ON u.id=pu.seller_id WHERE pu.id=?', req.params.id
+  );
+  if (!p) return res.status(404).json({ error: 'Registro não encontrado.' });
+  if (req.user.role === 'manager' && Number(p.seller_store) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  await db.run('DELETE FROM punches WHERE id=?', p.id);
+  res.json({ ok: true, removed: { id: p.id, seller_id: p.seller_id, seller_name: p.seller_name || '', date: p.date } });
 }));
 
 // lançamento manual / contingência (admin/gerente): cria ou ajusta o dia sem QR/GPS

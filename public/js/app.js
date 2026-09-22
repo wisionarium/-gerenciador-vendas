@@ -407,8 +407,9 @@ function modalGoal(current, month) {
       <label>Meta (vendas)</label>
       <input id="gVal" type="number" min="0" max="100000" step="0.5" value="${current ?? ''}" placeholder="Ex: 50" required>
       <div style="height:12px"></div>
-      <button class="btn btn-primary btn-big" type="submit">Salvar meta</button>
+      <button class="btn btn-accent btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="delPunch" style="color:var(--danger,#c00)">🗑️ Zerar dia (excluir ponto)</button>
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
@@ -1673,7 +1674,8 @@ function modalCallsAdmin() {
         <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
       </form>
     </div></div>`;
-    $('#cancel').onclick = closeModal;
+  $('#cancel').onclick = closeModal;
+  if (u && $('#delUser')) $('#delUser').onclick = () => { closeModal(); askDeleteUser(u, reload); };
     $('#fCallsA').onsubmit = async (e) => {
       e.preventDefault();
       try {
@@ -2342,6 +2344,14 @@ function modalFixPonto(p, reload) {
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   maskHHMM($('#fxIn')); maskHHMM($('#fxOut'));
+  $('#delPunch').onclick = async () => {
+    const dia = (() => { try { return fmtDateBRWeek(p.date); } catch { return p.date || ''; } })();
+    if (!confirm(`Zerar o dia ${dia} (ponto #${p.id})?\n\nO registro é excluído e a pessoa volta para Ausentes. OK = Zerar`)) return;
+    try {
+      await api(`/api/ponto/${p.id}`, { method: 'DELETE' });
+      closeModal(); toast('Dia zerado (ponto excluído)!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
   $('#fFix').onsubmit = async (e) => {
     e.preventDefault();
     const t = splitEntryExit($('#fxIn').value, $('#fxOut').value);
@@ -2612,7 +2622,7 @@ async function viewTeam(app) {
     const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
       <td>${s.role === 'manager' ? '<span class="chip lime" style="font-size:10px">Gerente</span>' : s.role === 'staff' ? '<span class="chip" style="font-size:10px">Funcionário</span>' : `<span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span>`}<br>${storeTag(s.store_name)}</td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
-      <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button></td></tr>`;
+      <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button> <button class="btn btn-ghost" data-del="${s.id}" title="Excluir definitivamente">🗑️</button></td></tr>`;
     const teamHead = '<table><thead><tr><th>Nome</th><th>Perfil / Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
     const teamRest = people.slice(8);
     $('#teamBody').innerHTML = people.length ? `<div class="card" style="padding:0;overflow:hidden">
@@ -2628,6 +2638,7 @@ async function viewTeam(app) {
       toast('Status atualizado!'); load();
     }));
     $$('#teamBody [data-edit]').forEach((b) => (b.onclick = () => modalUser(users.find((u) => String(u.id) === String(b.dataset.edit)), load)));
+    $$('#teamBody [data-del]').forEach((b) => (b.onclick = () => askDeleteUser(users.find((u) => String(u.id) === String(b.dataset.del)), load)));
     } catch (e) {
       $('#teamBody').innerHTML = `<div class="card"><p><b>Não foi possível carregar a equipe.</b></p><p class="muted">${esc(e.message)}</p><button class="btn btn-primary" id="retry">Tentar novamente</button></div>`;
       $('#retry').onclick = load;
@@ -2686,6 +2697,33 @@ async function loadPhrases() {
   render();
 }
 
+// Excluir pessoa: 1º aviso Excluir x Desativar; com histórico o servidor
+// retorna 409 e o 2º aviso oferece excluir mesmo assim ou desativar.
+async function askDeleteUser(person, reload) {
+  if (!person) return;
+  const label = `${person.name || 'esta pessoa'}`;
+  if (!confirm(`Excluir ${label} DEFINITIVAMENTE?\n\nOK = Excluir\nCancelar = voltar (prefira Desativar para manter o histórico)`)) return;
+  try {
+    await api(`/api/users/${person.id}`, { method: 'DELETE' });
+    toast('Excluída com sucesso!'); if (reload) reload();
+  } catch (e) {
+    const msg = e.message || 'Erro ao excluir.';
+    if (/histórico/i.test(msg)) {
+      if (confirm(`${msg}\n\nOK = EXCLUIR MESMO ASSIM (apaga ponto/comissões/vínculos)\nCancelar = DESATIVAR (mantém histórico)`)) {
+        try {
+          await api(`/api/users/${person.id}?force=1`, { method: 'DELETE' });
+          toast('Excluída definitivamente!'); if (reload) reload();
+        } catch (e2) { toast(e2.message, 'err'); }
+      } else {
+        try {
+          await api(`/api/users/${person.id}/status`, { method: 'PATCH', body: JSON.stringify({ active: false }) });
+          toast('Desativada (histórico mantido).'); if (reload) reload();
+        } catch (e3) { toast(e3.message, 'err'); }
+      }
+    } else toast(msg, 'err');
+  }
+}
+
 async function modalUser(u, reload) {
   let stores = [];
   try { stores = (await api('/api/stores')).stores; } catch {}
@@ -2722,6 +2760,7 @@ async function modalUser(u, reload) {
       <div style="height:12px"></div>
       <button class="btn btn-primary btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+      ${u ? '<button class="btn btn-ghost btn-big" type="button" id="delUser" style="color:var(--danger,#c00)">🗑️ Excluir pessoa</button>' : ''}
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
