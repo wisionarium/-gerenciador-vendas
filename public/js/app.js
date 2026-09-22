@@ -409,7 +409,6 @@ function modalGoal(current, month) {
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
-      <button class="btn btn-ghost btn-big" type="button" id="delPunch" style="color:var(--danger,#c00)">🗑️ Zerar dia (excluir ponto)</button>
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
@@ -2339,12 +2338,14 @@ function modalFixPonto(p, reload) {
       <div style="height:12px"></div>
       <button class="btn btn-accent btn-big" type="submit">Salvar</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="delPunch" style="color:var(--danger,#c00)">🗑️ Zerar dia (excluir ponto)</button>
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   maskHHMM($('#fxIn')); maskHHMM($('#fxOut'));
-  $('#delPunch').onclick = async () => {
+  const delPunchBtn = $('#delPunch');
+  if (delPunchBtn) delPunchBtn.onclick = async () => {
     const dia = (() => { try { return fmtDateBRWeek(p.date); } catch { return p.date || ''; } })();
     if (!confirm(`Zerar o dia ${dia} (ponto #${p.id})?\n\nO registro é excluído e a pessoa volta para Ausentes. OK = Zerar`)) return;
     try {
