@@ -2287,7 +2287,7 @@ function printDocumentoContador(month, r) {
   const lateOf = (x) => x.late_label || '0h 0min';
   const balOf = (x) => x.balance_label || x.extra_label;
   const balMin = (x) => x.balance_min ?? ((x.extra_min || 0) + (x.late_min || 0));
-  const rows = (r.rows || []).map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}${x.custom_schedule ? ' ⏱' : ''}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.store_name || '—')}</td><td style="text-align:center">${x.days || 0}</td><td style="text-align:right">+${esc(x.extra_label)}</td><td style="text-align:right">−${esc(lateOf(x))}</td><td style="text-align:right"><b>${esc(balOf(x))}</b></td><td style="text-align:right">${esc(x.paid_min > 0 ? x.paid_label : '—')}</td><td style="text-align:right">${esc(x.pending_min > 0 ? x.pending_label : '—')}</td><td>${esc(x.pix_key || '—')}</td></tr>`).join('');
+  const rows = (r.rows || []).map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}${x.custom_schedule ? ' ⏱' : ''}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.store_name || '—')}</td><td style="text-align:center">${x.days || 0}</td><td class="nw" style="text-align:right">+${esc(x.extra_label)}</td><td class="nw" style="text-align:right">−${esc(lateOf(x))}</td><td class="nw" style="text-align:right"><b>${esc(balOf(x))}</b></td></tr>`).join('');
   const tE = r.total_extra_label || '0h 0min';
   const tL = r.total_late_label || '0h 0min';
   const tB = r.total_balance_label || '0h 0min';
@@ -2296,8 +2296,8 @@ function printDocumentoContador(month, r) {
   w.document.write(`<html><head><title>Demonstrativo de Jornada — ${m}/${y}</title><style>
     body{font-family:Arial,sans-serif;padding:36px;color:#111} h1{font-size:20px;margin:0} h2{font-size:14px;margin:2px 0 0;color:#444;font-weight:normal}
     .meta{font-size:12px;color:#555;margin-top:6px} .tot{font-size:13px;margin-top:10px;background:#f3f4f6;border:1px solid #999;padding:8px 12px}
-    table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #999;padding:6px;font-size:11px;text-align:left}
-    th{background:#f3f4f6} .box{font-size:11px;color:#333;border:1px solid #999;padding:8px 12px;margin-top:12px;line-height:1.6}
+    table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #999;padding:7px 10px;font-size:12px;text-align:left}
+    th{background:#f3f4f6} td.nw{white-space:nowrap} .box{font-size:11px;color:#333;border:1px solid #999;padding:8px 12px;margin-top:12px;line-height:1.6}
     .sign{margin-top:44px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px;text-align:center}
     @media print{body{padding:0} button{display:none}}
     </style></head><body>
@@ -2305,8 +2305,8 @@ function printDocumentoContador(month, r) {
     <h2>Horas extras e atrasos para conferência da contabilidade</h2>
     <div class="meta">Emitido em ${now} • ${esc((r.rows || []).length)} pessoa(s) • Valores em horas:minutos • ⏱ = carga horária especial</div>
     <div class="tot">Total extras: <b>+${esc(tE)}</b> &nbsp;•&nbsp; Total atrasos: <b>−${esc(tL)}</b> &nbsp;•&nbsp; Saldo do mês: <b>${esc(tB)}</b></div>
-    <table><thead><tr><th>#</th><th>Nome</th><th>Vínculo</th><th>Loja</th><th>Dias</th><th style="text-align:right">Extras (+)</th><th style="text-align:right">Atrasos (−)</th><th style="text-align:right">Saldo</th><th style="text-align:right">Pago</th><th style="text-align:right">A pagar</th><th>PIX</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="11">Sem registros no mês.</td></tr>'}</tbody></table>
+    <table><thead><tr><th>#</th><th>Nome</th><th>Vínculo</th><th>Loja</th><th>Dias</th><th style="text-align:right">Extras (+)</th><th style="text-align:right">Atrasos (−)</th><th style="text-align:right">Saldo</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="8">Sem registros no mês.</td></tr>'}</tbody></table>
     <div class="box"><b>Metodologia (conferência do contador):</b> jornada padrão seg–sex 10h (08:00→18:00), sáb 9h (08:00→17:00), dom 4h (08:00→12:00), feriado 5h (08:00→13:00), salvo carga especial (⏱). Saldo do dia = trabalhado (saída − entrada) − padrão, <b>minuto a minuto, sem tolerância</b>: atraso ou saída antecipada gera saldo negativo e abate dos extras no total do mês. Ex.: segunda 08:10→18:00 = 9h50 − 10h = <b>−0h 10min</b>. Dia incompleto (sem entrada ou sem saída) não soma e deve ser corrigido. 🤖 = saída lançada sozinha no teto do expediente (ponto esquecido).<br><b>Documento simplificado para apuração de horas</b> (sem CPF/CNPJ/admissão — não substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).</div>
     <div class="sign"><div>Responsável (empresa)</div><div>Conferência (contabilidade)</div></div>
     <script>onload=()=>{print();}<\/script></body></html>`);
