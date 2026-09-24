@@ -1430,7 +1430,9 @@ async function schedulesMap(ids) {
   } catch {}
   return map;
 }
-const fmtDur = (min) => `${Math.floor(min / 60)}h ${min % 60}min`;
+const fmtDur = (min) => `${Math.floor(Math.abs(min || 0) / 60)}h ${Math.abs(min || 0) % 60}min`;
+// saldo com sinal: +1h 5min / -0h 10min / 0h 0min (todo minuto conta, sem tolerância)
+const fmtSigned = (min) => `${(min || 0) > 0 ? '+' : (min || 0) < 0 ? '-' : ''}${fmtDur(min)}`;
 // minutos do dia em São Paulo (UTC-3) a partir de ISO
 function spMinOfISO(iso) {
   const ms = Date.parse(iso);
@@ -1455,10 +1457,14 @@ function haversineM(lat1, lon1, lat2, lon2) {
 function punchCalc(p, isHoliday, sched) {
   const std = stdMinutesFor(p.date, isHoliday, sched);
   let worked = null;
-  let extra = 0; // nunca negativo: saiu cedo => 0, não "hora negativa"
+  let extra = 0; // parte positiva do saldo (hora extra bruta)
+  let late = 0; // parte negativa do saldo (atraso/saída antecipada), <= 0
+  let balance = 0; // saldo líquido do dia: worked - std (minuto a minuto, sem tolerância)
   if (p.check_in_at && p.check_out_at) {
     worked = Math.max(0, Math.round((Date.parse(p.check_out_at) - Date.parse(p.check_in_at)) / 60000));
-    extra = Math.max(0, worked - std);
+    balance = worked - std;
+    extra = Math.max(0, balance);
+    late = Math.min(0, balance);
   }
   return {
     ...p,
@@ -1470,6 +1476,10 @@ function punchCalc(p, isHoliday, sched) {
     worked_label: worked == null ? null : fmtDur(worked),
     extra_min: extra,
     extra_label: fmtDur(extra),
+    late_min: late,
+    late_label: fmtDur(late),
+    balance_min: worked == null ? 0 : balance,
+    balance_label: worked == null ? fmtDur(0) : fmtSigned(balance),
   };
 }
 // ---------- Feriados por loja ----------
@@ -1651,7 +1661,7 @@ app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
     punches: ps.map((p) => {
       const hol = holidayForPunch(monthHols, p, req.user.store_id);
       const c = punchCalc(p, !!hol, mySched);
-      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: !!p.auto_closed };
+      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, late_min: c.late_min, late_label: c.late_label, balance_min: c.balance_min, balance_label: c.balance_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: !!p.auto_closed };
     }),
   });
 }));
@@ -1748,25 +1758,27 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ date, is_holiday: dayHols.length > 0 && (scope.storeId != null ? !!scopedHol : true), holiday: holiday || null, holidays: dayHols, auto_holiday, present, absent, rows });
 }));
 
-// total de extras de uma pessoa no mês (todas as lojas) + baixas pagas.
+// total de extras/atrasos/saldo de uma pessoa no mês (todas as lojas) + baixas pagas.
+// Regra minuto a minuto, sem tolerância: atraso abate do extra (banco simples).
 // Usado na validação da baixa de horas; o resumo mensal usa o mesmo cálculo
 // com filtro de loja quando escopado.
 async function monthExtra(sellerId, month) {
   const person = await db.get('SELECT * FROM users WHERE id=?', Number(sellerId));
-  if (!person) return { extra: 0, paid: 0, pending: 0 };
+  if (!person) return { extra: 0, late_min: 0, balance: 0, paid: 0, pending: 0 };
   const sched = await scheduleFor(person.id);
   const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ?', person.id, `${month}%`);
   const monthHols = await holidaysOfMonth(month);
-  let extra = 0;
+  let extra = 0, late = 0;
   for (const p of ps) {
     const hol = holidayForPunch(monthHols, p, person.store_id);
     const c = punchCalc(p, !!hol, sched);
-    if (c.worked_min != null) extra += c.extra_min;
+    if (c.worked_min != null) { extra += c.extra_min; late += c.late_min; }
   }
+  const balance = extra + late;
   let paid = 0;
   try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', person.id, month)).t) || 0; }
   catch {}
-  return { extra, paid, pending: Math.max(0, extra - paid) };
+  return { extra, late_min: late, balance, paid, pending: Math.max(0, balance - paid) };
 }
 
 // fechamento automático de pontos esquecidos (dias passados com entrada e sem
@@ -1916,7 +1928,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       s.id, `${month}%`, ...(scope.storeId != null ? [scope.storeId] : [])
     );
     const sched = schedsAll[s.id] || null;
-    let extra = 0, worked = 0, days = 0, paid = 0;
+    let extra = 0, late = 0, worked = 0, days = 0, paid = 0;
     let detail = null;
     let fullDays = null;
     let summary = null;
@@ -1925,13 +1937,15 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     for (const p of ps) {
       const hol = holidayForPunch(monthHols, p, s.store_id);
       const c = punchCalc(p, !!hol, sched);
-      if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; days += 1; }
+      if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; late += c.late_min; days += 1; }
       if (wantDetail) {
         detail.push({
           date: p.date,
           in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
           worked_min: c.worked_min, worked_label: c.worked_label, std_min: c.std_min, std_label: c.std_label,
           extra_min: c.extra_min, extra_label: c.extra_label,
+          late_min: c.late_min, late_label: c.late_label,
+          balance_min: c.balance_min, balance_label: c.balance_label,
           is_holiday: !!hol, holiday_label: hol ? hol.label : null,
           auto_closed: !!p.auto_closed,
           incomplete: c.worked_min == null,
@@ -1974,6 +1988,8 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
             worked_min: c.worked_min, worked_label: c.worked_label,
             std_min: c.std_min, std_label: c.std_label,
             extra_min: c.extra_min, extra_label: c.extra_label,
+            late_min: c.late_min, late_label: c.late_label,
+            balance_min: c.balance_min, balance_label: c.balance_label,
             is_holiday: !!hol, holiday_label: hol ? hol.label : null,
             auto_closed: !!p.auto_closed, incomplete,
             punch_store: await punchStore(p),
@@ -1987,39 +2003,48 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
             worked_min: c.worked_min, worked_label: c.worked_label,
             std_min: c.std_min, std_label: c.std_label,
             extra_min: 0, extra_label: fmtDur(0),
+            late_min: 0, late_label: fmtDur(0),
+            balance_min: 0, balance_label: fmtDur(0),
             is_holiday: !!hol, holiday_label: hol ? hol.label : null,
             auto_closed: !!p.auto_closed, incomplete: c.worked_min == null,
             punch_store: await punchStore(p),
           });
         } else if (isFuture) {
-          fullDays.push({ date: dateISO, dow, status: 'futuro', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: false, incomplete: false, punch_store: null });
+          fullDays.push({ date: dateISO, dow, status: 'futuro', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: false, incomplete: false, punch_store: null });
         } else if (hol) {
           nFer++;
-          fullDays.push({ date: dateISO, dow, status: 'feriado', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: true, holiday_label: hol.label, auto_closed: false, incomplete: false, punch_store: null });
+          fullDays.push({ date: dateISO, dow, status: 'feriado', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: true, holiday_label: hol.label, auto_closed: false, incomplete: false, punch_store: null });
         } else if (dow === 0) {
           nFolga++;
-          fullDays.push({ date: dateISO, dow, status: 'folga', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
+          fullDays.push({ date: dateISO, dow, status: 'folga', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
         } else {
           nFalta++;
-          fullDays.push({ date: dateISO, dow, status: 'falta', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
+          fullDays.push({ date: dateISO, dow, status: 'falta', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
         }
       }
       summary = { trabalhados: nTrab, incompletos: nInc, faltas: nFalta, folgas: nFolga, feriados: nFer };
     }
     try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', s.id, month)).t) || 0; }
     catch {}
+    const balance = extra + late;
+    const pending = Math.max(0, balance - paid);
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
       custom_schedule: !!sched, pix_key: s.pix_key || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
+      late_min: late, late_label: fmtDur(late),
+      balance_min: balance, balance_label: fmtSigned(balance),
       paid_min: paid, paid_label: fmtDur(paid),
-      pending_min: Math.max(0, extra - paid), pending_label: fmtDur(Math.max(0, extra - paid)),
+      pending_min: pending, pending_label: fmtDur(pending),
       ...(wantDetail ? { punches: detail, days_list: fullDays, summary } : {}),
     };
   }));
-  rows.sort((a, b) => b.extra_min - a.extra_min);
-  res.json({ month, rows, total_extra_min: rows.reduce((a, r) => a + r.extra_min, 0), total_extra_label: fmtDur(rows.reduce((a, r) => a + r.extra_min, 0)) });
+  rows.sort((a, b) => b.balance_min - a.balance_min);
+  const tExtra = rows.reduce((a, r) => a + r.extra_min, 0);
+  const tLate = rows.reduce((a, r) => a + r.late_min, 0);
+  const tBal = rows.reduce((a, r) => a + r.balance_min, 0);
+  res.json({ month, rows, total_extra_min: tExtra, total_extra_label: fmtDur(tExtra), total_late_min: tLate, total_late_label: fmtDur(tLate), total_balance_min: tBal, total_balance_label: fmtSigned(tBal) });
 }));
 
 // baixa de horas extras (admin/gerente): registra horas pagas/compensadas no mês (em minutos)

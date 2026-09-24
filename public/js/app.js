@@ -1028,7 +1028,7 @@ function staffPunchRow(x, showDate = true) {
   <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
     <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span>${hol}${auto}<br>
     <span style="font-size:13px">Entrada: ${x.in_hhmm || '—'} • Saída: ${x.out_hhmm || '—'}</span></span>
-    <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}</span>
+    <span class="mono" style="font-size:13px;font-weight:800">${(() => { const b = x.balance_min ?? ((Number(x.extra_min) || 0) + (Number(x.late_min) || 0)); if (b > 0) return `+${esc(x.extra_label)}`; if (b < 0) return `−${esc(x.late_label || x.extra_label)}`; return '—'; })()}</span>
   </div></div>`;
 }
 async function viewStaff(app) {
@@ -1041,8 +1041,8 @@ async function viewStaff(app) {
     api(`/api/ponto/eu?month=${mk}`).catch(() => ({ punches: [] })),
     api('/api/phrases/today').catch(() => ({ text: '' })),
   ]);
-  const totalExtra = (mes.punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
-  const fmtDurLocal = (min) => `${Math.floor(min / 60)}h ${min % 60}min`;
+  const totalExtra = (mes.punches || []).reduce((a, p) => a + (Number(p.balance_min ?? ((Number(p.extra_min) || 0) + (Number(p.late_min) || 0))) || 0), 0);
+  const fmtDurLocal = (min) => `${min < 0 ? '−' : ''}${Math.floor(Math.abs(min) / 60)}h ${Math.abs(min) % 60}min`;
   const p = hoje.punch;
   const recent = (mes.punches || []).slice(0, 5);
   app.innerHTML = `
@@ -1056,7 +1056,7 @@ async function viewStaff(app) {
       </div>
       <div style="text-align:center;color:#fff;font-size:17px;font-weight:700;margin-top:10px">${p ? `Hoje: ${p.in_hhmm || '--:--'} - Saída: ${p.out_hhmm || '--:--'}` : 'Hoje: sem registro ainda'}</div>
       <div class="card" style="background:#fff;text-align:center;margin:12px 4px 0;border:none;color:#111">
-        <div style="font-size:12px;color:#4b5563">Hora extra total:</div>
+        <div style="font-size:12px;color:#4b5563">Saldo de horas no mês:</div>
         <div class="mono" style="font-size:26px;font-weight:800;color:#111">${fmtDurLocal(totalExtra)}</div>
       </div>
     </div>
@@ -1093,8 +1093,9 @@ async function viewStaffHistory(app) {
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const { punches } = await api(`/api/ponto/eu?month=${month}`);
-      const total = (punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
-      $('#shTotal').innerHTML = `<p class="muted" style="font-size:13px;margin:0">Extra no mês: <b class="mono">${Math.floor(total / 60)}h ${total % 60}min</b> • ${punches.length} dia(s)</p>`;
+      const total = (punches || []).reduce((a, p) => a + (Number(p.balance_min ?? ((Number(p.extra_min) || 0) + (Number(p.late_min) || 0))) || 0), 0);
+      const totLabel = `${total < 0 ? '−' : ''}${Math.floor(Math.abs(total) / 60)}h ${Math.abs(total) % 60}min`;
+      $('#shTotal').innerHTML = `<p class="muted" style="font-size:13px;margin:0">Saldo no mês: <b class="mono">${totLabel}</b> • ${punches.length} dia(s)</p>`;
       box.innerHTML = punches.length
         ? compactListHTML(punches, (x) => staffPunchRow(x), 10)
         : '<div class="card empty">Nenhum ponto neste mês.</div>';
@@ -1174,11 +1175,11 @@ async function viewHistory(app) {
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const { punches } = await api(`/api/ponto/eu?month=${month}`);
-      const total = (punches || []).reduce((a, p) => a + (Number(p.extra_min) || 0), 0);
+      const total = (punches || []).reduce((a, p) => a + (Number(p.balance_min ?? ((Number(p.extra_min) || 0) + (Number(p.late_min) || 0))) || 0), 0);
       $('#hhTotal').innerHTML = `
         <div style="text-align:center;padding:16px 8px 10px">
-          <div style="font-size:12px;color:#4b5563">Hora extra total no mês</div>
-          <div class="mono" style="font-size:38px;font-weight:800;line-height:1.25">${Math.floor(total / 60)}h ${total % 60}min</div>
+          <div style="font-size:12px;color:#4b5563">Saldo de horas no mês</div>
+          <div class="mono" style="font-size:38px;font-weight:800;line-height:1.25">${total < 0 ? '−' : ''}${Math.floor(Math.abs(total) / 60)}h ${Math.abs(total) % 60}min</div>
         </div>`;
       box.innerHTML = punches.length
         ? compactListHTML(punches, (x) => staffPunchRow(x), 10)
@@ -2100,23 +2101,32 @@ async function tabPontoExtras(body, t) {
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const r = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}`);
+      const balOf = (x) => x.balance_min ?? ((x.extra_min || 0) + (x.late_min || 0));
+      const balLabelOf = (x) => x.balance_label || fmtHM(balOf(x));
+      const lateLabelOf = (x) => x.late_label || fmtHM(Math.abs(x.late_min || 0));
       const msg = `*HORAS EXTRAS — ${month.slice(5, 7)}/${month.slice(0, 4)}*\n` +
-        r.rows.map((x) => `• ${x.name}: ${x.extra_label}${x.paid_min > 0 ? ` (pago ${x.paid_label})` : ''}${x.pix_key ? ` • PIX ${x.pix_key}` : ''}`).join('\n');
+        `Extras: ${fmtHM(r.total_extra_min || 0)} • Atrasos: ${fmtHM(Math.abs(r.total_late_min || 0))} • Saldo: ${balLabelOf({ balance_min: r.total_balance_min, balance_label: r.total_balance_label })}\n` +
+        r.rows.map((x) => `• ${x.name}: +${x.extra_label} / -${lateLabelOf(x)} = ${balLabelOf(x)}${x.paid_min > 0 ? ` (pago ${x.paid_label}, restam ${x.pending_label})` : ''}${x.pix_key ? ` • PIX ${x.pix_key}` : ''}`).join('\n');
       const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
       const fmtHM = (m) => `${Math.floor((m || 0) / 60)}h ${(m || 0) % 60}min`;
       box.innerHTML = `
+        <p class="muted" style="font-size:13px;margin:0 2px 8px">Total: <b class="mono">+${fmtHM(r.total_extra_min || 0)}</b> extras • <b class="mono">−${fmtHM(Math.abs(r.total_late_min || 0))}</b> atrasos • Saldo <b class="mono">${esc(r.total_balance_label || fmtHM(r.total_balance_min || 0))}</b></p>
         ${compactListHTML(r.rows, (x, i) => `
           <div class="sale-card" data-extra-sid="${x.seller_id}" style="cursor:pointer;padding:10px 12px" title="Toque para ver o dia a dia">
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
             <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
             <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
-            <span><b title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
+            <span><b title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}${x.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial">⏱</span>' : ''}<br>
+            <span class="muted" style="font-size:12px">+${esc(x.extra_label)} • −${esc(lateLabelOf(x))} = <b class="mono">${esc(balLabelOf(x))}</b></span><br>
             <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
-            <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
+            <span style="text-align:right"><b class="mono" style="font-size:17px">${esc(balLabelOf(x))}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : (x.pending_min > 0 ? `<br><span class="muted" style="font-size:11px">A pagar ${esc(x.pending_label)}</span>` : '')}</span>
           </div>
-          ${x.pending_min > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
+          <div class="sale-foot" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+            ${x.pending_min > 0 ? `<button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button>` : ''}
+            <button class="btn btn-ghost" data-espelho="${x.seller_id}">🧾 Espelho</button>
+          </div>
           </div>`, 8)}
-        <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o mês completo: datas, horários, folgas, feriados e faltas.</p>
+        <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o mês completo: datas, horários, folgas, feriados e faltas. Atraso abate do extra (minuto a minuto, sem tolerância).</p>
         <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
         <input id="exPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
         <div style="height:10px"></div>
@@ -2124,11 +2134,17 @@ async function tabPontoExtras(body, t) {
         <div class="row" style="margin-top:8px">
           <button class="btn btn-big" id="copyExtra" style="flex:1">Copiar resumo</button>
           <button class="btn btn-big" id="printExtra" style="flex:1">🖨️ Imprimir / PDF</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn btn-big" id="csvResumo" style="flex:1">⬇️ CSV resumo</button>
+          <button class="btn btn-big" id="csvAnalitico" style="flex:1">⬇️ CSV dia a dia</button>
         </div>`;
       bindCompactList(box);
       $('#exPhone').oninput = (e) => { localStorage.setItem('ec_wa_phone', e.target.value); $('#exWa').href = waLink(e.target.value); };
       $('#copyExtra').onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Resumo copiado!'); };
       $('#printExtra').onclick = () => printExtrasPDF(month, r);
+      $('#csvResumo').onclick = () => downloadResumoCSV(month, r);
+      $('#csvAnalitico').onclick = async () => { await downloadAnaliticoCSV(month); };
       // popup: clique no nome/ cartão abre o mês completo da pessoa (direto do banco)
       box.onclick = async (e) => {
         if (e.target.closest('[data-more]')) return;
@@ -2138,6 +2154,12 @@ async function tabPontoExtras(body, t) {
         if (pe) {
           const person = r.rows.find((x) => String(x.seller_id) === String(pe.dataset.payextra));
           if (person) modalPagarExtra(person, month, loadMonth);
+          return;
+        }
+        const es = e.target.closest('[data-espelho]');
+        if (es) {
+          const sid = Number(es.dataset.espelho);
+          if (sid) printEspelhoFuncionario(sid, month);
           return;
         }
         const card = e.target.closest('[data-extra-sid]');
@@ -2193,7 +2215,13 @@ function modalExtraDetail(month, row) {
       if (d.status === 'falta') return `Sem ponto • padrão ${esc(d.std_label || '—')}`;
       return '';
     })();
-    const extra = (d.extra_min > 0 && !isFuture) ? `+${esc(d.extra_label)}` : '—';
+    const extra = (d) => {
+      if (d.status === 'futuro' || d.status === 'falta' || d.status === 'folga' || d.status === 'feriado') return '—';
+      if (d.balance_min == null) return '—';
+      if ((d.balance_min || 0) > 0) return `+${esc(d.extra_label || '')}`;
+      if ((d.balance_min || 0) < 0) return `−${esc(d.late_label || '')}`;
+      return '0h 0min';
+    };
     return `
       <div style="border:1px solid var(--line);border-radius:14px;padding:9px 11px;margin-bottom:8px;background:#fff;max-width:100%;overflow:hidden">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
@@ -2202,7 +2230,7 @@ function modalExtraDetail(month, row) {
             <div style="margin-top:3px"><span class="chip" style="font-size:10px;padding:1px 8px;background:${m.bg};color:${m.fg}">${m.label}</span>${d.is_holiday && d.status !== 'feriado' ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(d.holiday_label || 'Feriado')}">🎉</span>` : ''}${d.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖</span>' : ''}${d.punch_store ? ` <span class="muted" style="font-size:11px">${esc(d.punch_store)}</span>` : ''}</div>
             ${left && !isFuture ? `<div class="muted" style="font-size:12px;margin-top:3px;overflow-wrap:anywhere">${left}</div>` : ''}
           </div>
-          <b class="mono" style="font-size:13px;flex:none">${extra}</b>
+          <b class="mono" style="font-size:13px;flex:none">${extra(d)}</b>
         </div>
       </div>`;
   };
@@ -2216,14 +2244,19 @@ function modalExtraDetail(month, row) {
           <div class="muted" style="font-size:13px;text-align:center">${mm}</div>
         </div>
       </div>
-      <p class="muted" style="font-size:13px;margin:8px 0 0;text-align:center">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}</p>
+      <p class="muted" style="font-size:13px;margin:8px 0 0;text-align:center">Extras <b class="mono">+${esc(row.extra_label)}</b> • Atrasos <b class="mono">−${esc(row.late_label || ('0h 0min'))}</b> • Saldo <b class="mono">${esc(row.balance_label || row.extra_label)}</b><br>Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)} • Restam ${esc(row.pending_label)}` : (row.pending_min > 0 ? ` • A pagar ${esc(row.pending_label)}` : '')}</p>
     </div>
     <div style="overflow-y:auto;margin-top:10px;padding-right:2px;min-height:0">${list.length ? list.map(dayRow).join('') : '<div class="card empty">Sem registros neste mês.</div>'}</div>
-    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Extra = trabalhado − padrão.</p>
-    <button class="btn btn-ghost btn-big" id="cancel" style="flex:none">Fechar</button>
+    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Saldo do dia = trabalhado − padrão (todo minuto conta, sem tolerância; atraso abate do extra).</p>
+    <div style="display:flex;gap:8px;flex:none;margin-top:8px">
+      <button class="btn btn-big" id="espelhoOne" style="flex:1">🧾 Espelho / PDF</button>
+      <button class="btn btn-ghost btn-big" id="cancel" style="flex:1">Fechar</button>
+    </div>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  const eo = $('#espelhoOne');
+  if (eo) eo.onclick = () => printEspelhoFuncionario(row.seller_id, month, row);
 }
 
 // baixa de horas extras: registra as horas pagas/compensadas no mês (HH:MM)
@@ -2233,7 +2266,7 @@ function modalPagarExtra(row, month, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Pagar horas — ${esc(row.name)}</h3>
-    <p class="muted" style="font-size:13px">Extra no mês: <b class="mono">${esc(row.extra_label)}</b>${row.paid_min > 0 ? ` • Já pago: <b class="mono">${esc(row.paid_label)}</b>` : ''} • Restam: <b class="mono">${Math.floor(pend / 60)}h ${pend % 60}min</b>${row.pix_key ? `<br><b class="mono">${esc(row.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" type="button" id="pePixCopy">copiar</button>` : ''}</p>
+    <p class="muted" style="font-size:13px">Extras <b class="mono">+${esc(row.extra_label)}</b> • Atrasos <b class="mono">−${esc(row.late_label || '0h 0min')}</b> • Saldo <b class="mono">${esc(row.balance_label || row.extra_label)}</b>${row.paid_min > 0 ? ` • Já pago: <b class="mono">${esc(row.paid_label)}</b>` : ''} • Restam: <b class="mono">${Math.floor(pend / 60)}h ${pend % 60}min</b>${row.pix_key ? `<br><b class="mono">${esc(row.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" type="button" id="pePixCopy">copiar</button>` : ''}</p>
     <form id="fPayExtra">
       <label>Horas pagas (HH:MM) *</label><input id="peVal" placeholder="00:00" value="${def}" inputmode="numeric" required>
       <div style="height:12px"></div>
@@ -2258,22 +2291,121 @@ function modalPagarExtra(row, month, reload) {
   };
 }
 
-// PDF simples de horas extras (totais por pessoa) via impressão do sistema
+// Demonstrativo mensal p/ contabilidade (PDF via impressão): extras, atrasos e saldo.
+// Regra: minuto a minuto, sem tolerância — atraso abate do extra no saldo.
 function printExtrasPDF(month, r) {
   const [y, m] = month.split('-');
-  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.pix_key || '—')}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
+  const lateOf = (x) => x.late_label || '0h 0min';
+  const balOf = (x) => x.balance_label || x.extra_label;
+  const balMin = (x) => x.balance_min ?? ((x.extra_min || 0) + (x.late_min || 0));
+  const rows = (r.rows || []).map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}${x.custom_schedule ? ' ⏱' : ''}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.store_name || '—')}</td><td style="text-align:center">${x.days || 0}</td><td style="text-align:right">+${esc(x.extra_label)}</td><td style="text-align:right">−${esc(lateOf(x))}</td><td style="text-align:right"><b>${esc(balOf(x))}</b></td><td style="text-align:right">${esc(x.paid_min > 0 ? x.paid_label : '—')}</td><td style="text-align:right">${esc(x.pending_min > 0 ? x.pending_label : '—')}</td><td>${esc(x.pix_key || '—')}</td></tr>`).join('');
+  const tE = r.total_extra_label || '0h 0min';
+  const tL = r.total_late_label || '0h 0min';
+  const tB = r.total_balance_label || '0h 0min';
+  const now = new Date().toLocaleString('pt-BR');
   const w = window.open('', '_blank');
-  w.document.write(`<html><head><title>Horas Extras — ${m}/${y}</title><style>
-    body{font-family:sans-serif;padding:40px;color:#111} h1{font-size:22px;margin:0} p{color:#555;font-size:13px}
-    table{width:100%;border-collapse:collapse;margin-top:16px} th,td{border:1px solid #999;padding:8px;font-size:14px;text-align:left}
-    .sign{margin-top:48px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:13px;text-align:center}
+  w.document.write(`<html><head><title>Demonstrativo de Jornada — ${m}/${y}</title><style>
+    body{font-family:Arial,sans-serif;padding:36px;color:#111} h1{font-size:20px;margin:0} h2{font-size:14px;margin:2px 0 0;color:#444;font-weight:normal}
+    .meta{font-size:12px;color:#555;margin-top:6px} .tot{font-size:13px;margin-top:10px;background:#f3f4f6;border:1px solid #999;padding:8px 12px}
+    table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #999;padding:6px;font-size:11px;text-align:left}
+    th{background:#f3f4f6} .box{font-size:11px;color:#333;border:1px solid #999;padding:8px 12px;margin-top:12px;line-height:1.6}
+    .sign{margin-top:44px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px;text-align:center}
+    @media print{body{padding:0} button{display:none}}
     </style></head><body>
-    <h1>Horas Extras — ${m}/${y}</h1><p>Gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
-    <table><thead><tr><th>#</th><th>Nome</th><th>Setor</th><th>PIX</th><th style="text-align:right">Extras</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="5">Sem registros no mês.</td></tr>'}</tbody></table>
-    <div class="sign"><div>Responsável</div><div>Conferência</div></div>
+    <h1>Demonstrativo mensal de jornada — ${m}/${y}</h1>
+    <h2>Horas extras e atrasos para conferência da contabilidade</h2>
+    <div class="meta">Emitido em ${now} • ${esc((r.rows || []).length)} pessoa(s) • Valores em horas:minutos • ⏱ = carga horária especial</div>
+    <div class="tot">Total extras: <b>+${esc(tE)}</b> &nbsp;•&nbsp; Total atrasos: <b>−${esc(tL)}</b> &nbsp;•&nbsp; Saldo do mês: <b>${esc(tB)}</b></div>
+    <table><thead><tr><th>#</th><th>Nome</th><th>Vínculo</th><th>Loja</th><th>Dias</th><th style="text-align:right">Extras (+)</th><th style="text-align:right">Atrasos (−)</th><th style="text-align:right">Saldo</th><th style="text-align:right">Pago</th><th style="text-align:right">A pagar</th><th>PIX</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="11">Sem registros no mês.</td></tr>'}</tbody></table>
+    <div class="box"><b>Metodologia (conferência do contador):</b> jornada padrão seg–sex 10h (08:00→18:00), sáb 9h (08:00→17:00), dom 4h (08:00→12:00), feriado 5h (08:00→13:00), salvo carga especial (⏱). Saldo do dia = trabalhado (saída − entrada) − padrão, <b>minuto a minuto, sem tolerância</b>: atraso ou saída antecipada gera saldo negativo e abate dos extras no total do mês. Ex.: segunda 08:10→18:00 = 9h50 − 10h = <b>−0h 10min</b>. Dia incompleto (sem entrada ou sem saída) não soma e deve ser corrigido. 🤖 = saída lançada sozinha no teto do expediente (ponto esquecido).<br><b>Documento simplificado para apuração de horas</b> (sem CPF/CNPJ/admissão — não substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).</div>
+    <div class="sign"><div>Responsável (empresa)</div><div>Conferência (contabilidade)</div></div>
     <script>onload=()=>{print();}<\/script></body></html>`);
   w.document.close();
+}
+
+// CSV resumo (1 linha por pessoa) — abre direto no Excel PT-BR (separador ;, BOM UTF-8)
+function downloadResumoCSV(month, r) {
+  const head = ['competencia', 'nome', 'vinculo', 'loja', 'dias', 'extras_min', 'extras_hhmm', 'atrasos_min', 'atrasos_hhmm', 'saldo_min', 'saldo_hhmm', 'pago_min', 'pago_hhmm', 'a_pagar_min', 'a_pagar_hhmm', 'pix'];
+  const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = (r.rows || []).map((x) => [
+    month, x.name, x.role === 'staff' ? 'Funcionario' : (x.sector || ''), x.store_name || '',
+    x.days || 0, x.extra_min || 0, x.extra_label || '', Math.abs(x.late_min || 0), x.late_label || '',
+    (x.balance_min ?? 0), x.balance_label || '', x.paid_min || 0, x.paid_label || '', x.pending_min || 0, x.pending_label || '', x.pix_key || '',
+  ].map(q).join(';'));
+  const csv = '﻿' + [head.map(q).join(';'), ...lines].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `jornada-resumo-${month}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('CSV resumo baixado!');
+}
+
+// CSV analítico dia a dia (1 linha por pessoa/dia) — o que o contador lança na folha
+async function downloadAnaliticoCSV(month) {
+  try {
+    toast('Gerando CSV dia a dia…');
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&detail=1`);
+    const head = ['competencia', 'nome', 'vinculo', 'loja_func', 'data', 'dia_semana', 'entrada', 'saida', 'trabalhado_min', 'trabalhado', 'padrao_min', 'padrao', 'extra_min', 'extra', 'atraso_min', 'atraso', 'saldo_min', 'saldo', 'status', 'loja_ponto', 'feriado', 'auto_fechado'];
+    const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [];
+    for (const x of (det.rows || [])) {
+      for (const d of (x.days_list || [])) {
+        lines.push([
+          month, x.name, x.role === 'staff' ? 'Funcionario' : (x.sector || ''), x.store_name || '',
+          d.date || '', weekdayShortBR(d.date || ''), d.in_hhmm || '', d.out_hhmm || '',
+          d.worked_min ?? '', d.worked_label || '', d.std_min ?? '', d.std_label || '',
+          d.extra_min ?? '', d.extra_label || '', Math.abs(d.late_min || 0), d.late_label || '',
+          d.balance_min ?? '', d.balance_label || '', d.status || '',
+          d.punch_store || '', d.holiday_label || '', d.auto_closed ? 'sim' : 'nao',
+        ].map(q).join(';'));
+      }
+    }
+    const csv = '﻿' + [head.map(q).join(';'), ...lines].join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `jornada-dia-a-dia-${month}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('CSV dia a dia baixado!');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// Espelho individual (PDF via impressão): dia a dia de 1 funcionário no mês
+async function printEspelhoFuncionario(sellerId, month, knownRow) {
+  try {
+    toast('Gerando espelho…');
+    let row = knownRow;
+    if (!row || !row.days_list) {
+      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
+      row = (det.rows || [])[0];
+    }
+    if (!row) return toast('Funcionário não encontrado.', 'err');
+    const [y, m] = month.split('-');
+    const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Falta', folga: 'Folga', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const trs = days.map((d) => {
+      const saldo = d.balance_label || d.extra_label || '—';
+      return `<tr><td>${esc(fmtDateBR(d.date))}</td><td>${esc(weekdayShortBR(d.date))}</td><td>${esc(d.in_hhmm || '—')}</td><td>${esc(d.out_hhmm || '—')}</td><td>${esc(d.worked_label || '—')}</td><td>${esc(d.std_label || '—')}</td><td style="text-align:right"><b>${esc(saldo)}</b></td><td>${esc(statusLabel[d.status] || d.status || '—')}${d.auto_closed ? ' 🤖' : ''}${d.is_holiday && d.holiday_label ? ` (${esc(d.holiday_label)})` : ''}</td><td>${esc(d.punch_store || '—')}</td></tr>`;
+    }).join('');
+    const w = window.open('', '_blank');
+    w.document.write(`<html><head><title>Espelho — ${esc(row.name)} — ${m}/${y}</title><style>
+      body{font-family:Arial,sans-serif;padding:36px;color:#111} h1{font-size:19px;margin:0} .meta{font-size:12px;color:#555;margin-top:4px}
+      .tot{font-size:13px;margin-top:10px;background:#f3f4f6;border:1px solid #999;padding:8px 12px}
+      table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #999;padding:5px;font-size:11px;text-align:left}
+      th{background:#f3f4f6} .box{font-size:11px;color:#333;border:1px solid #999;padding:8px 12px;margin-top:12px;line-height:1.6}
+      .sign{margin-top:44px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px;text-align:center}
+      </style></head><body>
+      <h1>${esc(row.name)} — ${m}/${y}</h1>
+      <div class="meta">${esc(row.role === 'staff' ? 'Funcionário' : (row.sector || ''))} • ${esc(row.store_name || '')}${row.custom_schedule ? ' • ⏱ carga especial' : ''} • Emitido em ${new Date().toLocaleString('pt-BR')}</div>
+      <div class="tot">Dias: <b>${row.days || 0}</b> • Trabalhado: <b>${esc(row.worked_label || '—')}</b> • Extras: <b>+${esc(row.extra_label)}</b> • Atrasos: <b>−${esc(row.late_label || '0h 0min')}</b> • Saldo: <b>${esc(row.balance_label || row.extra_label)}</b>${row.paid_min > 0 ? ` • Pago: <b>${esc(row.paid_label)}</b> • A pagar: <b>${esc(row.pending_label)}</b>` : ''}</div>
+      <table><thead><tr><th>Data</th><th>Dia</th><th>Entrada</th><th>Saída</th><th>Trabalhado</th><th>Padrão</th><th style="text-align:right">Saldo</th><th>Status</th><th>Loja</th></tr></thead><tbody>${trs || '<tr><td colspan="9">Sem registros.</td></tr>'}</tbody></table>
+      <div class="box"><b>Metodologia:</b> saldo do dia = trabalhado − padrão, minuto a minuto, sem tolerância (atraso abate do extra). Padrões: seg–sex 10h, sáb 9h, dom 4h, feriado 5h, salvo carga especial. 🤖 = saída lançada sozinha no teto do expediente. Documento simplificado para apuração (sem CPF/CNPJ).</div>
+      <div class="sign"><div>Funcionário</div><div>Responsável</div></div>
+      <script>onload=()=>{print();}<\/script></body></html>`);
+    w.document.close();
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 async function tabPontoFeriados(body) {
