@@ -2399,6 +2399,131 @@ async function printEspelhoFuncionario(sellerId, month, knownRow) {
 
 // Documento p/ contador: demonstrativo formal (extras − atrasos), espelho por pessoa e CSVs.
 // O painel de Extras continua como antes; o desconto de atraso aparece só aqui.
+// Texto seguro p/ o PDF (fonte padrão não tem emoji nem alguns símbolos)
+function pdfText(s) {
+  return String(s ?? '')
+    .replace(/[🧾⬇️🖨️👆🤖🎉⏱📌📅💛✅]/g, '')
+    .replace(/−/g, '-').replace(/→/g, '->').replace(/•/g, '-').replace(/…/g, '...');
+}
+function pdfFileName(s) {
+  return String(s || 'doc').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'doc';
+}
+
+// Demonstrativo mensal em PDF (arquivo p/ baixar e enviar ao contador)
+function baixarDemonstrativoPDF(month, r) {
+  try {
+    if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
+    const [y, m] = month.split('-');
+    const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const W = 297;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
+    doc.text(pdfText(`Demonstrativo mensal de jornada - ${m}/${y}`), 14, 15);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
+    doc.text(pdfText('Horas extras e atrasos para conferencia da contabilidade'), 14, 21);
+    doc.setFontSize(9);
+    doc.text(pdfText(`Emitido em ${new Date().toLocaleString('pt-BR')} - ${(r.rows || []).length} pessoa(s) - Valores em horas:minutos - * = carga horaria especial`), 14, 26);
+    doc.setTextColor(0);
+    const tE = r.total_extra_label || '0h 0min';
+    const tL = r.total_late_label || '0h 0min';
+    const tB = r.total_balance_label || tE;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+    doc.text(pdfText(`Total extras: +${tE}   -   Total atrasos: -${tL}   -   Saldo do mes: ${tB}`), 14, 33);
+    const head = [['#', 'Nome', 'Vinculo', 'Loja', 'Dias', 'Extras (+)', 'Atrasos (-)', 'Saldo']];
+    const body = (r.rows || []).map((x, i) => [
+      String(i + 1),
+      pdfText(x.name + (x.custom_schedule ? ' *' : '')),
+      pdfText(x.role === 'staff' ? 'Funcionario' : (x.sector === 'presencial' ? 'Presencial' : 'Online')),
+      pdfText(x.store_name || '-'),
+      String(x.days || 0),
+      '+' + pdfText(x.extra_label),
+      '-' + pdfText(x.late_label || '0h 0min'),
+      pdfText(x.balance_label || x.extra_label),
+    ]);
+    doc.autoTable({
+      head, body, startY: 37,
+      styles: { font: 'helvetica', fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [11, 59, 44], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [243, 244, 246] },
+      columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 4: { halign: 'center' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right', fontStyle: 'bold' } },
+      didDrawPage: (d) => {
+        doc.setFontSize(8); doc.setTextColor(130);
+        doc.text(`Pagina ${d.pageNumber}`, W - 14, 200, { align: 'right' });
+        doc.setTextColor(0);
+      },
+    });
+    let yy = doc.lastAutoTable.finalY + 8;
+    doc.setFontSize(9);
+    const metodo = doc.splitTextToSize(pdfText('Metodologia: jornada padrao seg-sex 10h (08:00-18:00), sab 9h (08:00-17:00), dom 4h (08:00-12:00), feriado 5h (08:00-13:00), salvo carga especial (*). Saldo do dia = trabalhado (saida - entrada) - padrao, minuto a minuto, sem tolerancia: atraso ou saida antecipada gera saldo negativo e abate dos extras no total do mes. Ex.: segunda 08:10-18:00 = 9h50 - 10h = -0h 10min. Dia incompleto (sem entrada ou sem saida) nao soma e deve ser corrigido. * = saida lancada sozinha no teto do expediente (ponto esquecido). Documento simplificado para apuracao de horas (sem CPF/CNPJ/admissao - nao substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).'), W - 28);
+    if (yy + metodo.length * 4.5 + 30 > 200) { doc.addPage('landscape'); yy = 15; }
+    doc.text(metodo, 14, yy);
+    yy += metodo.length * 4.5 + 14;
+    doc.text(pdfText('Responsavel (empresa)'), 30, yy);
+    doc.text(pdfText('Conferencia (contabilidade)'), W - 90, yy);
+    doc.line(14, yy - 6, 120, yy - 6);
+    doc.line(W - 120, yy - 6, W - 14, yy - 6);
+    doc.save(`demonstrativo-jornada-${month}.pdf`);
+    toast('PDF baixado!');
+  } catch (e) { toast('Falha ao gerar PDF: ' + e.message, 'err'); }
+}
+
+// Espelho individual em PDF (arquivo p/ baixar)
+async function baixarEspelhoPDF(sellerId, month, knownRow) {
+  try {
+    if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
+    toast('Gerando espelho…');
+    let row = knownRow;
+    if (!row || !row.days_list) {
+      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
+      row = (det.rows || [])[0];
+    }
+    if (!row) return toast('Funcionario nao encontrado.', 'err');
+    const [y, m] = month.split('-');
+    const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const W = 297;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+    doc.text(pdfText(`${row.name} - ${m}/${y}`), 14, 15);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
+    doc.text(pdfText(`${row.role === 'staff' ? 'Funcionario' : (row.sector || '')} - ${row.store_name || ''}${row.custom_schedule ? ' - * carga especial' : ''} - Emitido em ${new Date().toLocaleString('pt-BR')}`), 14, 20);
+    doc.setTextColor(0); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+    doc.text(pdfText(`Dias: ${row.days || 0} - Trabalhado: ${row.worked_label || '-'} - Extras: +${row.extra_label} - Atrasos: -${row.late_label || '0h 0min'} - Saldo: ${row.balance_label || row.extra_label}`), 14, 27);
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Falta', folga: 'Folga', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    doc.autoTable({
+      head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao', 'Saldo', 'Status', 'Loja']],
+      body: days.map((d) => [
+        pdfText(fmtDateBR(d.date)), pdfText(weekdayShortBR(d.date)),
+        pdfText(d.in_hhmm || '-'), pdfText(d.out_hhmm || '-'),
+        pdfText(d.worked_label || '-'), pdfText(d.std_label || '-'),
+        pdfText(d.balance_label || d.extra_label || '-'),
+        pdfText((statusLabel[d.status] || d.status || '-') + (d.auto_closed ? ' *' : '') + (d.is_holiday && d.holiday_label ? ` (${d.holiday_label})` : '')),
+        pdfText(d.punch_store || '-'),
+      ]),
+      startY: 31,
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.8 },
+      headStyles: { fillColor: [11, 59, 44], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [243, 244, 246] },
+      columnStyles: { 6: { halign: 'right', fontStyle: 'bold' } },
+      didDrawPage: (d) => {
+        doc.setFontSize(8); doc.setTextColor(130);
+        doc.text(`Pagina ${d.pageNumber}`, W - 14, 200, { align: 'right' });
+        doc.setTextColor(0);
+      },
+    });
+    let yy = doc.lastAutoTable.finalY + 12;
+    if (yy > 185) { doc.addPage('landscape'); yy = 15; }
+    doc.setFontSize(9);
+    doc.text(pdfText('Metodologia: saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Documento simplificado (sem CPF/CNPJ).'), 14, yy, { maxWidth: W - 28 });
+    yy += 14;
+    doc.text(pdfText('Funcionario'), 30, yy);
+    doc.text(pdfText('Responsavel'), W - 90, yy);
+    doc.line(14, yy - 6, 120, yy - 6);
+    doc.line(W - 120, yy - 6, W - 14, yy - 6);
+    doc.save(`espelho-${pdfFileName(row.name)}-${month}.pdf`);
+    toast('PDF baixado!');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
 function modalDocumentoPonto(month, r) {
   const mm = month.slice(5, 7) + '/' + month.slice(0, 4);
   const tE = r.total_extra_label || '0h 0min';
@@ -2409,29 +2534,29 @@ function modalDocumentoPonto(month, r) {
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Documento p/ contador — ${mm}</h3>
     <p class="muted" style="font-size:13px">Extras <b class="mono">+${esc(tE)}</b> • Atrasos <b class="mono">−${esc(tL)}</b> • Saldo <b class="mono">${esc(tB)}</b><br>Atraso abate do extra (minuto a minuto, sem tolerância). Ex.: 08:10→18:00 = −0h 10min.</p>
-    <button class="btn btn-accent btn-big" id="docPdf" style="width:100%">🧾 Demonstrativo mensal (PDF)</button>
+    <button class="btn btn-accent btn-big" id="docPdf" style="width:100%">⬇️ Demonstrativo mensal (PDF)</button>
     <div style="height:8px"></div>
-    <div class="row" style="flex-wrap:nowrap">
+    <div class="row" style="flex-wrap:wrap">
       <button class="btn btn-big" id="docCsvR" style="flex:1">⬇️ CSV resumo</button>
       <button class="btn btn-big" id="docCsvA" style="flex:1">⬇️ CSV dia a dia</button>
     </div>
     <div style="height:8px"></div>
     <label>Espelho individual (PDF)</label>
-    <div class="row" style="flex-wrap:nowrap;align-items:end">
-      <div style="flex:1"><select id="docSeller">${opts}</select></div>
-      <button class="btn btn-big" id="docEspelho" style="flex:none">Gerar</button>
+    <div class="row" style="flex-wrap:wrap;align-items:end">
+      <div style="flex:1;min-width:0"><select id="docSeller" style="width:100%;max-width:100%">${opts}</select></div>
+      <button class="btn btn-big" id="docEspelho" style="flex:none">Baixar</button>
     </div>
     <div style="height:12px"></div>
     <button class="btn btn-ghost btn-big" id="cancel" style="width:100%">Fechar</button>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  $('#docPdf').onclick = () => printDocumentoContador(month, r);
+  $('#docPdf').onclick = () => baixarDemonstrativoPDF(month, r);
   $('#docCsvR').onclick = () => downloadResumoCSV(month, r);
   $('#docCsvA').onclick = async () => { await downloadAnaliticoCSV(month); };
   $('#docEspelho').onclick = async () => {
     const sid = Number($('#docSeller').value);
-    if (sid) printEspelhoFuncionario(sid, month);
+    if (sid) baixarEspelhoPDF(sid, month);
   };
 }
 
