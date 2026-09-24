@@ -1328,7 +1328,7 @@ function modalSale(sellers, stores) {
     try {
       const { sellers: elig } = await api(`/api/sellers/eligible?store_id=${$('#sStore').value}&date=${$('#sDate').value || todayISO()}`);
       renderPlist(elig);
-    } catch (e) { renderPlist(sellers.filter((s) => Number(s.store_id) === Number(me.store_id))); }
+    } catch (e) { toast(e.message || 'Falha ao carregar elegíveis.', 'err'); renderPlist(sellers.filter((s) => Number(s.store_id) === Number(me.store_id))); }
   };
   $('#sBonus').onchange = () => { $('#sBonusBox').style.display = $('#sBonus').checked ? 'block' : 'none'; refreshSalePreview(); };
   $('#sBonusVal').oninput = refreshSalePreview;
@@ -1475,7 +1475,7 @@ function modalEditSale(sale, sellers, stores, onSaved) {
     try {
       const { sellers: elig } = await api(`/api/sellers/eligible?store_id=${$('#eStore').value}&date=${$('#eDate').value || sale.sale_date}`);
       renderEplist(elig);
-    } catch (e) { renderEplist(sellers.filter((s) => Number(s.store_id) === Number(me.store_id))); }
+    } catch (e) { toast(e.message || 'Falha ao carregar elegíveis.', 'err'); renderEplist(sellers.filter((s) => Number(s.store_id) === Number(me.store_id))); }
   };
   $('#eBonus').onchange = () => { $('#eBonusBox').style.display = $('#eBonus').checked ? 'block' : 'none'; refreshEditPreview(); };
   $('#eBonusVal').oninput = refreshEditPreview;

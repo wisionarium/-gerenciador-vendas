@@ -405,7 +405,8 @@ app.get('/api/sellers', requireAuth, ah(async (req, res) => {
 }));
 
 // elegíveis p/ participar de venda na loja+data: nativas ativas + visitantes
-// (vendedoras de outra loja com check-in na loja na data). Só vendedoras.
+// (vendedoras de outra loja com ponto na loja na data, igual ao relatório
+// do ponto: vale entrada OU saída — ponto incompleto/só-saída também é presença). Só vendedoras.
 async function eligibleSellerIds(storeId, dateISO) {
   const natives = await db.all(
     "SELECT id FROM users WHERE role='seller' AND active=1 AND store_id=?", storeId
@@ -414,7 +415,7 @@ async function eligibleSellerIds(storeId, dateISO) {
   if (isValidDate(dateISO)) {
     const rows = await db.all(
       `SELECT DISTINCT p.seller_id AS id FROM punches p JOIN users u ON u.id=p.seller_id
-       WHERE p.store_id=? AND p.date=? AND p.check_in_at IS NOT NULL AND u.role='seller' AND u.active=1`,
+       WHERE p.store_id=? AND p.date=? AND (p.check_in_at IS NOT NULL OR p.check_out_at IS NOT NULL) AND u.role='seller' AND u.active=1`,
       storeId, dateISO
     ).catch(() => []);
     for (const r of rows) ids.add(r.id);
@@ -428,7 +429,7 @@ app.get('/api/sellers/eligible', requireAuth, requireManager, ah(async (req, res
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const storeId = scope.storeId ?? await sedeId();
-  const d = isValidDate(date) ? date : todayISO();
+  const d = isValidDate(date) ? date : todaySP();
   const ids = await eligibleSellerIds(storeId, d);
   const homeIds = new Set((await db.all(
     "SELECT id FROM users WHERE role='seller' AND active=1 AND store_id=?", storeId
@@ -984,7 +985,7 @@ app.get('/api/sales', requireAuth, ah(async (req, res) => {
 
 app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
   const { customer_name, product, color, channel, sale_date, participant_ids, store_id } = req.body || {};
-  const date = sale_date || todayISO();
+  const date = sale_date || todaySP();
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Nome do cliente é obrigatório.' });
   if (!product?.trim()) return res.status(400).json({ error: 'Produto é obrigatório.' });
   if (!color?.trim()) return res.status(400).json({ error: 'Cor é obrigatória.' });
