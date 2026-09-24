@@ -438,7 +438,7 @@ app.get('/api/sellers/eligible', requireAuth, requireManager, ah(async (req, res
   const ph = [...ids].map(() => '?').join(',');
   const rows = await db.all(
     `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id IN (${ph}) ORDER BY u.name`,
-    [...ids]
+    ...ids
   );
   res.json({ sellers: rows.map((u) => ({ ...toPublicUser(u), visitor: !homeIds.has(u.id) })), store_id: storeId, date: d });
 }));
