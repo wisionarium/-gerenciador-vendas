@@ -2355,7 +2355,7 @@ async function baixarAnaliticoXLSX(month) {
     const head = ['Competência', 'Nome', 'Vínculo', 'Loja', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Loja do ponto', 'Feriado', 'Auto'];
     const widths = [12, 26, 14, 12, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 13, 18, 8];
     ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
-    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Falta', folga: 'Folga', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
     const vinc = (x) => (x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online');
     for (const x of sortAZ(det.rows)) {
       const days = (x.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -2415,7 +2415,10 @@ function baixarDemonstrativoPDF(month, r) {
     const tB = r.total_balance_label || tE;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Total extras: +${tE}   -   Total atrasos: -${tL}   -   Saldo do mes: ${tB}`), 14, 33);
-    const head = [['#', 'Nome', 'Vinculo', 'Loja', 'Dias', 'Extras (+)', 'Atrasos (-)', 'Saldo']];
+    const head = [['#', 'Nome', 'Vinculo', 'Loja', 'Dias',
+      { content: 'Extras (+)', styles: { halign: 'right' } },
+      { content: 'Atrasos (-)', styles: { halign: 'right' } },
+      { content: 'Saldo', styles: { halign: 'right' } }]];
     const body = sortAZ(r.rows).map((x, i) => [
       String(i + 1),
       pdfText(x.name + (x.custom_schedule ? ' *' : '')),
@@ -2467,10 +2470,11 @@ function gerarEspelhoDoc(row, month) {
     doc.text(pdfText(`${row.role === 'staff' ? 'Funcionario' : (row.sector || '')} - ${row.store_name || ''}${row.custom_schedule ? ' - * carga especial' : ''} - Emitido em ${new Date().toLocaleString('pt-BR')}`), 14, 20);
     doc.setTextColor(0); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Dias: ${row.days || 0} - Trabalhado: ${row.worked_label || '-'} - Extras: +${row.extra_label} - Atrasos: -${row.late_label || '0h 0min'} - Saldo: ${row.balance_label || row.extra_label}`), 14, 27);
-    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Falta', folga: 'Folga', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
     const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
     doc.autoTable({
-      head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao', 'Saldo', 'Status', 'Loja']],
+      head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao',
+        { content: 'Saldo', styles: { halign: 'right' } }, 'Status', 'Loja']],
       body: days.map((d) => [
         pdfText(fmtDateBR(d.date)), pdfText(weekdayShortBR(d.date)),
         pdfText(d.in_hhmm || '-'), pdfText(d.out_hhmm || '-'),
