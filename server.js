@@ -132,6 +132,7 @@ const toPublicUser = (u) => ({
   id: u.id, name: u.name, email: u.email, role: u.role, sector: u.sector || 'online',
   store_id: u.store_id || null, store_name: u.store_name || (u.role === 'admin' ? 'Todas' : 'Sede'),
   active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null,
+  job_title: u.job_title || null,
 });
 const validSector = (s) => ['online', 'presencial'].includes(s);
 const CHANNELS = ['WhatsApp', 'CRM', 'Presencial'];
@@ -458,17 +459,23 @@ app.put('/api/stores/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (!store) return res.status(404).json({ error: 'Loja não encontrada.' });
   if (req.user.role === 'manager' && Number(store.id) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
-  const { name, lat, lng, radius_m } = req.body || {};
+  const { name, lat, lng, radius_m, company_name, cnpj } = req.body || {};
   const nLat = lat === null || lat === undefined || lat === '' ? null : Number(lat);
   const nLng = lng === null || lng === undefined || lng === '' ? null : Number(lng);
   const nRad = Number(radius_m ?? store.radius_m);
   if (nLat != null && (!Number.isFinite(nLat) || nLat < -90 || nLat > 90)) return res.status(400).json({ error: 'Latitude inválida.' });
   if (nLng != null && (!Number.isFinite(nLng) || nLng < -180 || nLng > 180)) return res.status(400).json({ error: 'Longitude inválida.' });
   if (!Number.isFinite(nRad) || nRad < 30 || nRad > 2000) return res.status(400).json({ error: 'Raio deve ser entre 30 e 2000 metros.' });
-  // gerente ajusta localização/raio da própria loja; só admin renomeia
+  // gerente ajusta localização/raio da própria loja; só admin renomeia e define empresa/CNPJ
   const newName = req.user.role === 'admin' ? String(name || store.name).slice(0, 60) : store.name;
-  await db.run('UPDATE stores SET name=?, lat=?, lng=?, radius_m=? WHERE id=?',
-    newName, nLat, nLng, Math.round(nRad), store.id);
+  const newCompany = req.user.role === 'admin'
+    ? (company_name === undefined ? (store.company_name || null) : (String(company_name ?? '').trim().slice(0, 80) || null))
+    : (store.company_name || null);
+  const newCnpj = req.user.role === 'admin'
+    ? (cnpj === undefined ? (store.cnpj || null) : (String(cnpj ?? '').trim().slice(0, 20) || null))
+    : (store.cnpj || null);
+  await db.run('UPDATE stores SET name=?, lat=?, lng=?, radius_m=?, company_name=?, cnpj=? WHERE id=?',
+    newName, nLat, nLng, Math.round(nRad), newCompany, newCnpj, store.id);
   res.json({ store: await getStore(store.id) });
 }));
 
@@ -480,10 +487,11 @@ app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector, store_id } = req.body || {};
+  const { name, email, password, role, sector, store_id, job_title } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
   if (!['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
+  const jobTitle = String(job_title ?? '').trim().slice(0, 60) || null;
   let storeId = null;
   if (role !== 'admin') {
     if (store_id != null && store_id !== '') {
@@ -498,8 +506,8 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   }
   if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
   try {
-    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, active) VALUES (?,?,?,?,?,?,1)',
-      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId);
+    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, job_title, active) VALUES (?,?,?,?,?,?,?,1)',
+      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId, jobTitle);
     const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
@@ -509,12 +517,13 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector, store_id } = req.body || {};
+  const { name, email, password, role, sector, store_id, job_title } = req.body || {};
   const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
   if (role && !['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
+  const jobTitle = job_title === undefined ? target.job_title : (String(job_title ?? '').trim().slice(0, 60) || null);
   const newRole = role || target.role;
   let storeId = target.store_id;
   if (store_id !== undefined) {
@@ -532,8 +541,8 @@ app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
     storeId = null;
   }
   try {
-    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=? WHERE id=?',
-      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, target.id);
+    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=?, job_title=? WHERE id=?',
+      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, jobTitle, target.id);
     if (password) {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
       await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
@@ -2030,7 +2039,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     const pending = Math.max(0, balance - paid);
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
-      custom_schedule: !!sched, pix_key: s.pix_key || null,
+      custom_schedule: !!sched, pix_key: s.pix_key || null, job_title: s.job_title || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
       late_min: late, late_label: fmtDur(late),

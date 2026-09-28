@@ -1812,6 +1812,7 @@ async function viewPonto(app) {
 
 async function tabPontoLoja(body) {
   body.innerHTML = `<div id="qrBox"><p class="muted">Carregando lojas…</p></div>`;
+  const isAdmin = store.user?.role === 'admin';
   try {
     const { stores } = await api('/api/stores/qr');
     if (!stores.length) { $('#qrBox').innerHTML = '<div class="card empty">Nenhuma loja cadastrada.</div>'; return; }
@@ -1830,6 +1831,12 @@ async function tabPontoLoja(body) {
           <button class="btn btn-ghost" data-geostore="${s.id}">📍 Ajustar localização</button>
         </div>
         <div id="geo-${s.id}" style="margin-top:8px"></div>
+        ${isAdmin ? `<div style="margin-top:8px">
+          <label>Nome da empresa p/ documentos</label><input id="comp-${s.id}" maxlength="80" placeholder="Ex: Supra Bike Magé LTDA" value="${esc(s.company_name || '')}">
+          <label>CNPJ p/ documentos (sem validação)</label><input id="cnpj-${s.id}" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90" value="${esc(s.cnpj || '')}">
+          <div style="height:6px"></div>
+          <button class="btn" data-compsave="${s.id}">Salvar empresa</button>
+        </div>` : (s.company_name ? `<div class="muted" style="font-size:12px;margin-top:6px">🏢 ${esc(s.company_name)}${s.cnpj ? ` • CNPJ ${esc(s.cnpj)}` : ''}</div>` : '')}
       </div>`).join('');
     const byId = Object.fromEntries(stores.map((s) => [s.id, s]));
     $('#qrBox').onclick = async (e) => {
@@ -1839,6 +1846,15 @@ async function tabPontoLoja(body) {
         const w = window.open('', '_blank');
         w.document.write(`<html><head><title>QR Ponto — ${esc(s.name)}</title></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h1>${esc(s.name)} — Ponto</h1><img src="${s.qrImage}" style="width:320px;height:320px"><h2 style="letter-spacing:.1em">${esc(s.qr_code)}</h2><p>Escaneie ao chegar e ao sair. A localização é verificada (raio ${s.radius_m}m).</p><script>onload=()=>{print();}<\/script></body></html>`);
         w.document.close();
+        return;
+      }
+      const cs = e.target.closest('[data-compsave]');
+      if (cs) {
+        const id = cs.dataset.compsave;
+        try {
+          await api(`/api/stores/${id}`, { method: 'PUT', body: JSON.stringify({ company_name: $(`#comp-${id}`).value, cnpj: $(`#cnpj-${id}`).value }) });
+          toast('Empresa salva!'); tabPontoLoja(body);
+        } catch (err) { toast(err.message, 'err'); }
         return;
       }
       const gs = e.target.closest('[data-geostore]');
@@ -2286,6 +2302,10 @@ function printExtrasPDF(month, r) {
 function sortAZ(rows) {
   return (rows || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'));
 }
+// função/cargo p/ documentos (só aqui; no app continuam perfil e setor)
+function funcaoOf(x) {
+  return (x && x.job_title) || (x && x.role === 'staff' ? 'Funcionário' : 'Vendedor');
+}
 // estilo padrao das planilhas p/ o contador (cabecalho, bordas, zebra, congelar topo, filtros)
 function styleSheet(ws, opt) {
   const nCols = ws.columnCount;
@@ -2315,20 +2335,23 @@ function saveBlob(blob, filename) {
 }
 
 // Excel resumo (1 linha por pessoa) — planilha formatada p/ Excel/Sheets
-async function baixarResumoXLSX(month, r) {
+// ctx: { storeMap } — nomes de empresa por filial
+async function baixarResumoXLSX(month, r, ctx) {
   try {
     if (!window.ExcelJS) return toast('Gerador de Excel ainda carregando. Tente de novo.', 'err');
     toast('Gerando Excel…');
+    ctx = ctx || {};
+    const storeMap = ctx.storeMap || {};
+    const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || ''; };
     const wb = new window.ExcelJS.Workbook();
     wb.creator = 'SellDay';
     const ws = wb.addWorksheet(`Resumo ${month}`);
-    const head = ['Competência', 'Nome', 'Vínculo', 'Loja', 'Dias', 'Extras (min)', 'Extras', 'Atrasos (min)', 'Atrasos', 'Saldo (min)', 'Saldo', 'Pago (min)', 'Pago', 'A pagar (min)', 'A pagar', 'PIX'];
-    const widths = [12, 26, 14, 14, 8, 12, 12, 12, 12, 12, 12, 11, 12, 12, 12, 28];
+    const head = ['Competência', 'Nome', 'Função', 'Loja', 'Dias', 'Extras (min)', 'Extras', 'Atrasos (min)', 'Atrasos', 'Saldo (min)', 'Saldo', 'Pago (min)', 'Pago', 'A pagar (min)', 'A pagar', 'PIX'];
+    const widths = [12, 26, 16, 22, 8, 12, 12, 12, 12, 12, 12, 11, 12, 12, 12, 28];
     ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
-    const vinc = (x) => (x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online');
     for (const x of sortAZ(r.rows)) {
       ws.addRow({
-        c0: month, c1: x.name, c2: vinc(x), c3: x.store_name || '',
+        c0: month, c1: x.name, c2: funcaoOf(x), c3: companyOf(x.store_name),
         c4: x.days || 0, c5: x.extra_min || 0, c6: x.extra_label || '',
         c7: Math.abs(x.late_min || 0), c8: x.late_label || '',
         c9: (x.balance_min ?? 0), c10: x.balance_label || '',
@@ -2338,30 +2361,32 @@ async function baixarResumoXLSX(month, r) {
     }
     styleSheet(ws, { numCols: [4, 5, 7, 9, 11, 13], rightCols: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] });
     const buf = await wb.xlsx.writeBuffer();
-    saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `jornada-resumo-${month}.xlsx`);
+    saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `jornada-resumo-${month}-${(ctx.scopeFile || 'todas')}.xlsx`);
     toast('Excel resumo baixado!');
   } catch (e) { toast('Falha ao gerar Excel: ' + e.message, 'err'); }
 }
 
 // Excel analítico dia a dia (1 linha por pessoa/dia) — o que o contador lança na folha
-async function baixarAnaliticoXLSX(month) {
+async function baixarAnaliticoXLSX(month, storeId, ctx) {
   try {
     if (!window.ExcelJS) return toast('Gerador de Excel ainda carregando. Tente de novo.', 'err');
     toast('Gerando Excel dia a dia…');
-    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&detail=1`);
+    ctx = ctx || {};
+    const storeMap = ctx.storeMap || {};
+    const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || ''; };
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1`);
     const wb = new window.ExcelJS.Workbook();
     wb.creator = 'SellDay';
     const ws = wb.addWorksheet(`Dia a dia ${month}`);
-    const head = ['Competência', 'Nome', 'Vínculo', 'Loja', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Loja do ponto', 'Feriado', 'Auto'];
-    const widths = [12, 26, 14, 12, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 13, 18, 8];
+    const head = ['Competência', 'Nome', 'Função', 'Loja', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Loja do ponto', 'Feriado', 'Auto'];
+    const widths = [12, 26, 16, 22, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 20, 18, 8];
     ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
     const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
-    const vinc = (x) => (x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online');
     for (const x of sortAZ(det.rows)) {
       const days = (x.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
       for (const d of days) {
         ws.addRow({
-          c0: month, c1: x.name, c2: vinc(x), c3: x.store_name || '',
+          c0: month, c1: x.name, c2: funcaoOf(x), c3: companyOf(x.store_name),
           c4: d.date ? fmtDateBR(d.date) : '', c5: weekdayShortBR(d.date || ''),
           c6: d.in_hhmm || '', c7: d.out_hhmm || '',
           c8: d.worked_min ?? null, c9: d.worked_label || '',
@@ -2370,13 +2395,13 @@ async function baixarAnaliticoXLSX(month) {
           c14: Math.abs(d.late_min || 0), c15: d.late_label || '',
           c16: d.balance_min ?? null, c17: d.balance_label || '',
           c18: statusLabel[d.status] || d.status || '',
-          c19: d.punch_store || '', c20: d.holiday_label || '', c21: d.auto_closed ? 'sim' : 'não',
+          c19: companyOf(d.punch_store), c20: d.holiday_label || '', c21: d.auto_closed ? 'sim' : 'não',
         });
       }
     }
     styleSheet(ws, { numCols: [8, 10, 12, 14, 16], rightCols: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] });
     const buf = await wb.xlsx.writeBuffer();
-    saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `jornada-dia-a-dia-${month}.xlsx`);
+    saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `jornada-dia-a-dia-${month}-${(ctx.scopeFile || 'todas')}.xlsx`);
     toast('Excel dia a dia baixado!');
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -2397,9 +2422,14 @@ function pdfFileName(s) {
 }
 
 // Demonstrativo mensal em PDF (arquivo p/ baixar e enviar ao contador)
-function baixarDemonstrativoPDF(month, r) {
+// ctx: { storeMap, scopeLabel } — nomes de empresa/CNPJ por filial
+function baixarDemonstrativoPDF(month, r, ctx) {
   try {
     if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
+    ctx = ctx || {};
+    const storeMap = ctx.storeMap || {};
+    const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || '-'; };
+    const scopeLabel = ctx.scopeLabel || 'Todas as lojas';
     const [y, m] = month.split('-');
     const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const W = 297;
@@ -2408,22 +2438,22 @@ function baixarDemonstrativoPDF(month, r) {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
     doc.text(pdfText('Horas extras e atrasos para conferencia da contabilidade'), 14, 21);
     doc.setFontSize(9);
-    doc.text(pdfText(`Emitido em ${new Date().toLocaleString('pt-BR')} - ${(r.rows || []).length} pessoa(s) - Valores em horas:minutos - * = carga horaria especial`), 14, 26);
+    doc.text(pdfText(`Emitido em ${new Date().toLocaleString('pt-BR')} - ${(r.rows || []).length} pessoa(s) - ${scopeLabel} - Valores em horas:minutos - * = carga horaria especial`), 14, 26);
     doc.setTextColor(0);
     const tE = r.total_extra_label || '0h 0min';
     const tL = r.total_late_label || '0h 0min';
     const tB = r.total_balance_label || tE;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Total extras: +${tE}   -   Total atrasos: -${tL}   -   Saldo do mes: ${tB}`), 14, 33);
-    const head = [['#', 'Nome', 'Vinculo', 'Loja', 'Dias',
+    const head = [['#', 'Nome', 'Função', 'Loja', 'Dias',
       { content: 'Extras (+)', styles: { halign: 'right' } },
       { content: 'Atrasos (-)', styles: { halign: 'right' } },
       { content: 'Saldo', styles: { halign: 'right' } }]];
     const body = sortAZ(r.rows).map((x, i) => [
       String(i + 1),
       pdfText(x.name + (x.custom_schedule ? ' *' : '')),
-      pdfText(x.role === 'staff' ? 'Funcionario' : (x.sector === 'presencial' ? 'Presencial' : 'Online')),
-      pdfText(x.store_name || '-'),
+      pdfText(funcaoOf(x)),
+      pdfText(companyOf(x.store_name)),
       String(x.days || 0),
       '+' + pdfText(x.extra_label),
       '-' + pdfText(x.late_label || '0h 0min'),
@@ -2443,7 +2473,7 @@ function baixarDemonstrativoPDF(month, r) {
     });
     let yy = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(9);
-    const metodo = doc.splitTextToSize(pdfText('Metodologia: jornada padrao seg-sex 10h (08:00-18:00), sab 9h (08:00-17:00), dom 4h (08:00-12:00), feriado 5h (08:00-13:00), salvo carga especial (*). Saldo do dia = trabalhado (saida - entrada) - padrao, minuto a minuto, sem tolerancia: atraso ou saida antecipada gera saldo negativo e abate dos extras no total do mes. Ex.: segunda 08:10-18:00 = 9h50 - 10h = -0h 10min. Dia incompleto (sem entrada ou sem saida) nao soma e deve ser corrigido. * = saida lancada sozinha no teto do expediente (ponto esquecido). Documento simplificado para apuracao de horas (sem CPF/CNPJ/admissao - nao substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).'), W - 28);
+    const metodo = doc.splitTextToSize(pdfText('Metodologia: jornada padrao seg-sex 10h (08:00-18:00), sab 9h (08:00-17:00), dom 4h (08:00-12:00), feriado 5h (08:00-13:00), salvo carga especial (*). Saldo do dia = trabalhado (saida - entrada) - padrao, minuto a minuto, sem tolerancia: atraso ou saida antecipada gera saldo negativo e abate dos extras no total do mes. Ex.: segunda 08:10-18:00 = 9h50 - 10h = -0h 10min. Dia incompleto (sem entrada ou sem saida) nao soma e deve ser corrigido. * = saida lancada sozinha no teto do expediente (ponto esquecido). Documento simplificado para apuracao de horas (CNPJ sem validacao - nao substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).'), W - 28);
     if (yy + metodo.length * 4.5 + 30 > 200) { doc.addPage('landscape'); yy = 15; }
     doc.text(metodo, 14, yy);
     yy += metodo.length * 4.5 + 14;
@@ -2451,23 +2481,28 @@ function baixarDemonstrativoPDF(month, r) {
     doc.text(pdfText('Conferencia (contabilidade)'), W - 90, yy);
     doc.line(14, yy - 6, 120, yy - 6);
     doc.line(W - 120, yy - 6, W - 14, yy - 6);
-    doc.save(`demonstrativo-jornada-${month}.pdf`);
+    doc.save(`demonstrativo-jornada-${month}-${(ctx.scopeFile || 'todas')}.pdf`);
     toast('PDF baixado!');
   } catch (e) { toast('Falha ao gerar PDF: ' + e.message, 'err'); }
 }
 
 // Espelho individual em PDF (arquivo p/ baixar)
 // monta o espelho de 1 pessoa e devolve o doc (sem salvar) — usado no PDF e no ZIP
-function gerarEspelhoDoc(row, month) {
+function gerarEspelhoDoc(row, month, ctx) {
   if (!window.jspdf) throw new Error('Gerador de PDF ainda carregando. Tente de novo.');
   if (!row) throw new Error('Funcionario nao encontrado.');
+  ctx = ctx || {};
+  const storeMap = ctx.storeMap || {};
+  const st = storeMap[row.store_name] || {};
+  const company = st.company_name || row.store_name || '';
+  const cnpjLine = st.cnpj ? ` - CNPJ ${st.cnpj}` : '';
   const [y, m] = month.split('-');
     const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const W = 297;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
     doc.text(pdfText(`${row.name} - ${m}/${y}`), 14, 15);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
-    doc.text(pdfText(`${row.role === 'staff' ? 'Funcionario' : (row.sector || '')} - ${row.store_name || ''}${row.custom_schedule ? ' - * carga especial' : ''} - Emitido em ${new Date().toLocaleString('pt-BR')}`), 14, 20);
+    doc.text(pdfText(`${funcaoOf(row)} - ${company}${row.custom_schedule ? ' - * carga especial' : ''}${cnpjLine} - Emitido em ${new Date().toLocaleString('pt-BR')}`), 14, 20);
     doc.setTextColor(0); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Dias: ${row.days || 0} - Trabalhado: ${row.worked_label || '-'} - Extras: +${row.extra_label} - Atrasos: -${row.late_label || '0h 0min'} - Saldo: ${row.balance_label || row.extra_label}`), 14, 27);
     const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
@@ -2497,7 +2532,7 @@ function gerarEspelhoDoc(row, month) {
     let yy = doc.lastAutoTable.finalY + 12;
     if (yy > 185) { doc.addPage('landscape'); yy = 15; }
     doc.setFontSize(9);
-    doc.text(pdfText('Metodologia: saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Documento simplificado (sem CPF/CNPJ).'), 14, yy, { maxWidth: W - 28 });
+    doc.text(pdfText('Metodologia: saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Documento simplificado (CNPJ sem validacao).'), 14, yy, { maxWidth: W - 28 });
     yy += 14;
     doc.text(pdfText('Funcionario'), 30, yy);
     doc.text(pdfText('Responsavel'), W - 90, yy);
@@ -2507,15 +2542,15 @@ function gerarEspelhoDoc(row, month) {
 }
 
 // Espelho individual em PDF (arquivo p/ baixar)
-async function baixarEspelhoPDF(sellerId, month, knownRow) {
+async function baixarEspelhoPDF(sellerId, month, knownRow, storeId, ctx) {
   try {
     toast('Gerando espelho…');
     let row = knownRow;
     if (!row || !row.days_list) {
-      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
+      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1`);
       row = (det.rows || [])[0];
     }
-    const doc = gerarEspelhoDoc(row, month);
+    const doc = gerarEspelhoDoc(row, month, ctx);
     if (!doc) return;
     doc.save(`espelho-${pdfFileName(row.name)}-${month}.pdf`);
     toast('PDF baixado!');
@@ -2523,14 +2558,14 @@ async function baixarEspelhoPDF(sellerId, month, knownRow) {
 }
 
 // Todos os espelhos em 1 ZIP (1 PDF por pessoa, ordem A-Z) — 1 unica consulta ao banco
-async function baixarTodosEspelhosZIP(month, btn) {
+async function baixarTodosEspelhosZIP(month, btn, storeId, ctx) {
   const old = btn ? btn.innerHTML : null;
   try {
     if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
     if (!window.JSZip) return toast('Gerador de ZIP ainda carregando. Tente de novo.', 'err');
     if (btn) btn.disabled = true;
     toast('Buscando mês completo…');
-    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&detail=1`);
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1`);
     const people = sortAZ(det.rows);
     if (!people.length) return toast('Sem registros neste mês.', 'err');
     const zip = new window.JSZip();
@@ -2539,26 +2574,43 @@ async function baixarTodosEspelhosZIP(month, btn) {
       i++;
       if (btn) btn.innerHTML = `Gerando ${i}/${people.length}…`;
       await new Promise((res) => setTimeout(res, 0)); // deixa a tela respirar
-      zip.file(`espelho-${pdfFileName(row.name)}-${month}.pdf`, gerarEspelhoDoc(row, month).output('blob'));
+      zip.file(`espelho-${pdfFileName(row.name)}-${month}.pdf`, gerarEspelhoDoc(row, month, ctx).output('blob'));
     }
     if (btn) btn.innerHTML = 'Compactando…';
     const blob = await zip.generateAsync({ type: 'blob' });
-    saveBlob(blob, `espelhos-${month}.zip`);
+    saveBlob(blob, `espelhos-${month}-${(ctx.scopeFile || 'todas')}.zip`);
     toast('ZIP baixado!');
   } catch (e) { toast(e.message, 'err'); }
   finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
 }
 
-function modalDocumentoPonto(month, r) {
+async function modalDocumentoPonto(month, r) {
   const mm = month.slice(5, 7) + '/' + month.slice(0, 4);
-  const tE = r.total_extra_label || '0h 0min';
-  const tL = r.total_late_label || '0h 0min';
-  const tB = r.total_balance_label || tE;
-  const opts = sortAZ(r.rows).map((x) => `<option value="${x.seller_id}">${esc(x.name)}</option>`).join('');
+  let stores = [];
+  try { stores = (await api('/api/stores')).stores || []; } catch {}
+  const isManager = store.user?.role === 'manager';
+  const storeMap = {};
+  for (const s of stores) storeMap[s.name] = s;
+  const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || '—'; };
+  // gerente: trava na própria loja; admin: Todas ou uma filial por vez
+  let scopeId = isManager ? String(store.user.store_id || '') : '';
+  let scoped = r;
+  const scopeStore = () => stores.find((x) => String(x.id) === String(scopeId)) || null;
+  const scopeLabel = () => {
+    const s = scopeStore();
+    if (!s) return 'Todas as lojas';
+    return companyOf(s.name) + (s.cnpj ? ` • CNPJ ${s.cnpj}` : '');
+  };
+  const scopeFile = () => {
+    const s = scopeStore();
+    return s ? pdfFileName(companyOf(s.name)) : 'todas';
+  };
+  const docCtx = () => ({ storeMap, scopeId, scopeLabel: scopeLabel(), scopeFile: scopeFile() });
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Documento p/ contador — ${mm}</h3>
-    <p class="muted" style="font-size:13px">Extras <b class="mono">+${esc(tE)}</b> • Atrasos <b class="mono">−${esc(tL)}</b> • Saldo <b class="mono">${esc(tB)}</b><br>Atraso abate do extra (minuto a minuto, sem tolerância). Ex.: 08:10→18:00 = −0h 10min.</p>
+    ${(!isManager && stores.length > 1) ? `<label>Loja</label><select id="docStore" style="width:100%"><option value="">Todas as lojas</option>${stores.map((s) => `<option value="${s.id}">${esc(companyOf(s.name))}</option>`).join('')}</select>` : ''}
+    <p class="muted" style="font-size:13px" id="docTotals"></p>
     <button class="btn btn-accent btn-big" id="docPdf" style="width:100%">⬇️ Demonstrativo mensal (PDF)</button>
     <div style="height:8px"></div>
     <div class="row" style="flex-wrap:wrap">
@@ -2568,7 +2620,7 @@ function modalDocumentoPonto(month, r) {
     <div style="height:8px"></div>
     <label>Espelho individual (PDF)</label>
     <div class="row" style="flex-wrap:wrap;align-items:end">
-      <div style="flex:1;min-width:0"><select id="docSeller" style="width:100%;max-width:100%">${opts}</select></div>
+      <div style="flex:1;min-width:0"><select id="docSeller" style="width:100%;max-width:100%"></select></div>
       <button class="btn btn-big" id="docEspelho" style="flex:none">Baixar</button>
     </div>
     <div style="height:8px"></div>
@@ -2576,16 +2628,35 @@ function modalDocumentoPonto(month, r) {
     <div style="height:12px"></div>
     <button class="btn btn-ghost btn-big" id="cancel" style="width:100%">Fechar</button>
   </div></div>`;
+  const paintTotals = () => {
+    const box = $('#docTotals');
+    if (box) box.innerHTML = `${esc(scopeLabel())}<br>Extras <b class="mono">+${esc(scoped.total_extra_label || '0h 0min')}</b> • Atrasos <b class="mono">−${esc(scoped.total_late_label || '0h 0min')}</b> • Saldo <b class="mono">${esc(scoped.total_balance_label || '')}</b><br>Atraso abate do extra (minuto a minuto, sem tolerância). Ex.: 08:10→18:00 = −0h 10min.`;
+  };
+  const wireButtons = () => {
+    const sel = $('#docSeller');
+    if (sel) sel.innerHTML = sortAZ(scoped.rows).map((x) => `<option value="${x.seller_id}">${esc(x.name)}</option>`).join('');
+  };
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  $('#docPdf').onclick = () => baixarDemonstrativoPDF(month, r);
-  $('#docCsvR').onclick = async () => { await baixarResumoXLSX(month, r); };
-  $('#docCsvA').onclick = async () => { await baixarAnaliticoXLSX(month); };
+  $('#docPdf').onclick = () => baixarDemonstrativoPDF(month, scoped, docCtx());
+  $('#docCsvR').onclick = async () => { await baixarResumoXLSX(month, scoped, docCtx()); };
+  $('#docCsvA').onclick = async () => { await baixarAnaliticoXLSX(month, scopeId, docCtx()); };
   $('#docEspelho').onclick = async () => {
     const sid = Number($('#docSeller').value);
-    if (sid) baixarEspelhoPDF(sid, month);
+    if (sid) baixarEspelhoPDF(sid, month, null, scopeId, docCtx());
   };
-  $('#docZip').onclick = (e) => baixarTodosEspelhosZIP(month, e.currentTarget);
+  $('#docZip').onclick = (e) => baixarTodosEspelhosZIP(month, e.currentTarget, scopeId, docCtx());
+  const ds = $('#docStore');
+  if (ds) ds.onchange = async () => {
+    scopeId = ds.value;
+    try {
+      scoped = await api(`/api/ponto/resumo?month=${month}${scopeId ? `&store_id=${encodeURIComponent(scopeId)}` : ''}`);
+    } catch (e) { toast(e.message, 'err'); return; }
+    paintTotals();
+    wireButtons();
+  };
+  paintTotals();
+  wireButtons();
 }
 
 async function tabPontoFeriados(body) {
@@ -3137,6 +3208,10 @@ async function modalUser(u, reload) {
       </div>
       <label>Loja *</label>
       <select id="uStore">${stores.map((s) => `<option value="${s.id}" ${Number(u?.store_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      <div id="jobFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
+        <label>Função p/ documento (ex: Vendedor, Mecânico)</label>
+        <input id="uJob" maxlength="60" placeholder="Vazio = Vendedor / Funcionário" value="${esc(u?.job_title || '')}">
+      </div>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
       <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
@@ -3163,6 +3238,7 @@ async function modalUser(u, reload) {
     $('#sellerFields').style.display = role === 'seller' ? 'block' : 'none';
     $('#mgrHint').style.display = role === 'manager' ? 'block' : 'none';
     $('#staffHint').style.display = role === 'staff' ? 'block' : 'none';
+    $('#jobFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
     $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
   };
   // helpers carga horária (HH:MM <-> minutos)
@@ -3195,6 +3271,7 @@ async function modalUser(u, reload) {
         name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role,
         sector: role === 'seller' ? $('#uSector').value : 'online',
         store_id: Number($('#uStore').value),
+        ...((role === 'seller' || role === 'staff') ? { job_title: $('#uJob').value.trim() } : {}),
         ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
       };
       let uid = u?.id;

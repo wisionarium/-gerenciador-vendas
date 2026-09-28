@@ -20,6 +20,7 @@ const SCHEMA = [
     role TEXT NOT NULL CHECK (role IN ('admin','manager','seller')) DEFAULT 'seller',
     sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
     store_id INTEGER,
+    job_title TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -31,6 +32,8 @@ const SCHEMA = [
     qr_code TEXT NOT NULL UNIQUE,
     lat REAL,
     lng REAL,
+    company_name TEXT,
+    cnpj TEXT,
     radius_m INTEGER NOT NULL DEFAULT 150,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -376,6 +379,11 @@ const ready = (async () => {
   try { await run('ALTER TABLE users ADD COLUMN avatar_url TEXT'); } catch {}
   // migração leve: chave PIX da pessoa (ignora se a coluna já existir)
   try { await run('ALTER TABLE users ADD COLUMN pix_key TEXT'); } catch {}
+  // migração leve: função/cargo p/ documentos do contador (ex: Vendedor, Mecânico)
+  try { await run('ALTER TABLE users ADD COLUMN job_title TEXT'); } catch {}
+  // migração leve: razão social + CNPJ da loja p/ cabeçalho dos documentos
+  try { await run('ALTER TABLE stores ADD COLUMN company_name TEXT'); } catch {}
+  try { await run('ALTER TABLE stores ADD COLUMN cnpj TEXT'); } catch {}
   // migração leve: tema em duas cores (ignora se já existir)
   try { await run('ALTER TABLE seller_settings ADD COLUMN theme_dark TEXT'); } catch {}
   try { await run('ALTER TABLE seller_settings ADD COLUMN theme_light TEXT'); } catch {}
@@ -541,11 +549,12 @@ async function migrateTableChecks() {
       store_id INTEGER,
       avatar_url TEXT,
       pix_key TEXT,
+      job_title TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
-    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, active, created_at)
-      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, active, created_at FROM users`);
+    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, job_title, active, created_at)
+      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, job_title, active, created_at FROM users`);
       await run('DROP TABLE users');
       await run('ALTER TABLE users_new RENAME TO users');
       try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
