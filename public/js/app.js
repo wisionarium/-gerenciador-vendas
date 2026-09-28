@@ -1812,7 +1812,6 @@ async function viewPonto(app) {
 
 async function tabPontoLoja(body) {
   body.innerHTML = `<div id="qrBox"><p class="muted">Carregando lojas…</p></div>`;
-  const isAdmin = store.user?.role === 'admin';
   try {
     const { stores } = await api('/api/stores/qr');
     if (!stores.length) { $('#qrBox').innerHTML = '<div class="card empty">Nenhuma loja cadastrada.</div>'; return; }
@@ -1831,12 +1830,7 @@ async function tabPontoLoja(body) {
           <button class="btn btn-ghost" data-geostore="${s.id}">📍 Ajustar localização</button>
         </div>
         <div id="geo-${s.id}" style="margin-top:8px"></div>
-        ${isAdmin ? `<div style="margin-top:8px">
-          <label>Nome da empresa p/ documentos</label><input id="comp-${s.id}" maxlength="80" placeholder="Ex: Supra Bike Magé LTDA" value="${esc(s.company_name || '')}">
-          <label>CNPJ p/ documentos (sem validação)</label><input id="cnpj-${s.id}" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90" value="${esc(s.cnpj || '')}">
-          <div style="height:6px"></div>
-          <button class="btn" data-compsave="${s.id}">Salvar empresa</button>
-        </div>` : (s.company_name ? `<div class="muted" style="font-size:12px;margin-top:6px">🏢 ${esc(s.company_name)}${s.cnpj ? ` • CNPJ ${esc(s.cnpj)}` : ''}</div>` : '')}
+        ${s.company_name ? `<div class="muted" style="font-size:12px;margin-top:6px">🏢 ${esc(s.company_name)}${s.cnpj ? ` • CNPJ ${esc(s.cnpj)}` : ''} <span style="font-size:11px">(edita em Equipe → Empresas)</span></div>` : ''}
       </div>`).join('');
     const byId = Object.fromEntries(stores.map((s) => [s.id, s]));
     $('#qrBox').onclick = async (e) => {
@@ -1846,15 +1840,6 @@ async function tabPontoLoja(body) {
         const w = window.open('', '_blank');
         w.document.write(`<html><head><title>QR Ponto — ${esc(s.name)}</title></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h1>${esc(s.name)} — Ponto</h1><img src="${s.qrImage}" style="width:320px;height:320px"><h2 style="letter-spacing:.1em">${esc(s.qr_code)}</h2><p>Escaneie ao chegar e ao sair. A localização é verificada (raio ${s.radius_m}m).</p><script>onload=()=>{print();}<\/script></body></html>`);
         w.document.close();
-        return;
-      }
-      const cs = e.target.closest('[data-compsave]');
-      if (cs) {
-        const id = cs.dataset.compsave;
-        try {
-          await api(`/api/stores/${id}`, { method: 'PUT', body: JSON.stringify({ company_name: $(`#comp-${id}`).value, cnpj: $(`#cnpj-${id}`).value }) });
-          toast('Empresa salva!'); tabPontoLoja(body);
-        } catch (err) { toast(err.message, 'err'); }
         return;
       }
       const gs = e.target.closest('[data-geostore]');
@@ -3079,16 +3064,16 @@ async function viewReport(app) {
 }
 
 async function viewTeam(app) {
-  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova pessoa</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div>`;
+  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova pessoa</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div><div id="companiesBox" style="margin-top:16px"></div>`;
   const load = async () => {
     try {
       const { users } = await api('/api/users');
     const people = users.filter((u) => u.role !== 'admin');
     const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
-      <td>${s.role === 'manager' ? '<span class="chip lime" style="font-size:10px">Gerente</span>' : s.role === 'staff' ? '<span class="chip" style="font-size:10px">Funcionário</span>' : `<span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span>`}<br>${storeTag(s.store_name)}</td>
+      <td>${storeTag(s.store_name)}</td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
       <td><button class="btn" data-edit="${s.id}">Editar</button></td></tr>`;
-    const teamHead = '<table><thead><tr><th>Nome</th><th>Perfil / Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
+    const teamHead = '<table><thead><tr><th>Nome</th><th>Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
     const teamRest = people.slice(8);
     $('#teamBody').innerHTML = people.length ? `<div class="card" style="padding:0;overflow:hidden">
       ${teamHead}${people.slice(0, 8).map(teamRow).join('')}</tbody></table>
@@ -3104,7 +3089,36 @@ async function viewTeam(app) {
   };
   $('#add').onclick = () => modalUser(null, load);
   await load();
+  await loadCompanies();
   await loadPhrases();
+}
+
+// Empresas p/ documentos do contador (nome + CNPJ por loja) — fim da tela de Equipe
+async function loadCompanies() {
+  const box = $('#companiesBox');
+  if (!box) return;
+  box.innerHTML = `<h3 class="section-title">Empresas (nome + CNPJ p/ documentos)</h3><div class="card"><p class="muted">Carregando…</p></div>`;
+  try {
+    const { stores } = await api('/api/stores');
+    box.innerHTML = `<h3 class="section-title">Empresas (nome + CNPJ p/ documentos)</h3>
+      <div class="card">${(stores || []).map((s) => `
+        <div style="border-top:1px solid var(--line);padding:10px 0">
+          <b>${esc(s.name)}</b>${s.company_name ? ` <span class="muted" style="font-size:12px">• ${esc(s.company_name)}${s.cnpj ? ` • ${esc(s.cnpj)}` : ''}</span>` : ' <span class="muted" style="font-size:12px">• sem empresa</span>'}
+          <label>Nome da empresa p/ documentos</label><input id="coName-${s.id}" maxlength="80" placeholder="Ex: ASA BIKE LTDA" value="${esc(s.company_name || '')}">
+          <label>CNPJ p/ documentos (sem validação)</label><input id="coCnpj-${s.id}" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90" value="${esc(s.cnpj || '')}">
+          <div style="height:6px"></div>
+          <button class="btn" data-cosave="${s.id}">Salvar empresa</button>
+        </div>`).join('')}</div>`;
+    box.onclick = async (e) => {
+      const b = e.target.closest('[data-cosave]');
+      if (!b) return;
+      const id = b.dataset.cosave;
+      try {
+        await api(`/api/stores/${id}`, { method: 'PUT', body: JSON.stringify({ company_name: $(`#coName-${id}`).value, cnpj: $(`#coCnpj-${id}`).value }) });
+        toast('Empresa salva!'); loadCompanies();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  } catch (e) { box.innerHTML = `<h3 class="section-title">Empresas</h3><div class="card empty">${esc(e.message)}</div>`; }
 }
 
 async function loadPhrases() {
@@ -3208,11 +3222,9 @@ async function modalUser(u, reload) {
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
       <div id="compFields">
-        <h4 class="section-title" style="font-size:14px">Empresa da loja (vale p/ todos da loja)</h4>
-        <label>Nome da empresa p/ documentos</label>
-        <input id="uCompany" maxlength="80" placeholder="Ex: Supra Bike Magé LTDA">
-        <label>CNPJ p/ documentos (sem validação)</label>
-        <input id="uCnpj" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90">
+        <h4 class="section-title" style="font-size:14px">Empresa da loja</h4>
+        <p class="muted" style="font-size:13px" id="uCompanyLine"></p>
+        <p class="muted" style="font-size:12px">Edite em Equipe → Empresas.</p>
       </div>
       <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
         <h4 class="section-title" style="font-size:14px">Carga horária especial (opcional)</h4>
@@ -3241,11 +3253,13 @@ async function modalUser(u, reload) {
     $('#jobFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
     $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
   };
-  // empresa/CNPJ: preenche da loja selecionada (salva na loja, vale p/ todos dela)
+  // empresa/CNPJ da loja selecionada (só leitura; edita em Equipe → Empresas)
   const fillCompany = () => {
     const s = (stores || []).find((x) => String(x.id) === String($('#uStore').value));
-    if ($('#uCompany')) $('#uCompany').value = (s && s.company_name) || '';
-    if ($('#uCnpj')) $('#uCnpj').value = (s && s.cnpj) || '';
+    const line = $('#uCompanyLine');
+    if (line) line.innerHTML = s && (s.company_name || s.cnpj)
+      ? `🏢 <b>${esc(s.company_name || s.name)}</b>${s.cnpj ? ` • CNPJ ${esc(s.cnpj)}` : ''}`
+      : 'Loja sem empresa cadastrada.';
   };
   $('#uStore').onchange = fillCompany;
   fillCompany();
@@ -3298,14 +3312,6 @@ async function modalUser(u, reload) {
         };
         if (Object.values(sched).some((v) => v && v.error)) throw new Error('Carga horária inválida (use HH:MM entre 01:00 e 24:00, ou deixe vazio).');
         await api(`/api/users/${uid}/schedule`, { method: 'PUT', body: JSON.stringify(sched) });
-      }
-      // empresa/CNPJ da loja (só salva se mudou)
-      const stId = Number($('#uStore').value);
-      const st = (stores || []).find((x) => String(x.id) === String(stId));
-      const comp = $('#uCompany').value.trim();
-      const cnpj = $('#uCnpj').value.trim();
-      if (st && (comp !== (st.company_name || '') || cnpj !== (st.cnpj || ''))) {
-        await api(`/api/stores/${stId}`, { method: 'PUT', body: JSON.stringify({ company_name: comp, cnpj }) });
       }
       closeModal(); toast('Salvo com sucesso!'); reload();
     } catch (err) { toast(err.message, 'err'); }
