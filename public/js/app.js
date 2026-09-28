@@ -2282,122 +2282,108 @@ function printExtrasPDF(month, r) {
 
 // Documento p/ contador (via "Gerar documento"): demonstrativo com extras, atrasos e saldo.
 // Regra: minuto a minuto, sem tolerância — atraso abate do extra no saldo.
-function printDocumentoContador(month, r) {
-  const [y, m] = month.split('-');
-  const lateOf = (x) => x.late_label || '0h 0min';
-  const balOf = (x) => x.balance_label || x.extra_label;
-  const balMin = (x) => x.balance_min ?? ((x.extra_min || 0) + (x.late_min || 0));
-  const rows = (r.rows || []).map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}${x.custom_schedule ? ' ⏱' : ''}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.store_name || '—')}</td><td style="text-align:center">${x.days || 0}</td><td class="nw" style="text-align:right">+${esc(x.extra_label)}</td><td class="nw" style="text-align:right">−${esc(lateOf(x))}</td><td class="nw" style="text-align:right"><b>${esc(balOf(x))}</b></td></tr>`).join('');
-  const tE = r.total_extra_label || '0h 0min';
-  const tL = r.total_late_label || '0h 0min';
-  const tB = r.total_balance_label || '0h 0min';
-  const now = new Date().toLocaleString('pt-BR');
-  const w = window.open('', '_blank');
-  w.document.write(`<html><head><title>Demonstrativo de Jornada — ${m}/${y}</title><style>
-    body{font-family:Arial,sans-serif;padding:36px;color:#111} h1{font-size:20px;margin:0} h2{font-size:14px;margin:2px 0 0;color:#444;font-weight:normal}
-    .meta{font-size:12px;color:#555;margin-top:6px} .tot{font-size:13px;margin-top:10px;background:#f3f4f6;border:1px solid #999;padding:8px 12px}
-    table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #999;padding:7px 10px;font-size:12px;text-align:left}
-    th{background:#f3f4f6} td.nw{white-space:nowrap} .box{font-size:11px;color:#333;border:1px solid #999;padding:8px 12px;margin-top:12px;line-height:1.6}
-    .sign{margin-top:44px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px;text-align:center}
-    @media print{body{padding:0} button{display:none}}
-    </style></head><body>
-    <h1>Demonstrativo mensal de jornada — ${m}/${y}</h1>
-    <h2>Horas extras e atrasos para conferência da contabilidade</h2>
-    <div class="meta">Emitido em ${now} • ${esc((r.rows || []).length)} pessoa(s) • Valores em horas:minutos • ⏱ = carga horária especial</div>
-    <div class="tot">Total extras: <b>+${esc(tE)}</b> &nbsp;•&nbsp; Total atrasos: <b>−${esc(tL)}</b> &nbsp;•&nbsp; Saldo do mês: <b>${esc(tB)}</b></div>
-    <table><thead><tr><th>#</th><th>Nome</th><th>Vínculo</th><th>Loja</th><th>Dias</th><th style="text-align:right">Extras (+)</th><th style="text-align:right">Atrasos (−)</th><th style="text-align:right">Saldo</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="8">Sem registros no mês.</td></tr>'}</tbody></table>
-    <div class="box"><b>Metodologia (conferência do contador):</b> jornada padrão seg–sex 10h (08:00→18:00), sáb 9h (08:00→17:00), dom 4h (08:00→12:00), feriado 5h (08:00→13:00), salvo carga especial (⏱). Saldo do dia = trabalhado (saída − entrada) − padrão, <b>minuto a minuto, sem tolerância</b>: atraso ou saída antecipada gera saldo negativo e abate dos extras no total do mês. Ex.: segunda 08:10→18:00 = 9h50 − 10h = <b>−0h 10min</b>. Dia incompleto (sem entrada ou sem saída) não soma e deve ser corrigido. 🤖 = saída lançada sozinha no teto do expediente (ponto esquecido).<br><b>Documento simplificado para apuração de horas</b> (sem CPF/CNPJ/admissão — não substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).</div>
-    <div class="sign"><div>Responsável (empresa)</div><div>Conferência (contabilidade)</div></div>
-    <script>onload=()=>{print();}<\/script></body></html>`);
-  w.document.close();
+// Ordem alfabetica pt-BR p/ documentos (PDFs e planilhas). O painel continua no ranking por saldo.
+function sortAZ(rows) {
+  return (rows || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'));
 }
-
-// CSV resumo (1 linha por pessoa) — abre direto no Excel PT-BR (separador ;, BOM UTF-8)
-function downloadResumoCSV(month, r) {
-  const head = ['competencia', 'nome', 'vinculo', 'loja', 'dias', 'extras_min', 'extras_hhmm', 'atrasos_min', 'atrasos_hhmm', 'saldo_min', 'saldo_hhmm', 'pago_min', 'pago_hhmm', 'a_pagar_min', 'a_pagar_hhmm', 'pix'];
-  const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const lines = (r.rows || []).map((x) => [
-    month, x.name, x.role === 'staff' ? 'Funcionario' : (x.sector || ''), x.store_name || '',
-    x.days || 0, x.extra_min || 0, x.extra_label || '', Math.abs(x.late_min || 0), x.late_label || '',
-    (x.balance_min ?? 0), x.balance_label || '', x.paid_min || 0, x.paid_label || '', x.pending_min || 0, x.pending_label || '', x.pix_key || '',
-  ].map(q).join(';'));
-  const csv = '﻿' + [head.map(q).join(';'), ...lines].join('\r\n');
+// estilo padrao das planilhas p/ o contador (cabecalho, bordas, zebra, congelar topo, filtros)
+function styleSheet(ws, opt) {
+  const nCols = ws.columnCount;
+  const header = ws.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B3B2C' } };
+  header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  header.height = 30;
+  const thin = { style: 'thin', color: { argb: 'FFB0B0B0' } };
+  ws.eachRow((row, n) => {
+    row.eachCell((cell) => {
+      cell.border = { top: thin, left: thin, bottom: thin, right: thin };
+      if (n > 1 && n % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+    });
+  });
+  for (const c of ((opt || {}).numCols || [])) ws.getColumn(c + 1).numFmt = '#,##0';
+  for (const c of ((opt || {}).rightCols || [])) ws.getColumn(c + 1).alignment = { vertical: 'middle', horizontal: 'right' };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  ws.autoFilter = { from: 'A1', to: `${ws.getColumn(nCols).letter}1` };
+}
+function saveBlob(blob, filename) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = `jornada-resumo-${month}.csv`;
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  toast('CSV resumo baixado!');
 }
 
-// CSV analítico dia a dia (1 linha por pessoa/dia) — o que o contador lança na folha
-async function downloadAnaliticoCSV(month) {
+// Excel resumo (1 linha por pessoa) — planilha formatada p/ Excel/Sheets
+async function baixarResumoXLSX(month, r) {
   try {
-    toast('Gerando CSV dia a dia…');
+    if (!window.ExcelJS) return toast('Gerador de Excel ainda carregando. Tente de novo.', 'err');
+    toast('Gerando Excel…');
+    const wb = new window.ExcelJS.Workbook();
+    wb.creator = 'SellDay';
+    const ws = wb.addWorksheet(`Resumo ${month}`);
+    const head = ['Competência', 'Nome', 'Vínculo', 'Loja', 'Dias', 'Extras (min)', 'Extras', 'Atrasos (min)', 'Atrasos', 'Saldo (min)', 'Saldo', 'Pago (min)', 'Pago', 'A pagar (min)', 'A pagar', 'PIX'];
+    const widths = [12, 26, 14, 14, 8, 12, 12, 12, 12, 12, 12, 11, 12, 12, 12, 28];
+    ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
+    const vinc = (x) => (x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online');
+    for (const x of sortAZ(r.rows)) {
+      ws.addRow({
+        c0: month, c1: x.name, c2: vinc(x), c3: x.store_name || '',
+        c4: x.days || 0, c5: x.extra_min || 0, c6: x.extra_label || '',
+        c7: Math.abs(x.late_min || 0), c8: x.late_label || '',
+        c9: (x.balance_min ?? 0), c10: x.balance_label || '',
+        c11: x.paid_min || 0, c12: x.paid_label || '',
+        c13: x.pending_min || 0, c14: x.pending_label || '', c15: x.pix_key || '',
+      });
+    }
+    styleSheet(ws, { numCols: [4, 5, 7, 9, 11, 13], rightCols: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] });
+    const buf = await wb.xlsx.writeBuffer();
+    saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `jornada-resumo-${month}.xlsx`);
+    toast('Excel resumo baixado!');
+  } catch (e) { toast('Falha ao gerar Excel: ' + e.message, 'err'); }
+}
+
+// Excel analítico dia a dia (1 linha por pessoa/dia) — o que o contador lança na folha
+async function baixarAnaliticoXLSX(month) {
+  try {
+    if (!window.ExcelJS) return toast('Gerador de Excel ainda carregando. Tente de novo.', 'err');
+    toast('Gerando Excel dia a dia…');
     const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&detail=1`);
-    const head = ['competencia', 'nome', 'vinculo', 'loja_func', 'data', 'dia_semana', 'entrada', 'saida', 'trabalhado_min', 'trabalhado', 'padrao_min', 'padrao', 'extra_min', 'extra', 'atraso_min', 'atraso', 'saldo_min', 'saldo', 'status', 'loja_ponto', 'feriado', 'auto_fechado'];
-    const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [];
-    for (const x of (det.rows || [])) {
-      for (const d of (x.days_list || [])) {
-        lines.push([
-          month, x.name, x.role === 'staff' ? 'Funcionario' : (x.sector || ''), x.store_name || '',
-          d.date || '', weekdayShortBR(d.date || ''), d.in_hhmm || '', d.out_hhmm || '',
-          d.worked_min ?? '', d.worked_label || '', d.std_min ?? '', d.std_label || '',
-          d.extra_min ?? '', d.extra_label || '', Math.abs(d.late_min || 0), d.late_label || '',
-          d.balance_min ?? '', d.balance_label || '', d.status || '',
-          d.punch_store || '', d.holiday_label || '', d.auto_closed ? 'sim' : 'nao',
-        ].map(q).join(';'));
+    const wb = new window.ExcelJS.Workbook();
+    wb.creator = 'SellDay';
+    const ws = wb.addWorksheet(`Dia a dia ${month}`);
+    const head = ['Competência', 'Nome', 'Vínculo', 'Loja', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Loja do ponto', 'Feriado', 'Auto'];
+    const widths = [12, 26, 14, 12, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 13, 18, 8];
+    ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Falta', folga: 'Folga', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const vinc = (x) => (x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online');
+    for (const x of sortAZ(det.rows)) {
+      const days = (x.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      for (const d of days) {
+        ws.addRow({
+          c0: month, c1: x.name, c2: vinc(x), c3: x.store_name || '',
+          c4: d.date ? fmtDateBR(d.date) : '', c5: weekdayShortBR(d.date || ''),
+          c6: d.in_hhmm || '', c7: d.out_hhmm || '',
+          c8: d.worked_min ?? null, c9: d.worked_label || '',
+          c10: d.std_min ?? null, c11: d.std_label || '',
+          c12: d.extra_min ?? null, c13: d.extra_label || '',
+          c14: Math.abs(d.late_min || 0), c15: d.late_label || '',
+          c16: d.balance_min ?? null, c17: d.balance_label || '',
+          c18: statusLabel[d.status] || d.status || '',
+          c19: d.punch_store || '', c20: d.holiday_label || '', c21: d.auto_closed ? 'sim' : 'não',
+        });
       }
     }
-    const csv = '﻿' + [head.map(q).join(';'), ...lines].join('\r\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `jornada-dia-a-dia-${month}.csv`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast('CSV dia a dia baixado!');
+    styleSheet(ws, { numCols: [8, 10, 12, 14, 16], rightCols: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] });
+    const buf = await wb.xlsx.writeBuffer();
+    saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `jornada-dia-a-dia-${month}.xlsx`);
+    toast('Excel dia a dia baixado!');
   } catch (e) { toast(e.message, 'err'); }
 }
 
-// Espelho individual (PDF via impressão): dia a dia de 1 funcionário no mês
-async function printEspelhoFuncionario(sellerId, month, knownRow) {
-  try {
-    toast('Gerando espelho…');
-    let row = knownRow;
-    if (!row || !row.days_list) {
-      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
-      row = (det.rows || [])[0];
-    }
-    if (!row) return toast('Funcionário não encontrado.', 'err');
-    const [y, m] = month.split('-');
-    const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Falta', folga: 'Folga', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
-    const trs = days.map((d) => {
-      const saldo = d.balance_label || d.extra_label || '—';
-      return `<tr><td>${esc(fmtDateBR(d.date))}</td><td>${esc(weekdayShortBR(d.date))}</td><td>${esc(d.in_hhmm || '—')}</td><td>${esc(d.out_hhmm || '—')}</td><td>${esc(d.worked_label || '—')}</td><td>${esc(d.std_label || '—')}</td><td style="text-align:right"><b>${esc(saldo)}</b></td><td>${esc(statusLabel[d.status] || d.status || '—')}${d.auto_closed ? ' 🤖' : ''}${d.is_holiday && d.holiday_label ? ` (${esc(d.holiday_label)})` : ''}</td><td>${esc(d.punch_store || '—')}</td></tr>`;
-    }).join('');
-    const w = window.open('', '_blank');
-    w.document.write(`<html><head><title>Espelho — ${esc(row.name)} — ${m}/${y}</title><style>
-      body{font-family:Arial,sans-serif;padding:36px;color:#111} h1{font-size:19px;margin:0} .meta{font-size:12px;color:#555;margin-top:4px}
-      .tot{font-size:13px;margin-top:10px;background:#f3f4f6;border:1px solid #999;padding:8px 12px}
-      table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #999;padding:5px;font-size:11px;text-align:left}
-      th{background:#f3f4f6} .box{font-size:11px;color:#333;border:1px solid #999;padding:8px 12px;margin-top:12px;line-height:1.6}
-      .sign{margin-top:44px;display:flex;gap:40px} .sign div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px;text-align:center}
-      </style></head><body>
-      <h1>${esc(row.name)} — ${m}/${y}</h1>
-      <div class="meta">${esc(row.role === 'staff' ? 'Funcionário' : (row.sector || ''))} • ${esc(row.store_name || '')}${row.custom_schedule ? ' • ⏱ carga especial' : ''} • Emitido em ${new Date().toLocaleString('pt-BR')}</div>
-      <div class="tot">Dias: <b>${row.days || 0}</b> • Trabalhado: <b>${esc(row.worked_label || '—')}</b> • Extras: <b>+${esc(row.extra_label)}</b> • Atrasos: <b>−${esc(row.late_label || '0h 0min')}</b> • Saldo: <b>${esc(row.balance_label || row.extra_label)}</b>${row.paid_min > 0 ? ` • Pago: <b>${esc(row.paid_label)}</b> • A pagar: <b>${esc(row.pending_label)}</b>` : ''}</div>
-      <table><thead><tr><th>Data</th><th>Dia</th><th>Entrada</th><th>Saída</th><th>Trabalhado</th><th>Padrão</th><th style="text-align:right">Saldo</th><th>Status</th><th>Loja</th></tr></thead><tbody>${trs || '<tr><td colspan="9">Sem registros.</td></tr>'}</tbody></table>
-      <div class="box"><b>Metodologia:</b> saldo do dia = trabalhado − padrão, minuto a minuto, sem tolerância (atraso abate do extra). Padrões: seg–sex 10h, sáb 9h, dom 4h, feriado 5h, salvo carga especial. 🤖 = saída lançada sozinha no teto do expediente. Documento simplificado para apuração (sem CPF/CNPJ).</div>
-      <div class="sign"><div>Funcionário</div><div>Responsável</div></div>
-      <script>onload=()=>{print();}<\/script></body></html>`);
-    w.document.close();
-  } catch (e) { toast(e.message, 'err'); }
-}
+// (espelho via impressão removido; hoje o espelho baixa em PDF com jsPDF)
 
-// Documento p/ contador: demonstrativo formal (extras − atrasos), espelho por pessoa e CSVs.
+// Documento p/ contador: demonstrativo em PDF, espelho por pessoa e planilhas Excel.
 // O painel de Extras continua como antes; o desconto de atraso aparece só aqui.
 // Texto seguro p/ o PDF (fonte padrão não tem emoji nem alguns símbolos)
 function pdfText(s) {
@@ -2430,7 +2416,7 @@ function baixarDemonstrativoPDF(month, r) {
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Total extras: +${tE}   -   Total atrasos: -${tL}   -   Saldo do mes: ${tB}`), 14, 33);
     const head = [['#', 'Nome', 'Vinculo', 'Loja', 'Dias', 'Extras (+)', 'Atrasos (-)', 'Saldo']];
-    const body = (r.rows || []).map((x, i) => [
+    const body = sortAZ(r.rows).map((x, i) => [
       String(i + 1),
       pdfText(x.name + (x.custom_schedule ? ' *' : '')),
       pdfText(x.role === 'staff' ? 'Funcionario' : (x.sector === 'presencial' ? 'Presencial' : 'Online')),
@@ -2529,7 +2515,7 @@ function modalDocumentoPonto(month, r) {
   const tE = r.total_extra_label || '0h 0min';
   const tL = r.total_late_label || '0h 0min';
   const tB = r.total_balance_label || tE;
-  const opts = (r.rows || []).map((x) => `<option value="${x.seller_id}">${esc(x.name)}</option>`).join('');
+  const opts = sortAZ(r.rows).map((x) => `<option value="${x.seller_id}">${esc(x.name)}</option>`).join('');
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Documento p/ contador — ${mm}</h3>
@@ -2537,8 +2523,8 @@ function modalDocumentoPonto(month, r) {
     <button class="btn btn-accent btn-big" id="docPdf" style="width:100%">⬇️ Demonstrativo mensal (PDF)</button>
     <div style="height:8px"></div>
     <div class="row" style="flex-wrap:wrap">
-      <button class="btn btn-big" id="docCsvR" style="flex:1">⬇️ CSV resumo</button>
-      <button class="btn btn-big" id="docCsvA" style="flex:1">⬇️ CSV dia a dia</button>
+      <button class="btn btn-big" id="docCsvR" style="flex:1">⬇️ Excel resumo</button>
+      <button class="btn btn-big" id="docCsvA" style="flex:1">⬇️ Excel dia a dia</button>
     </div>
     <div style="height:8px"></div>
     <label>Espelho individual (PDF)</label>
@@ -2552,8 +2538,8 @@ function modalDocumentoPonto(month, r) {
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   $('#docPdf').onclick = () => baixarDemonstrativoPDF(month, r);
-  $('#docCsvR').onclick = () => downloadResumoCSV(month, r);
-  $('#docCsvA').onclick = async () => { await downloadAnaliticoCSV(month); };
+  $('#docCsvR').onclick = async () => { await baixarResumoXLSX(month, r); };
+  $('#docCsvA').onclick = async () => { await baixarAnaliticoXLSX(month); };
   $('#docEspelho').onclick = async () => {
     const sid = Number($('#docSeller').value);
     if (sid) baixarEspelhoPDF(sid, month);
