@@ -2454,17 +2454,11 @@ function baixarDemonstrativoPDF(month, r) {
 }
 
 // Espelho individual em PDF (arquivo p/ baixar)
-async function baixarEspelhoPDF(sellerId, month, knownRow) {
-  try {
-    if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
-    toast('Gerando espelho…');
-    let row = knownRow;
-    if (!row || !row.days_list) {
-      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
-      row = (det.rows || [])[0];
-    }
-    if (!row) return toast('Funcionario nao encontrado.', 'err');
-    const [y, m] = month.split('-');
+// monta o espelho de 1 pessoa e devolve o doc (sem salvar) — usado no PDF e no ZIP
+function gerarEspelhoDoc(row, month) {
+  if (!window.jspdf) throw new Error('Gerador de PDF ainda carregando. Tente de novo.');
+  if (!row) throw new Error('Funcionario nao encontrado.');
+  const [y, m] = month.split('-');
     const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const W = 297;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
@@ -2505,9 +2499,50 @@ async function baixarEspelhoPDF(sellerId, month, knownRow) {
     doc.text(pdfText('Responsavel'), W - 90, yy);
     doc.line(14, yy - 6, 120, yy - 6);
     doc.line(W - 120, yy - 6, W - 14, yy - 6);
+    return doc;
+}
+
+// Espelho individual em PDF (arquivo p/ baixar)
+async function baixarEspelhoPDF(sellerId, month, knownRow) {
+  try {
+    toast('Gerando espelho…');
+    let row = knownRow;
+    if (!row || !row.days_list) {
+      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
+      row = (det.rows || [])[0];
+    }
+    const doc = gerarEspelhoDoc(row, month);
+    if (!doc) return;
     doc.save(`espelho-${pdfFileName(row.name)}-${month}.pdf`);
     toast('PDF baixado!');
   } catch (e) { toast(e.message, 'err'); }
+}
+
+// Todos os espelhos em 1 ZIP (1 PDF por pessoa, ordem A-Z) — 1 unica consulta ao banco
+async function baixarTodosEspelhosZIP(month, btn) {
+  const old = btn ? btn.innerHTML : null;
+  try {
+    if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
+    if (!window.JSZip) return toast('Gerador de ZIP ainda carregando. Tente de novo.', 'err');
+    if (btn) btn.disabled = true;
+    toast('Buscando mês completo…');
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}&detail=1`);
+    const people = sortAZ(det.rows);
+    if (!people.length) return toast('Sem registros neste mês.', 'err');
+    const zip = new window.JSZip();
+    let i = 0;
+    for (const row of people) {
+      i++;
+      if (btn) btn.innerHTML = `Gerando ${i}/${people.length}…`;
+      await new Promise((res) => setTimeout(res, 0)); // deixa a tela respirar
+      zip.file(`espelho-${pdfFileName(row.name)}-${month}.pdf`, gerarEspelhoDoc(row, month).output('blob'));
+    }
+    if (btn) btn.innerHTML = 'Compactando…';
+    const blob = await zip.generateAsync({ type: 'blob' });
+    saveBlob(blob, `espelhos-${month}.zip`);
+    toast('ZIP baixado!');
+  } catch (e) { toast(e.message, 'err'); }
+  finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
 }
 
 function modalDocumentoPonto(month, r) {
@@ -2532,6 +2567,8 @@ function modalDocumentoPonto(month, r) {
       <div style="flex:1;min-width:0"><select id="docSeller" style="width:100%;max-width:100%">${opts}</select></div>
       <button class="btn btn-big" id="docEspelho" style="flex:none">Baixar</button>
     </div>
+    <div style="height:8px"></div>
+    <button class="btn btn-big" id="docZip" style="width:100%">⬇️ Todos os espelhos (ZIP)</button>
     <div style="height:12px"></div>
     <button class="btn btn-ghost btn-big" id="cancel" style="width:100%">Fechar</button>
   </div></div>`;
@@ -2544,6 +2581,7 @@ function modalDocumentoPonto(month, r) {
     const sid = Number($('#docSeller').value);
     if (sid) baixarEspelhoPDF(sid, month);
   };
+  $('#docZip').onclick = (e) => baixarTodosEspelhosZIP(month, e.currentTarget);
 }
 
 async function tabPontoFeriados(body) {
