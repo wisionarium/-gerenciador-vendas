@@ -1892,7 +1892,10 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.active=1${kindFilter}${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
   );
-  if (scope.storeId != null) {
+  // documentos p/ contador usam ?strict=1: só pessoal da casa (sem visitantes
+  // de outras lojas), p/ não misturar filiais. O painel continua com visitantes.
+  const strictScope = req.query.strict === '1' || req.query.strict === 'true';
+  if (scope.storeId != null && !strictScope) {
     // visitantes com batidas nesta loja no mês
     const homeIds = new Set(sellers.map((s) => s.id));
     const visitors = await db.all(

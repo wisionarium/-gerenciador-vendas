@@ -2374,7 +2374,7 @@ async function baixarAnaliticoXLSX(month, storeId, ctx) {
     ctx = ctx || {};
     const storeMap = ctx.storeMap || {};
     const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || ''; };
-    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1`);
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1&strict=1`);
     const wb = new window.ExcelJS.Workbook();
     wb.creator = 'SellDay';
     const ws = wb.addWorksheet(`Dia a dia ${month}`);
@@ -2565,7 +2565,7 @@ async function baixarTodosEspelhosZIP(month, btn, storeId, ctx) {
     if (!window.JSZip) return toast('Gerador de ZIP ainda carregando. Tente de novo.', 'err');
     if (btn) btn.disabled = true;
     toast('Buscando mês completo…');
-    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1`);
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1&strict=1`);
     const people = sortAZ(det.rows);
     if (!people.length) return toast('Sem registros neste mês.', 'err');
     const zip = new window.JSZip();
@@ -2650,7 +2650,7 @@ async function modalDocumentoPonto(month, r) {
   if (ds) ds.onchange = async () => {
     scopeId = ds.value;
     try {
-      scoped = await api(`/api/ponto/resumo?month=${month}${scopeId ? `&store_id=${encodeURIComponent(scopeId)}` : ''}`);
+      scoped = await api(`/api/ponto/resumo?month=${month}${scopeId ? `&store_id=${encodeURIComponent(scopeId)}` : ''}&strict=1`);
     } catch (e) { toast(e.message, 'err'); return; }
     paintTotals();
     wireButtons();
@@ -3087,7 +3087,7 @@ async function viewTeam(app) {
     const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
       <td>${s.role === 'manager' ? '<span class="chip lime" style="font-size:10px">Gerente</span>' : s.role === 'staff' ? '<span class="chip" style="font-size:10px">Funcionário</span>' : `<span class="chip ${(s.sector || 'online') === 'presencial' ? 'crm' : 'wa'}">${(s.sector || 'online') === 'presencial' ? 'Presencial' : 'Online'}</span>`}<br>${storeTag(s.store_name)}</td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
-      <td><button class="btn" data-edit="${s.id}">Editar</button> <button class="btn" data-toggle="${s.id}">${s.active ? 'Desativar' : 'Ativar'}</button> <button class="btn btn-ghost" data-del="${s.id}" title="Excluir definitivamente">🗑️</button></td></tr>`;
+      <td><button class="btn" data-edit="${s.id}">Editar</button></td></tr>`;
     const teamHead = '<table><thead><tr><th>Nome</th><th>Perfil / Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
     const teamRest = people.slice(8);
     $('#teamBody').innerHTML = people.length ? `<div class="card" style="padding:0;overflow:hidden">
@@ -3096,14 +3096,7 @@ async function viewTeam(app) {
       <div style="padding:10px"><button class="btn btn-ghost btn-big" data-more>Ver mais (${teamRest.length})</button></div>` : ''}
       </div>` : '<div class="card empty">Ninguém cadastrado.</div>';
     bindCompactList($('#teamBody'));
-    $$('#teamBody [data-toggle]').forEach((b) => (b.onclick = async () => {
-      const id = b.dataset.toggle;
-      const current = users.find((u) => String(u.id) === String(id));
-      await api(`/api/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ active: !current.active }) });
-      toast('Status atualizado!'); load();
-    }));
     $$('#teamBody [data-edit]').forEach((b) => (b.onclick = () => modalUser(users.find((u) => String(u.id) === String(b.dataset.edit)), load)));
-    $$('#teamBody [data-del]').forEach((b) => (b.onclick = () => askDeleteUser(users.find((u) => String(u.id) === String(b.dataset.del)), load)));
     } catch (e) {
       $('#teamBody').innerHTML = `<div class="card"><p><b>Não foi possível carregar a equipe.</b></p><p class="muted">${esc(e.message)}</p><button class="btn btn-primary" id="retry">Tentar novamente</button></div>`;
       $('#retry').onclick = load;
@@ -3214,6 +3207,13 @@ async function modalUser(u, reload) {
       </div>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
+      <div id="compFields">
+        <h4 class="section-title" style="font-size:14px">Empresa da loja (vale p/ todos da loja)</h4>
+        <label>Nome da empresa p/ documentos</label>
+        <input id="uCompany" maxlength="80" placeholder="Ex: Supra Bike Magé LTDA">
+        <label>CNPJ p/ documentos (sem validação)</label>
+        <input id="uCnpj" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90">
+      </div>
       <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
         <h4 class="section-title" style="font-size:14px">Carga horária especial (opcional)</h4>
         <p class="muted" style="font-size:12px">Vazio = padrão (seg–sex 10h • sáb 9h • dom 4h • feriado 5h). Ex: quem faz 8h–17h seg–sex = 09:00. Sair mais cedo nunca gera hora negativa.</p>
@@ -3241,6 +3241,14 @@ async function modalUser(u, reload) {
     $('#jobFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
     $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
   };
+  // empresa/CNPJ: preenche da loja selecionada (salva na loja, vale p/ todos dela)
+  const fillCompany = () => {
+    const s = (stores || []).find((x) => String(x.id) === String($('#uStore').value));
+    if ($('#uCompany')) $('#uCompany').value = (s && s.company_name) || '';
+    if ($('#uCnpj')) $('#uCnpj').value = (s && s.cnpj) || '';
+  };
+  $('#uStore').onchange = fillCompany;
+  fillCompany();
   // helpers carga horária (HH:MM <-> minutos)
   const minToHHMM = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
   const hhmmToMin = (s) => {
@@ -3290,6 +3298,14 @@ async function modalUser(u, reload) {
         };
         if (Object.values(sched).some((v) => v && v.error)) throw new Error('Carga horária inválida (use HH:MM entre 01:00 e 24:00, ou deixe vazio).');
         await api(`/api/users/${uid}/schedule`, { method: 'PUT', body: JSON.stringify(sched) });
+      }
+      // empresa/CNPJ da loja (só salva se mudou)
+      const stId = Number($('#uStore').value);
+      const st = (stores || []).find((x) => String(x.id) === String(stId));
+      const comp = $('#uCompany').value.trim();
+      const cnpj = $('#uCnpj').value.trim();
+      if (st && (comp !== (st.company_name || '') || cnpj !== (st.cnpj || ''))) {
+        await api(`/api/stores/${stId}`, { method: 'PUT', body: JSON.stringify({ company_name: comp, cnpj }) });
       }
       closeModal(); toast('Salvo com sucesso!'); reload();
     } catch (err) { toast(err.message, 'err'); }
