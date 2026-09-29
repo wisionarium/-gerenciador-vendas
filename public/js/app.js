@@ -78,6 +78,24 @@ function weekKeyJS(dateISO) {
   return d.toISOString().slice(0, 10);
 }
 const fmtDayBR = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '—');
+// busca/filtro da Equipe (puro, testável): q já normalizada; f = {role,store,active,company,dayoff,scale}
+const normSearch = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function matchTeam(u, q, f) {
+  if (q) {
+    const hay = normSearch(`${u.name || ''} ${u.email || ''} ${u.job_title || ''}`);
+    if (!hay.includes(q)) return false;
+  }
+  if (f.role && u.role !== f.role) return false;
+  if (f.store && (u.store_name || 'Sede') !== f.store) return false;
+  if (f.active && String(u.active ? 1 : 0) !== f.active) return false;
+  if (f.company === 'none') { if (u.company_id != null) return false; }
+  else if (f.company && String(u.company_id ?? '') !== f.company) return false;
+  const hasDayoff = !(u.dayoff_dow == null || u.dayoff_dow === '');
+  if (f.dayoff === 'yes' && !hasDayoff) return false;
+  if (f.dayoff === 'no' && hasDayoff) return false;
+  if (f.scale && (u.sunday_scale || 'off') !== f.scale) return false;
+  return true;
+}
 const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
 const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
 // prévia da comissão (espelha a regra do backend): base por loja+setor ou bônus; metade se dividida
@@ -3222,38 +3240,87 @@ async function viewReport(app) {
 }
 
 async function viewTeam(app) {
-  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova pessoa</button></div><div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div><div id="companiesBox" style="margin-top:16px"></div>`;
-  const load = async () => {
-    try {
-      const { users } = await api('/api/users');
-    const people = users.filter((u) => u.role !== 'admin');
-    const scaleTag = (s) => {
-      const parts = [];
-      if (s.dayoff_dow != null && s.dayoff_dow !== '') parts.push(`Folga ${DOWS_PT_SHORT[Number(s.dayoff_dow)] || ''}`);
-      const sc = s.sunday_scale || 'off';
-      if (sc === 'A' || sc === 'B') parts.push(`Dom ${sc}`);
-      else if (sc === 'all') parts.push('Dom todos');
-      return parts.length ? `<br><span class="chip" style="font-size:10px;padding:1px 8px" title="Folga semanal e escala de domingos">${esc(parts.join(' • '))}</span>` : '';
-    };
-    const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
-      <td>${storeTag(s.store_name)}${scaleTag(s)}</td>
-      <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
-      <td><button class="btn" data-edit="${s.id}">Editar</button></td></tr>`;
-    const teamHead = '<table><thead><tr><th>Nome</th><th>Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
-    const teamRest = people.slice(8);
-    $('#teamBody').innerHTML = people.length ? `<div class="card" style="padding:0;overflow:hidden">
-      ${teamHead}${people.slice(0, 8).map(teamRow).join('')}</tbody></table>
+  app.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center"><h2>Equipe</h2><button class="btn btn-primary" id="add">+ Nova pessoa</button></div>
+  <div class="row" style="flex-wrap:nowrap;align-items:center;gap:8px;margin:10px 0">
+    <div style="flex:1;min-width:0"><input id="teamSearch" placeholder="Buscar nome, e-mail ou função…" autocomplete="off"></div>
+    <button class="btn" id="teamFilterBtn" title="Filtros" style="flex:none;font-size:18px;line-height:1;padding:10px 14px">☰<span id="teamFilterCount" class="chip lime" style="display:none;font-size:10px;padding:0 7px;margin-left:6px;vertical-align:2px">0</span></button>
+  </div>
+  <div id="teamFilters" style="display:none"><div class="card">
+    <div class="row" style="flex-wrap:wrap">
+      <div style="flex:1;min-width:140px"><label>Perfil</label><select id="fRole"><option value="">Todos</option><option value="seller">Vendedora</option><option value="manager">Gerente</option><option value="staff">Funcionário</option></select></div>
+      <div style="flex:1;min-width:140px"><label>Loja</label><select id="fStore"><option value="">Todas</option></select></div>
+      <div style="flex:1;min-width:140px"><label>Status</label><select id="fActive"><option value="">Todas</option><option value="1">Ativa</option><option value="0">Inativa</option></select></div>
+    </div>
+    <div class="row" style="flex-wrap:wrap">
+      <div style="flex:1;min-width:140px"><label>Empresa</label><select id="fCompany"><option value="">Todas</option></select></div>
+      <div style="flex:1;min-width:140px"><label>Folga</label><select id="fDayoff"><option value="">Todas</option><option value="yes">Com folga</option><option value="no">Sem folga</option></select></div>
+      <div style="flex:1;min-width:140px"><label>Domingos</label><select id="fScale"><option value="">Todos</option><option value="off">Folga sempre</option><option value="A">Escala A</option><option value="B">Escala B</option><option value="all">Todos os domingos</option></select></div>
+    </div>
+    <div style="height:8px"></div>
+    <button class="btn btn-ghost" id="fClear">Limpar filtros</button>
+  </div></div>
+  <div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div><div id="companiesBox" style="margin-top:16px"></div>`;
+  let teamPeople = [];
+  let teamQ = '';
+  let teamF = { role: '', store: '', active: '', company: '', dayoff: '', scale: '' };
+  const scaleTag = (s) => {
+    const parts = [];
+    if (s.dayoff_dow != null && s.dayoff_dow !== '') parts.push(`Folga ${DOWS_PT_SHORT[Number(s.dayoff_dow)] || ''}`);
+    const sc = s.sunday_scale || 'off';
+    if (sc === 'A' || sc === 'B') parts.push(`Dom ${sc}`);
+    else if (sc === 'all') parts.push('Dom todos');
+    return parts.length ? `<br><span class="chip" style="font-size:10px;padding:1px 8px" title="Folga semanal e escala de domingos">${esc(parts.join(' • '))}</span>` : '';
+  };
+  const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
+    <td>${storeTag(s.store_name)}${scaleTag(s)}</td>
+    <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
+    <td><button class="btn" data-edit="${s.id}">Editar</button></td></tr>`;
+  const teamHead = '<table><thead><tr><th>Nome</th><th>Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
+  const renderTeam = () => {
+    const q = normSearch(teamQ.trim());
+    const filtered = teamPeople.filter((u) => matchTeam(u, q, teamF));
+    const activeN = Object.values(teamF).filter(Boolean).length;
+    const badge = $('#teamFilterCount');
+    if (badge) { badge.style.display = activeN ? '' : 'none'; badge.textContent = activeN; }
+    const teamRest = filtered.slice(8);
+    const countLine = filtered.length !== teamPeople.length ? `<p class="muted" style="font-size:12px;margin:0 2px 6px">${filtered.length} de ${teamPeople.length}</p>` : '';
+    $('#teamBody').innerHTML = filtered.length ? `${countLine}<div class="card" style="padding:0;overflow:hidden">
+      ${teamHead}${filtered.slice(0, 8).map(teamRow).join('')}</tbody></table>
       ${teamRest.length ? `<div data-rest style="display:none"><table><tbody>${teamRest.map(teamRow).join('')}</tbody></table></div>
       <div style="padding:10px"><button class="btn btn-ghost btn-big" data-more>Ver mais (${teamRest.length})</button></div>` : ''}
-      </div>` : '<div class="card empty">Ninguém cadastrado.</div>';
+      </div>` : (teamPeople.length ? '<div class="card empty">Ninguém encontrado. Ajuste a busca ou limpe os filtros.</div>' : '<div class="card empty">Ninguém cadastrado.</div>');
     bindCompactList($('#teamBody'));
-    $$('#teamBody [data-edit]').forEach((b) => (b.onclick = () => modalUser(users.find((u) => String(u.id) === String(b.dataset.edit)), load)));
+    $$('#teamBody [data-edit]').forEach((b) => (b.onclick = () => modalUser(teamPeople.find((u) => String(u.id) === String(b.dataset.edit)), load)));
+  };
+  const load = async () => {
+    try {
+      const [{ users }, co] = await Promise.all([api('/api/users'), api('/api/companies').catch(() => ({ companies: [] }))]);
+      teamPeople = users.filter((u) => u.role !== 'admin')
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'));
+      const stores = [...new Set(teamPeople.map((u) => u.store_name || 'Sede'))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      $('#fStore').innerHTML = `<option value="">Todas</option>` + stores.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+      $('#fCompany').innerHTML = `<option value="">Todas</option>` + (co.companies || []).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('') + `<option value="none">Sem empresa</option>`;
+      renderTeam();
     } catch (e) {
       $('#teamBody').innerHTML = `<div class="card"><p><b>Não foi possível carregar a equipe.</b></p><p class="muted">${esc(e.message)}</p><button class="btn btn-primary" id="retry">Tentar novamente</button></div>`;
       $('#retry').onclick = load;
     }
   };
   $('#add').onclick = () => modalUser(null, load);
+  $('#teamSearch').oninput = (e) => { teamQ = e.target.value; renderTeam(); };
+  $('#teamFilterBtn').onclick = () => {
+    const t = $('#teamFilters');
+    t.style.display = t.style.display === 'none' ? '' : 'none';
+  };
+  for (const [id, key] of [['fRole', 'role'], ['fStore', 'store'], ['fActive', 'active'], ['fCompany', 'company'], ['fDayoff', 'dayoff'], ['fScale', 'scale']]) {
+    $('#' + id).onchange = (e) => { teamF[key] = e.target.value; renderTeam(); };
+  }
+  $('#fClear').onclick = () => {
+    teamQ = ''; $('#teamSearch').value = '';
+    teamF = { role: '', store: '', active: '', company: '', dayoff: '', scale: '' };
+    for (const id of ['fRole', 'fStore', 'fActive', 'fCompany', 'fDayoff', 'fScale']) $('#' + id).value = '';
+    renderTeam();
+  };
   await load();
   await loadCompanies();
   await loadPhrases();
