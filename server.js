@@ -111,8 +111,9 @@ const nowSPMinutes = () => {
   return Math.floor(ms / 60000 - 180) % 1440;
 };
 // fim padrão do expediente em minutos SP: 8h + std (600→18h, 540→17h, 240→12h, feriado 300→13h)
-const stdEndMinutes = (isHoliday, dateISO, sched) => {
-  const std = stdMinutesFor(dateISO, isHoliday, sched);
+// person (opcional): { dayoff_dow, sunday_scale } — folga/escala da pessoa
+const stdEndMinutes = (isHoliday, dateISO, sched, person) => {
+  const std = dayRule(dateISO, isHoliday, sched, person).std;
   return 8 * 60 + std;
 };
 
@@ -133,8 +134,23 @@ const toPublicUser = (u) => ({
   store_id: u.store_id || null, store_name: u.store_name || (u.role === 'admin' ? 'Todas' : 'Sede'),
   active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null,
   job_title: u.job_title || null, company_id: u.company_id || null,
+  dayoff_dow: u.dayoff_dow == null ? null : Number(u.dayoff_dow),
+  sunday_scale: ['A', 'B', 'all'].includes(u.sunday_scale) ? u.sunday_scale : 'off',
 });
 const validSector = (s) => ['online', 'presencial'].includes(s);
+// folga semanal: 0=Dom..6=Sáb ou vazio; domingos: off/A/B/all ou vazio
+const validDayoff = (v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 6);
+const validSundayScale = (v) => v == null || v === '' || ['off', 'A', 'B', 'all'].includes(v);
+const normDayoff = (v, fallback) => {
+  if (v === undefined) return fallback === undefined ? null : fallback;
+  if (v == null || v === '') return null;
+  return Number(v);
+};
+const normScale = (v, fallback) => {
+  if (v === undefined) return fallback === undefined ? 'off' : fallback;
+  if (v == null || v === '') return 'off';
+  return v;
+};
 const CHANNELS = ['WhatsApp', 'CRM', 'Presencial'];
 
 // gerente: admin da própria loja (não vê outras lojas, não gerencia usuários)
@@ -364,7 +380,7 @@ async function cronNotify(req, res) {
       const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', member.id, today).catch(() => null);
       if (!p || !p.check_in_at || p.check_out_at) continue;
       const hol = await holidayFor(today, p.store_id ?? member.store_id).catch(() => null);
-      const reminderMin = stdEndMinutes(!!hol, today, scheds[member.id]) - 10;
+      const reminderMin = stdEndMinutes(!!hol, today, scheds[member.id], member) - 10;
       if (nowMin < reminderMin || nowMin - reminderMin > 70) continue;
       const idx = pickTemplate(SAIDA_TEMPLATES, member.id, today);
       const r = await sendPushToUser(member.id, { title: 'Bater ponto 🕒', body: fillTpl(SAIDA_TEMPLATES[idx], member), url: '/', tag: `saida-${today}` });
@@ -583,10 +599,12 @@ app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector, store_id, job_title, company_id } = req.body || {};
+  const { name, email, password, role, sector, store_id, job_title, company_id, dayoff_dow, sunday_scale } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
   if (!['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
+  if (!validDayoff(dayoff_dow)) return res.status(400).json({ error: 'Folga semanal inválida.' });
+  if (!validSundayScale(sunday_scale)) return res.status(400).json({ error: 'Escala de domingo inválida.' });
   const jobTitle = String(job_title ?? '').trim().slice(0, 60) || null;
   let companyId = null;
   if (company_id != null && company_id !== '') {
@@ -608,8 +626,8 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   }
   if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
   try {
-    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, job_title, company_id, active) VALUES (?,?,?,?,?,?,?,?,1)',
-      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId, jobTitle, companyId);
+    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, job_title, company_id, dayoff_dow, sunday_scale, active) VALUES (?,?,?,?,?,?,?,?,?,?,1)',
+      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId, jobTitle, companyId, normDayoff(dayoff_dow), normScale(sunday_scale));
     const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
@@ -619,12 +637,14 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector, store_id, job_title, company_id } = req.body || {};
+  const { name, email, password, role, sector, store_id, job_title, company_id, dayoff_dow, sunday_scale } = req.body || {};
   const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
   if (role && !['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
+  if (!validDayoff(dayoff_dow)) return res.status(400).json({ error: 'Folga semanal inválida.' });
+  if (!validSundayScale(sunday_scale)) return res.status(400).json({ error: 'Escala de domingo inválida.' });
   const jobTitle = job_title === undefined ? target.job_title : (String(job_title ?? '').trim().slice(0, 60) || null);
   let companyId = target.company_id || null;
   if (company_id !== undefined) {
@@ -652,8 +672,8 @@ app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
     storeId = null;
   }
   try {
-    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=?, job_title=?, company_id=? WHERE id=?',
-      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, jobTitle, companyId, target.id);
+    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=?, job_title=?, company_id=?, dayoff_dow=?, sunday_scale=? WHERE id=?',
+      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, jobTitle, companyId, normDayoff(dayoff_dow, target.dayoff_dow), normScale(sunday_scale, target.sunday_scale || 'off'), target.id);
     if (password) {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
       await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
@@ -752,7 +772,11 @@ app.get('/api/users/:id/schedule', requireAuth, ah(async (req, res) => {
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
   if ((req.user.role === 'seller' || req.user.role === 'staff') && Number(target.id) !== Number(req.user.id))
     return res.status(403).json({ error: 'Sem permissão.' });
-  res.json({ schedule: await scheduleFor(target.id), defaults: STD_DEFAULTS });
+  res.json({
+    schedule: await scheduleFor(target.id), defaults: STD_DEFAULTS,
+    dayoff_dow: target.dayoff_dow == null ? null : Number(target.dayoff_dow),
+    sunday_scale: ['A', 'B', 'all'].includes(target.sunday_scale) ? target.sunday_scale : 'off',
+  });
 }));
 
 app.put('/api/users/:id/schedule', requireAuth, requireManager, ah(async (req, res) => {
@@ -1574,8 +1598,50 @@ function haversineM(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
-function punchCalc(p, isHoliday, sched) {
-  const std = stdMinutesFor(p.date, isHoliday, sched);
+// semana ISO (segunda-based), 1-53 — base da escala de domingos (A=ímpar, B=par)
+function isoWeek(dateISO) {
+  const dt = new Date(dateISO + 'T12:00:00Z');
+  const d = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+  const day = (d.getUTCDay() + 6) % 7; // seg=0..dom=6
+  d.setUTCDate(d.getUTCDate() - day + 3); // quinta da semana
+  const first = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const fday = (first.getUTCDay() + 6) % 7;
+  first.setUTCDate(first.getUTCDate() - fday + 3);
+  return 1 + Math.round((d - first) / 6048e5);
+}
+// segunda-feira (YYYY-MM-DD) da semana de dateISO — chave do banco semanal (trocas)
+function weekKey(dateISO) {
+  const dt = new Date(dateISO + 'T12:00:00Z');
+  dt.setUTCDate(dt.getUTCDate() - ((dt.getUTCDay() + 6) % 7));
+  return dt.toISOString().slice(0, 10);
+}
+// regra do dia p/ a pessoa: { std, rest } — rest = descanso esperado (folga semanal ou domingo de folga)
+// person: { dayoff_dow (0=Dom..6=Sáb|null), sunday_scale ('off'|'A'|'B'|'all') }; vazio = regra atual
+// - domingo trabalhado (escala): padrão 4h (sunday_min); passou = extra
+// - folga semanal (não-domingo): padrão 0h; tudo = extra (salvo troca semanal)
+// - feriado e dia normal: regra atual
+function dayRule(dateISO, isHoliday, sched, person) {
+  if (!isHoliday) {
+    const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
+    const p = person || {};
+    if (dow === 0) {
+      const sc = p.sunday_scale || 'off';
+      let work = sc === 'all';
+      if (!work && (sc === 'A' || sc === 'B')) {
+        const odd = isoWeek(dateISO) % 2 === 1;
+        work = sc === 'A' ? odd : !odd;
+      }
+      return { std: Number(sched?.sunday_min) || STD_DEFAULTS.sunday, rest: !work };
+    }
+    if (p.dayoff_dow != null && p.dayoff_dow !== '' && Number(p.dayoff_dow) === dow) {
+      return { std: 0, rest: true };
+    }
+  }
+  return { std: stdMinutesFor(dateISO, isHoliday, sched), rest: false };
+}
+function punchCalc(p, isHoliday, sched, person) {
+  const rule = dayRule(p.date, isHoliday, sched, person);
+  const std = rule.std;
   let worked = null;
   let extra = 0; // parte positiva do saldo (hora extra bruta)
   let late = 0; // parte negativa do saldo (atraso/saída antecipada), <= 0
@@ -1592,6 +1658,7 @@ function punchCalc(p, isHoliday, sched) {
     out_hhmm: p.check_out_at ? hhmmFromISO(p.check_out_at) : null,
     std_min: std,
     std_label: fmtDur(std),
+    rest_day: rule.rest,
     worked_min: worked,
     worked_label: worked == null ? null : fmtDur(worked),
     extra_min: extra,
@@ -1737,13 +1804,13 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
         req.user.id, store.id, today, now, nLat, nLng, acc);
       p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
       const hol = await holidayFor(today, store.id);
-      return res.status(201).json({ type: 'out', incomplete: true, store: store.name, punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
+      return res.status(201).json({ type: 'out', incomplete: true, store: store.name, punch: punchCalc(p, !!hol, mySched, req.user), distance_m: Math.round(dist) });
     }
     await db.run('INSERT INTO punches (seller_id, store_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?,?)',
       req.user.id, store.id, today, now, nLat, nLng, acc);
     p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
     const hol = await holidayFor(today, store.id);
-    return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
+    return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(p, !!hol, mySched, req.user), distance_m: Math.round(dist) });
   }
   if (!p.check_in_at && p.check_out_at)
     return res.status(409).json({ error: 'Saída já registrada (sem entrada hoje). Fale com o admin para completar sua entrada.' });
@@ -1754,7 +1821,7 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
       now, nLat, nLng, acc, p.id);
     p = await db.get('SELECT * FROM punches WHERE id=?', p.id);
     const hol = await holidayFor(today, p.store_id ?? store.id);
-    return res.json({ type: 'out', punch: punchCalc(p, !!hol, mySched), distance_m: Math.round(dist) });
+    return res.json({ type: 'out', punch: punchCalc(p, !!hol, mySched, req.user), distance_m: Math.round(dist) });
   }
   return res.status(409).json({ error: 'Dia já encerrado (entrada e saída registradas).' });
 }));
@@ -1765,7 +1832,7 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
   const today = todaySP();
   const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   const hol = await holidayFor(today, (p && p.store_id) ?? req.user.store_id);
-  res.json({ date: today, punch: p ? punchCalc(p, !!hol, await scheduleFor(req.user.id)) : null, is_holiday: !!hol });
+  res.json({ date: today, punch: p ? punchCalc(p, !!hol, await scheduleFor(req.user.id), req.user) : null, is_holiday: !!hol });
 }));
 
 // meu mês de ponto (vendedora e funcionário): batidas dia a dia + extras
@@ -1776,12 +1843,24 @@ app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
   const monthHols = await holidaysOfMonth(month);
   const mySched = await scheduleFor(req.user.id);
   await autoClosePunches(); // rede de segurança antes de listar o mês
+  const led = await buildLedger({
+    s: req.user, month, ps, monthHols, sched: mySched,
+    scopeStoreId: null, swapOff: await swapOffSet(req.user.id), today: todaySP(),
+  });
   res.json({
     month,
-    punches: ps.map((p) => {
-      const hol = holidayForPunch(monthHols, p, req.user.store_id);
-      const c = punchCalc(p, !!hol, mySched);
-      return { date: p.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm, worked_label: c.worked_label, extra_min: c.extra_min, extra_label: c.extra_label, late_min: c.late_min, late_label: c.late_label, balance_min: c.balance_min, balance_label: c.balance_label, is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: !!p.auto_closed };
+    punches: led.days.filter((e) => e.p).sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => {
+      const c = e.calc;
+      const conv = e.conv;
+      return {
+        date: e.date, in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
+        worked_label: c.worked_label,
+        extra_min: conv ? conv.extra : c.extra_min, extra_label: conv ? fmtDur(conv.extra) : c.extra_label,
+        late_min: conv ? conv.late : c.late_min, late_label: conv ? fmtDur(conv.late) : c.late_label,
+        balance_min: conv ? conv.balance : c.balance_min, balance_label: conv ? fmtSigned(conv.balance) : c.balance_label,
+        is_holiday: !!e.hol, holiday_label: e.hol ? e.hol.label : null, auto_closed: !!e.p.auto_closed,
+        swapped: !!e.swap, swap_with: e.swap ? e.swap.with : null, provisional: !!(e.swap && e.swap.provisional),
+      };
     }),
   });
 }));
@@ -1830,7 +1909,7 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online',
       store_id: s.store_id, store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
       custom_schedule: !!scheds[s.id],
-      punch: p ? { ...punchCalc(p, !!holRow, scheds[s.id]), punch_store: await punchStore(p) } : null,
+      punch: p ? { ...punchCalc(p, !!holRow, scheds[s.id], s), punch_store: await punchStore(p) } : null,
     };
   }));
   let rows = await buildRows();
@@ -1878,6 +1957,133 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ date, is_holiday: dayHols.length > 0 && (scope.storeId != null ? !!scopedHol : true), holiday: holiday || null, holidays: dayHols, auto_holiday, present, absent, rows });
 }));
 
+// feriado de um dia sem ponto: específica da loja da pessoa tem prioridade sobre a global
+function holidayForDay(monthHols, dateISO, fallbackStoreId) {
+  const pst = Number(fallbackStoreId) || 0;
+  const list = (monthHols || []).filter((h) => h.date === dateISO);
+  if (!list.length) return null;
+  return list.find((h) => Number(h.store_id) === pst && pst !== 0)
+    || list.find((h) => Number(h.store_id) === 0)
+    || null;
+}
+// semana fechada? (domingo da semana já passou em SP) — troca da semana atual é provisória
+function weekClosed(weekStartISO, todayISO) {
+  const end = new Date(weekStartISO + 'T12:00:00Z');
+  end.setUTCDate(end.getUTCDate() + 6);
+  return end.toISOString().slice(0, 10) < todayISO;
+}
+// semanas com troca desligada (admin desfez) — 1 pessoa
+async function swapOffSet(personId) {
+  try {
+    const rows = await db.all("SELECT week_start FROM swap_weeks WHERE person_id=? AND mode='off'", Number(personId));
+    return new Set(rows.map((r) => r.week_start));
+  } catch { return new Set(); }
+}
+// semanas com troca desligada — várias pessoas de uma vez
+async function swapOffMap(ids) {
+  const map = {};
+  const list = [...new Set((ids || []).map(Number).filter(Boolean))];
+  if (!list.length) return map;
+  try {
+    const rows = await db.all(`SELECT person_id, week_start FROM swap_weeks WHERE person_id IN (${list.map(() => '?').join(',')}) AND mode='off'`, ...list);
+    for (const r of rows) {
+      if (!map[r.person_id]) map[r.person_id] = new Set();
+      map[r.person_id].add(r.week_start);
+    }
+  } catch {}
+  return map;
+}
+// ledger mensal de 1 pessoa: classifica cada dia (com folga/escala), aplica as
+// trocas semanais 1-para-1 e totaliza. É a fonte única de extras/atrasos/saldo.
+// s: linha users (dayoff_dow/sunday_scale/store_id); ps: punches do mês;
+// scopeStoreId: filtra pontos por loja (painel); null = tudo (mês da pessoa, docs).
+// Retorna { days, pairs, totals, summary }.
+async function buildLedger({ s, month, ps, monthHols, sched, scopeStoreId = null, swapOff = new Set(), today }) {
+  const person = { dayoff_dow: s.dayoff_dow, sunday_scale: s.sunday_scale };
+  const [yy, mm] = month.split('-').map(Number);
+  const lastDay = new Date(yy, mm, 0).getDate();
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const byDate = new Map(ps.map((p) => [p.date, p]));
+  const days = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const dateISO = `${month}-${pad2(d)}`;
+    const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
+    const p = byDate.get(dateISO);
+    const inScope = !p || scopeStoreId == null || Number(p.store_id) === Number(scopeStoreId);
+    const hol = p ? holidayForPunch(monthHols, p, s.store_id) : holidayForDay(monthHols, dateISO, s.store_id);
+    const rule = dayRule(dateISO, !!hol, sched, person);
+    const isFuture = dateISO > today;
+    let status, calc = null;
+    const complete = !!(p && p.check_in_at && p.check_out_at);
+    if (p && inScope) {
+      calc = punchCalc(p, !!hol, sched, person);
+      status = complete ? 'trabalhado' : 'incompleto';
+    } else if (p && !inScope) {
+      status = 'outra-loja';
+      calc = punchCalc(p, !!hol, sched, person);
+    } else if (isFuture) status = 'futuro';
+    else if (hol) status = 'feriado';
+    else if (rule.rest) status = 'folga';
+    else status = 'falta';
+    days.push({
+      date: dateISO, dow, p: p || null, inScope, hol, rule, status, calc, complete,
+      conv: null, swap: null,
+    });
+  }
+  // pareia por semana (seg-dom): trabalhou descanso + faltou dia normal
+  const byWeek = new Map();
+  for (const e of days) {
+    if (!e.inScope || e.status === 'outra-loja') continue;
+    const wk = weekKey(e.date);
+    if (!byWeek.has(wk)) byWeek.set(wk, []);
+    byWeek.get(wk).push(e);
+  }
+  const pairs = [];
+  for (const [wk, list] of byWeek) {
+    if (swapOff.has(wk)) continue;
+    const worked = list.filter((e) => e.status === 'trabalhado' && e.complete && e.rule.rest && !e.hol)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    const missed = list.filter((e) => e.status === 'falta')
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    const n = Math.min(worked.length, missed.length);
+    const provisional = !weekClosed(wk, today);
+    for (let i = 0; i < n; i++) {
+      const w = worked[i], m = missed[i];
+      // o trabalhado assume o papel do faltado: padrão normal do dia faltado
+      const convStd = stdMinutesFor(m.date, false, sched);
+      const wm = w.calc.worked_min;
+      const bal = wm - convStd;
+      w.conv = { std: convStd, extra: Math.max(0, bal), late: Math.min(0, bal), balance: bal };
+      w.swap = { with: m.date, provisional };
+      m.status = 'troca';
+      m.swap = { with: w.date, provisional };
+      pairs.push({ a: w.date, b: m.date, week: wk, provisional });
+    }
+  }
+  // totais (só pontos completos no escopo, com conversão)
+  let extra = 0, late = 0, worked = 0, daysN = 0;
+  let nTrab = 0, nInc = 0, nFalta = 0, nFolga = 0, nFer = 0, nTroca = 0;
+  for (const e of days) {
+    if (e.swap && e.status === 'troca') { nTroca++; continue; }
+    if (e.status === 'incompleto') { nInc++; continue; }
+    if (e.status === 'trabalhado' && e.inScope && e.complete) {
+      nTrab++;
+      const c = e.conv || { extra: e.calc.extra_min, late: e.calc.late_min };
+      worked += e.calc.worked_min; extra += c.extra; late += c.late; daysN++;
+      if (e.hol) nFer++;
+      continue;
+    }
+    if (e.status === 'folga') { nFolga++; continue; }
+    if (e.status === 'feriado') { nFer++; continue; }
+    if (e.status === 'falta') { nFalta++; continue; }
+  }
+  return {
+    days, pairs,
+    totals: { extra, late, worked, days: daysN },
+    summary: { trabalhados: nTrab, incompletos: nInc, faltas: nFalta, folgas: nFolga, feriados: nFer, trocas: nTroca },
+  };
+}
+
 // total de extras/atrasos/saldo de uma pessoa no mês (todas as lojas) + baixas pagas.
 // Regra minuto a minuto, sem tolerância: atraso abate do extra (banco simples).
 // Usado na validação da baixa de horas; o resumo mensal usa o mesmo cálculo
@@ -1888,17 +2094,16 @@ async function monthExtra(sellerId, month) {
   const sched = await scheduleFor(person.id);
   const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ?', person.id, `${month}%`);
   const monthHols = await holidaysOfMonth(month);
-  let extra = 0, late = 0;
-  for (const p of ps) {
-    const hol = holidayForPunch(monthHols, p, person.store_id);
-    const c = punchCalc(p, !!hol, sched);
-    if (c.worked_min != null) { extra += c.extra_min; late += c.late_min; }
-  }
-  const balance = extra + late;
+  const led = await buildLedger({
+    s: person, month, ps, monthHols, sched,
+    scopeStoreId: null, swapOff: await swapOffSet(person.id), today: todaySP(),
+  });
+  const t = led.totals;
+  const balance = t.extra + t.late;
   let paid = 0;
   try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', person.id, month)).t) || 0; }
   catch {}
-  return { extra, late_min: late, balance, paid, pending: Math.max(0, balance - paid) };
+  return { extra: t.extra, late_min: t.late, balance, paid, pending: Math.max(0, balance - paid) };
 }
 
 // fechamento automático de pontos esquecidos (dias passados com entrada e sem
@@ -1930,7 +2135,7 @@ async function autoClosePunches() {
       const u = usersById[p.seller_id] || {};
       const hols = await monthHols(p.date.slice(0, 7));
       const hol = holidayForPunch(hols, p, u.store_id);
-      const endMin = stdEndMinutes(!!hol, p.date, scheds[p.seller_id]);
+      const endMin = stdEndMinutes(!!hol, p.date, scheds[p.seller_id], u);
       const hh = String(Math.floor(endMin / 60)).padStart(2, '0');
       const mm = String(endMin % 60).padStart(2, '0');
       let outISO = new Date(`${p.date}T${hh}:${mm}:00-03:00`).toISOString();
@@ -1991,6 +2196,24 @@ app.delete('/api/ponto/feriados/:date', requireAuth, requireAdmin, ah(async (req
   res.json({ ok: true });
 }));
 
+// escala de domingos (admin/gerente): pessoal da casa com folga/escala —
+// o app calcula os próximos domingos (semana ISO: A=ímpar, B=par). Sem ponto envolvido.
+app.get('/api/ponto/escalas', requireAuth, requireManager, ah(async (req, res) => {
+  const scope = scopedStoreId(req, req.query.store_id);
+  if (scope.error) return res.status(403).json({ error: scope.error });
+  const people = await db.all(
+    `SELECT id, name, role, sector, store_id, dayoff_dow, sunday_scale FROM users WHERE active=1 AND role IN ('seller','staff')${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY name`,
+    ...(scope.storeId != null ? [scope.storeId] : [])
+  );
+  res.json({
+    people: people.map((p) => ({
+      id: p.id, name: p.name, role: p.role,
+      dayoff_dow: p.dayoff_dow == null ? null : Number(p.dayoff_dow),
+      sunday_scale: ['A', 'B', 'all'].includes(p.sunday_scale) ? p.sunday_scale : 'off',
+    })),
+  });
+}));
+
 // resumo mensal de extras (admin/gerente)
 app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) => {
   const month = req.query.month || todaySP().slice(0, 7);
@@ -2039,6 +2262,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;  if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
   const wantDetail = req.query.detail === '1' || req.query.detail === 'true';
   const schedsAll = await schedulesMap(sellers.map((s) => s.id));
+  const swapOffAll = await swapOffMap(sellers.map((s) => s.id));
   const storeNames = {};
   const punchStore = async (p) => {
     if (!p || !p.store_id) return 'Sede';
@@ -2047,15 +2271,6 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       storeNames[p.store_id] = st ? st.name : 'Sede';
     }
     return storeNames[p.store_id];
-  };
-  // feriado de um dia sem ponto: específica da loja da pessoa tem prioridade sobre a global
-  const holidayForDay = (dateISO, fallbackStoreId) => {
-    const pst = Number(fallbackStoreId) || 0;
-    const list = (monthHols || []).filter((h) => h.date === dateISO);
-    if (!list.length) return null;
-    return list.find((h) => Number(h.store_id) === pst && pst !== 0)
-      || list.find((h) => Number(h.store_id) === 0)
-      || null;
   };
   const rows = await Promise.all(sellers.map(async (s) => {
     // com empresa: todos os pontos da pessoa (sem filtro de loja).
@@ -2066,117 +2281,102 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       s.id, `${month}%`, ...(useStoreFilter ? [scope.storeId] : [])
     );
     const sched = schedsAll[s.id] || null;
-    let extra = 0, late = 0, worked = 0, days = 0, paid = 0;
+    // ledger do mês: classifica, aplica trocas semanais e totaliza (fonte única)
+    const led = await buildLedger({
+      s, month, ps, monthHols, sched,
+      scopeStoreId: useStoreFilter ? scope.storeId : null,
+      swapOff: (swapOffAll[s.id] || new Set()),
+      today: todaySP(),
+    });
+    const t = led.totals;
+    let paid = 0;
     let detail = null;
     let fullDays = null;
     let summary = null;
-    if (wantDetail) { detail = []; fullDays = []; }
-    const byDate = new Map(ps.map((p) => [p.date, p]));
-    for (const p of ps) {
-      const hol = holidayForPunch(monthHols, p, s.store_id);
-      const c = punchCalc(p, !!hol, sched);
-      if (c.worked_min != null) { worked += c.worked_min; extra += c.extra_min; late += c.late_min; days += 1; }
-      if (wantDetail) {
+    if (wantDetail) {
+      detail = [];
+      fullDays = [];
+      for (const e of led.days) {
+        if (!e.p || !e.inScope) continue;
+        const c = e.calc;
+        const conv = e.conv;
         detail.push({
-          date: p.date,
+          date: e.date,
           in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
-          worked_min: c.worked_min, worked_label: c.worked_label, std_min: c.std_min, std_label: c.std_label,
-          extra_min: c.extra_min, extra_label: c.extra_label,
-          late_min: c.late_min, late_label: c.late_label,
-          balance_min: c.balance_min, balance_label: c.balance_label,
-          is_holiday: !!hol, holiday_label: hol ? hol.label : null,
-          auto_closed: !!p.auto_closed,
-          incomplete: c.worked_min == null,
-          punch_store: await punchStore(p),
+          worked_min: c.worked_min, worked_label: c.worked_label,
+          std_min: conv ? conv.std : c.std_min, std_label: conv ? fmtDur(conv.std) : c.std_label,
+          extra_min: conv ? conv.extra : c.extra_min, extra_label: conv ? fmtDur(conv.extra) : c.extra_label,
+          late_min: conv ? conv.late : c.late_min, late_label: conv ? fmtDur(conv.late) : c.late_label,
+          balance_min: conv ? conv.balance : c.balance_min, balance_label: conv ? fmtSigned(conv.balance) : c.balance_label,
+          is_holiday: !!e.hol, holiday_label: e.hol ? e.hol.label : null,
+          auto_closed: !!e.p.auto_closed,
+          incomplete: !e.complete,
+          punch_store: await punchStore(e.p),
+          swapped: !!e.swap, swap_with: e.swap ? e.swap.with : null, provisional: !!(e.swap && e.swap.provisional),
         });
       }
     }
     if (wantDetail) {
-      // calendário completo do mês: trabalhados, incompletos, folgas (dom),
-      // feriados, faltas (dias passados sem ponto) e futuros — p/ o popup do nome.
-      const [yy, mm] = month.split('-').map(Number);
-      const lastDay = new Date(yy, mm, 0).getDate();
-      const today = todaySP();
-      const pad2 = (n) => String(n).padStart(2, '0');
-      let nTrab = 0, nInc = 0, nFalta = 0, nFolga = 0, nFer = 0;
-      for (let d = 1; d <= lastDay; d++) {
-        const dateISO = `${month}-${pad2(d)}`;
-        if (scope.storeId != null) {
-          const pp = byDate.get(dateISO);
-          if (pp && Number(pp.store_id) !== Number(scope.storeId)) {
-            // ponto batido em outra loja: não conta neste escopo, mas aparece como info
-          }
-        }
-        const p = byDate.get(dateISO);
-        const inScope = !p || scope.storeId == null || Number(p.store_id) === Number(scope.storeId) || !scope.storeId;
-        const hol = p ? holidayForPunch(monthHols, p, s.store_id) : holidayForDay(dateISO, s.store_id);
-        const std = stdMinutesFor(dateISO, !!hol, sched);
-        const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
-        const isFuture = dateISO > today;
-        if (p && inScope) {
-          const c = punchCalc(p, !!hol, sched);
-          const incomplete = c.worked_min == null;
-          let status = 'trabalhado';
-          if (incomplete) status = 'incompleto';
-          if (incomplete) nInc++; else nTrab++;
-          if (hol) nFer++;
-          fullDays.push({
-            date: dateISO, dow, status,
-            in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
-            worked_min: c.worked_min, worked_label: c.worked_label,
+      // calendário completo do mês direto do ledger (trabalhados, incompletos,
+      // folgas, feriados, faltas, trocas e futuros) — p/ o popup do nome.
+      const zeroNum = { extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0) };
+      for (const e of led.days) {
+        const c = e.calc;
+        const conv = e.conv;
+        const useCalc = !!(e.p && c && (e.inScope || e.status === 'outra-loja'));
+        let nums;
+        if (useCalc && e.complete && conv) {
+          nums = {
+            std_min: conv.std, std_label: fmtDur(conv.std),
+            extra_min: conv.extra, extra_label: fmtDur(conv.extra),
+            late_min: conv.late, late_label: fmtDur(conv.late),
+            balance_min: conv.balance, balance_label: fmtSigned(conv.balance),
+          };
+        } else if (useCalc && e.complete) {
+          nums = {
             std_min: c.std_min, std_label: c.std_label,
             extra_min: c.extra_min, extra_label: c.extra_label,
             late_min: c.late_min, late_label: c.late_label,
             balance_min: c.balance_min, balance_label: c.balance_label,
-            is_holiday: !!hol, holiday_label: hol ? hol.label : null,
-            auto_closed: !!p.auto_closed, incomplete,
-            punch_store: await punchStore(p),
-          });
-        } else if (p && !inScope) {
-          // batida fora do escopo: mostra só como referência (não soma)
-          const c = punchCalc(p, !!hol, sched);
-          fullDays.push({
-            date: dateISO, dow, status: 'outra-loja',
-            in_hhmm: c.in_hhmm, out_hhmm: c.out_hhmm,
-            worked_min: c.worked_min, worked_label: c.worked_label,
-            std_min: c.std_min, std_label: c.std_label,
-            extra_min: 0, extra_label: fmtDur(0),
-            late_min: 0, late_label: fmtDur(0),
-            balance_min: 0, balance_label: fmtDur(0),
-            is_holiday: !!hol, holiday_label: hol ? hol.label : null,
-            auto_closed: !!p.auto_closed, incomplete: c.worked_min == null,
-            punch_store: await punchStore(p),
-          });
-        } else if (isFuture) {
-          fullDays.push({ date: dateISO, dow, status: 'futuro', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: !!hol, holiday_label: hol ? hol.label : null, auto_closed: false, incomplete: false, punch_store: null });
-        } else if (hol) {
-          nFer++;
-          fullDays.push({ date: dateISO, dow, status: 'feriado', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: true, holiday_label: hol.label, auto_closed: false, incomplete: false, punch_store: null });
-        } else if (dow === 0) {
-          nFolga++;
-          fullDays.push({ date: dateISO, dow, status: 'folga', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
+          };
+        } else if (useCalc) {
+          nums = { std_min: c.std_min, std_label: c.std_label, ...zeroNum };
         } else {
-          nFalta++;
-          fullDays.push({ date: dateISO, dow, status: 'falta', in_hhmm: null, out_hhmm: null, worked_min: null, worked_label: null, std_min: std, std_label: fmtDur(std), extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0), is_holiday: false, holiday_label: null, auto_closed: false, incomplete: false, punch_store: null });
+          nums = { std_min: e.rule.std, std_label: fmtDur(e.rule.std), ...zeroNum };
         }
+        fullDays.push({
+          date: e.date, dow: e.dow, status: e.status,
+          in_hhmm: useCalc ? c.in_hhmm : null, out_hhmm: useCalc ? c.out_hhmm : null,
+          worked_min: useCalc && e.complete ? c.worked_min : null,
+          worked_label: useCalc && e.complete ? c.worked_label : null,
+          ...nums,
+          is_holiday: !!e.hol, holiday_label: e.hol ? e.hol.label : null,
+          auto_closed: e.p ? !!e.p.auto_closed : false, incomplete: e.status === 'incompleto',
+          punch_store: e.p ? await punchStore(e.p) : null,
+          swapped: !!e.swap, swap_with: e.swap ? e.swap.with : null, provisional: !!(e.swap && e.swap.provisional),
+        });
       }
-      summary = { trabalhados: nTrab, incompletos: nInc, faltas: nFalta, folgas: nFolga, feriados: nFer };
+      summary = { ...led.summary };
     }
     try { paid = Number((await db.get('SELECT COALESCE(SUM(minutes),0) AS t FROM extra_payouts WHERE seller_id=? AND month=?', s.id, month)).t) || 0; }
     catch {}
-    const balance = extra + late;
+    const t2 = led.totals;
+    const balance = t2.extra + t2.late;
     const pending = Math.max(0, balance - paid);
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
       custom_schedule: !!sched, pix_key: s.pix_key || null, job_title: s.job_title || null,
       company_id: s.company_id || null, company_name: s.company_name || null, company_cnpj: s.company_cnpj || null,
-      days, worked_min: worked, worked_label: fmtDur(worked),
-      extra_min: extra, extra_label: fmtDur(extra),
-      late_min: late, late_label: fmtDur(late),
+      dayoff_dow: s.dayoff_dow == null ? null : Number(s.dayoff_dow),
+      sunday_scale: ['A', 'B', 'all'].includes(s.sunday_scale) ? s.sunday_scale : 'off',
+      days: t2.days, worked_min: t2.worked, worked_label: fmtDur(t2.worked),
+      extra_min: t2.extra, extra_label: fmtDur(t2.extra),
+      late_min: t2.late, late_label: fmtDur(t2.late),
       balance_min: balance, balance_label: fmtSigned(balance),
       paid_min: paid, paid_label: fmtDur(paid),
       pending_min: pending, pending_label: fmtDur(pending),
-      ...(wantDetail ? { punches: detail, days_list: fullDays, summary } : {}),
+      trocas: led.summary.trocas,
+      ...(wantDetail ? { punches: detail, days_list: fullDays, summary, pairs: led.pairs, swap_off: [...(swapOffAll[s.id] || [])] } : {}),
     };
   }));
   rows.sort((a, b) => b.balance_min - a.balance_min);
@@ -2203,6 +2403,29 @@ app.post('/api/ponto/extra-payouts', requireAuth, requireManager, ah(async (req,
     person.id, m, mins, req.user.id);
   const after = await monthExtra(person.id, m);
   res.status(201).json({ payout: await db.get('SELECT * FROM extra_payouts WHERE id=?', r.lastInsertRowid), pending_min: after.pending, pending_label: fmtDur(after.pending) });
+}));
+
+// troca semanal automática: desfazer (mode off) ou religar (mode auto = apaga a linha).
+// week_start deve ser a segunda-feira da semana (YYYY-MM-DD).
+app.post('/api/ponto/swap-week', requireAuth, requireManager, ah(async (req, res) => {
+  const { seller_id, week_start, mode } = req.body || {};
+  const person = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff') AND active=1", Number(seller_id));
+  if (!person) return res.status(400).json({ error: 'Pessoa inválida.' });
+  if (req.user.role === 'manager' && Number(person.store_id) !== Number(req.user.store_id))
+    return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  const ws = String(week_start || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ws) || isNaN(Date.parse(ws))) return res.status(400).json({ error: 'Semana inválida.' });
+  if (((new Date(ws + 'T12:00:00Z')).getUTCDay() + 6) % 7 !== 0) return res.status(400).json({ error: 'Use a segunda-feira da semana.' });
+  if (mode === 'auto' || !mode) {
+    await db.run('DELETE FROM swap_weeks WHERE person_id=? AND week_start=?', person.id, ws).catch(() => {});
+  } else if (mode === 'off') {
+    await db.run(
+      `INSERT INTO swap_weeks (person_id, week_start, mode, created_by) VALUES (?,?,?,?)
+       ON CONFLICT(person_id, week_start) DO UPDATE SET mode=excluded.mode, created_by=excluded.created_by, created_at=datetime('now')`,
+      person.id, ws, 'off', req.user.id
+    );
+  } else return res.status(400).json({ error: 'Modo inválido.' });
+  res.json({ ok: true });
 }));
 
 // regra 13h (igual ao lançamento manual e à correção): primeira batida do dia
@@ -2244,7 +2467,8 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (t.error) return res.status(400).json({ error: t.error });
   await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, auto_closed=0, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
   const hol = await holidayFor(p.date, p.store_id ?? p.seller_store);
-  res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol, await scheduleFor(p.seller_id)) });
+  const seller = await db.get('SELECT * FROM users WHERE id=?', p.seller_id);
+  res.json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE id=?', p.id), !!hol, await scheduleFor(p.seller_id), seller) });
 }));
 
 // zerar o dia (admin/gerente): exclui o punch — o dia volta para Ausentes.
@@ -2280,7 +2504,7 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
     seller.id, punchStoreId, d, t.inISO, t.outISO
   );
   const hol = await holidayFor(d, punchStoreId);
-  res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol, await scheduleFor(seller.id)) });
+  res.status(201).json({ punch: punchCalc(await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', seller.id, d), !!hol, await scheduleFor(seller.id), seller) });
 }));
 
 // ---------- STATS ----------

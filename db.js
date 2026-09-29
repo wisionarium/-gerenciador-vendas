@@ -22,6 +22,8 @@ const SCHEMA = [
     store_id INTEGER,
     job_title TEXT,
     company_id INTEGER,
+    dayoff_dow INTEGER,
+    sunday_scale TEXT NOT NULL DEFAULT 'off',
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -135,6 +137,16 @@ const SCHEMA = [
     name TEXT NOT NULL,
     cnpj TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  // troca semanal automática 1-para-1 (reversível): pessoa + segunda-feira da semana.
+  // Sem linha = automática; mode 'off' = admin desfez (vale extra+falta).
+  `CREATE TABLE IF NOT EXISTS swap_weeks (
+    person_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    week_start TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'off' CHECK (mode IN ('off')),
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (person_id, week_start)
   )`,
   // feriados por loja: store_id 0 = Todas as lojas; >0 = loja específica (Sede/Magé/Guapimirim)
   `CREATE TABLE IF NOT EXISTS holidays (
@@ -438,6 +450,9 @@ const ready = (async () => {
   // empresa manual da pessoa (white-label) + selo matriz/filial da loja (ANTES dos rebuilds)
   try { await run('ALTER TABLE users ADD COLUMN company_id INTEGER'); } catch {}
   try { await run('ALTER TABLE stores ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0'); } catch {}
+  // folga semanal (0=Dom..6=Sáb, NULL=sem) + escala de domingos (off/A/B/all) (ANTES dos rebuilds)
+  try { await run('ALTER TABLE users ADD COLUMN dayoff_dow INTEGER'); } catch {}
+  try { await run("ALTER TABLE users ADD COLUMN sunday_scale TEXT NOT NULL DEFAULT 'off'"); } catch {}
   // selo de saída automática (ponto esquecido fechado sozinho no fim do expediente)
   try { await run('ALTER TABLE punches ADD COLUMN auto_closed INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE sales ADD COLUMN store_id INTEGER'); } catch {}
@@ -569,11 +584,13 @@ async function migrateTableChecks() {
       pix_key TEXT,
       job_title TEXT,
       company_id INTEGER,
+      dayoff_dow INTEGER,
+      sunday_scale TEXT NOT NULL DEFAULT 'off',
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
-    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, job_title, company_id, active, created_at)
-      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, job_title, company_id, active, created_at FROM users`);
+    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, job_title, company_id, dayoff_dow, sunday_scale, active, created_at)
+      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, job_title, company_id, dayoff_dow, COALESCE(sunday_scale,'off'), active, created_at FROM users`);
       await run('DROP TABLE users');
       await run('ALTER TABLE users_new RENAME TO users');
       try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}

@@ -52,6 +52,32 @@ const weekdayShortBR = (iso) => {
   return isNaN(dt) ? '' : WEEKDAYS_BR_SHORT[dt.getDay()];
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// folga semanal / escala de domingos (espelha o backend): A=semanas ímpares, B=pares
+const DOWS_PT = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+const DOWS_PT_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+function isoWeekJS(dateISO) {
+  const dt = new Date(dateISO + 'T12:00:00');
+  const d = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day + 3);
+  const first = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const fday = (first.getUTCDay() + 6) % 7;
+  first.setUTCDate(first.getUTCDate() - fday + 3);
+  return 1 + Math.round((d - first) / 6048e5);
+}
+function sundayWorked(dateISO, scale) {
+  if (scale === 'all') return true;
+  if (scale !== 'A' && scale !== 'B') return false;
+  const odd = isoWeekJS(dateISO) % 2 === 1;
+  return scale === 'A' ? odd : !odd;
+}
+function weekKeyJS(dateISO) {
+  const dt = new Date(dateISO + 'T12:00:00');
+  const d = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+const fmtDayBR = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '—');
 const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
 const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
 // prévia da comissão (espelha a regra do backend): base por loja+setor ou bônus; metade se dividida
@@ -1033,7 +1059,7 @@ function staffPunchRow(x, showDate = true) {
   <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
     <span><span class="muted" style="font-size:12px">${showDate ? `Dia: ${fmtDateBRWeek(x.date)}` : fmtDateBRWeek(x.date)}</span>${hol}${auto}<br>
     <span style="font-size:13px">Entrada: ${x.in_hhmm || '—'} • Saída: ${x.out_hhmm || '—'}</span></span>
-    <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}</span>
+    <span class="mono" style="font-size:13px;font-weight:800">${x.extra_min > 0 ? `+${esc(x.extra_label)}` : '—'}${x.swap_with ? ` <span class="chip" style="font-size:10px;padding:1px 8px;background:#e0f2fe;color:#075985" title="Troca com ${fmtDayBR(x.swap_with)}">🔄</span>` : ''}</span>
   </div></div>`;
 }
 async function viewStaff(app) {
@@ -1785,7 +1811,7 @@ function bindCompactList(box) {
 }
 
 let pontoTab = 'dia';
-// ---------- PONTO (admin): abas Dia / Extras / Feriados / QR-Loja ----------
+// ---------- PONTO (admin): abas Dia / Extras / Escala Dom / Feriados / QR-Loja ----------
 async function viewPonto(app) {
   const t = todayISO();
   app.innerHTML = `
@@ -1794,6 +1820,7 @@ async function viewPonto(app) {
     <div class="mini-pills" id="pontoTabs">
       <button data-tab="dia" class="${pontoTab === 'dia' ? 'on' : ''}">Dia</button>
       <button data-tab="extras" class="${pontoTab === 'extras' ? 'on' : ''}">Extras</button>
+      <button data-tab="escala" class="${pontoTab === 'escala' ? 'on' : ''}">Escala Dom</button>
       <button data-tab="feriados" class="${pontoTab === 'feriados' ? 'on' : ''}">Feriados</button>
       <button data-tab="loja" class="${pontoTab === 'loja' ? 'on' : ''}">QR / Loja</button>
     </div>
@@ -1805,6 +1832,7 @@ async function viewPonto(app) {
     $$('#pontoTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
     if (tab === 'dia') return tabPontoDia(body, t);
     if (tab === 'extras') return tabPontoExtras(body, t);
+    if (tab === 'escala') return tabPontoEscala(body);
     if (tab === 'feriados') return tabPontoFeriados(body);
     return tabPontoLoja(body);
   };
@@ -2234,6 +2262,7 @@ function modalExtraDetail(month, row) {
     trabalhado: { label: 'Trabalhou', bg: '#dcfce7', fg: '#166534' },
     incompleto: { label: 'Incompleto', bg: '#fef3c7', fg: '#92400e' },
     falta: { label: 'Não trabalhou', bg: '#fee2e2', fg: '#991b1b' },
+    troca: { label: 'Troca', bg: '#e0f2fe', fg: '#075985' },
     folga: { label: 'Folga', bg: '#f3f4f6', fg: '#374151' },
     feriado: { label: 'Feriado', bg: '#ede9fe', fg: '#5b21b6' },
     futuro: { label: '—', bg: '#f3f4f6', fg: '#9ca3af' },
@@ -2247,8 +2276,9 @@ function modalExtraDetail(month, row) {
         return `${esc(d.in_hhmm || '—')} → ${esc(d.out_hhmm || '—')} • trab. ${esc(d.worked_label || '—')} • padrão ${esc(d.std_label || '—')}`;
       }
       if (d.status === 'feriado') return `Feriado${d.holiday_label ? ` • ${esc(d.holiday_label)}` : ''} • padrão ${esc(d.std_label || '—')}`;
-      if (d.status === 'folga') return `Domingo • folga • padrão ${esc(d.std_label || '—')}`;
+      if (d.status === 'folga') return `Folga • padrão ${esc(d.std_label || '—')}`;
       if (d.status === 'falta') return `Sem ponto • padrão ${esc(d.std_label || '—')}`;
+      if (d.status === 'troca') return `🔄 Troca com ${fmtDayBR(d.swap_with)} • sem desconto`;
       return '';
     })();
     const extra = (d.extra_min > 0 && !isFuture) ? `+${esc(d.extra_label)}` : '—';
@@ -2257,13 +2287,35 @@ function modalExtraDetail(month, row) {
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
           <div style="min-width:0;flex:1">
             <div style="font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDateBR(d.date))} • ${esc(weekdayShortBR(d.date))}</div>
-            <div style="margin-top:3px"><span class="chip" style="font-size:10px;padding:1px 8px;background:${m.bg};color:${m.fg}">${m.label}</span>${d.is_holiday && d.status !== 'feriado' ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(d.holiday_label || 'Feriado')}">🎉</span>` : ''}${d.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖</span>' : ''}${d.punch_store ? ` <span class="muted" style="font-size:11px">${esc(d.punch_store)}</span>` : ''}</div>
+            <div style="margin-top:3px"><span class="chip" style="font-size:10px;padding:1px 8px;background:${m.bg};color:${m.fg}">${m.label}</span>${d.is_holiday && d.status !== 'feriado' ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(d.holiday_label || 'Feriado')}">🎉</span>` : ''}${d.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente">🤖</span>' : ''}${d.swapped ? ` <span class="chip" style="font-size:10px;padding:1px 8px;background:#e0f2fe;color:#075985" title="Troca com ${fmtDayBR(d.swap_with)}${d.provisional ? ' (provisória)' : ''}">🔄</span>` : ''}${d.punch_store ? ` <span class="muted" style="font-size:11px">${esc(d.punch_store)}</span>` : ''}</div>
             ${left && !isFuture ? `<div class="muted" style="font-size:12px;margin-top:3px;overflow-wrap:anywhere">${left}</div>` : ''}
           </div>
           <b class="mono" style="font-size:13px;flex:none">${extra}</b>
         </div>
       </div>`;
   };
+  // agrupa por semana (seg-dom) p/ faixas de troca + Desfazer/Religar
+  const groups = [];
+  const seenWk = {};
+  for (const d of list) {
+    const wk = weekKeyJS(d.date);
+    if (!seenWk[wk]) { seenWk[wk] = { week: wk, items: [] }; groups.push(seenWk[wk]); }
+    seenWk[wk].items.push(d);
+  }
+  const weekBanner = (g) => {
+    const ps = (row.pairs || []).filter((p) => p.week === g.week);
+    const off = (row.swap_off || []).includes(g.week);
+    if (!ps.length && !off) return '';
+    let inner = '';
+    if (ps.length) {
+      inner = ps.map((p) => `🔄 Troca automática: <b>${fmtDayBR(p.a)} ↔ ${fmtDayBR(p.b)}</b>${p.provisional ? ' (provisória)' : ''}`).join('<br>');
+      inner += `<br><button class="btn" style="font-size:11px;padding:2px 8px;margin-top:4px" data-swapoff="${g.week}">Desfazer troca</button>`;
+    } else {
+      inner = `Troca automática desligada nesta semana. <button class="btn" style="font-size:11px;padding:2px 8px;margin-top:4px" data-swapon="${g.week}">Religar</button>`;
+    }
+    return `<div style="border:1px solid #bae6fd;background:#f0f9ff;border-radius:12px;padding:8px 11px;margin-bottom:8px;font-size:12px">${inner}</div>`;
+  };
+  const nTrocas = (row.summary && row.summary.trocas) || row.trocas || 0;
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal" style="max-height:85vh;overflow:hidden;display:flex;flex-direction:column;max-width:520px;width:100%">
     <div style="flex:none;min-width:0">
@@ -2274,14 +2326,25 @@ function modalExtraDetail(month, row) {
           <div class="muted" style="font-size:13px;text-align:center">${mm}</div>
         </div>
       </div>
-      <p class="muted" style="font-size:13px;margin:8px 0 0;text-align:center">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}</p>
+      <p class="muted" style="font-size:13px;margin:8px 0 0;text-align:center">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}${nTrocas ? ` • 🔄 ${nTrocas} troca(s)` : ''}</p>
     </div>
-    <div style="overflow-y:auto;margin-top:10px;padding-right:2px;min-height:0">${list.length ? list.map(dayRow).join('') : '<div class="card empty">Sem registros neste mês.</div>'}</div>
-    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h, feriado 5h. Extra = trabalhado − padrão.</p>
+    <div id="xList" style="overflow-y:auto;margin-top:10px;padding-right:2px;min-height:0">${groups.length ? groups.map((g) => weekBanner(g) + g.items.map(dayRow).join('')).join('') : '<div class="card empty">Sem registros neste mês.</div>'}</div>
+    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h (trabalhado), folga semanal 0h, feriado 5h. Extra = trabalhado − padrão. 🔄 = troca semanal automática 1–1 (sem desconto nem extra).</p>
     <button class="btn btn-ghost btn-big" id="cancel" style="flex:none">Fechar</button>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#xList').onclick = async (e) => {
+    const off = e.target.closest('[data-swapoff]');
+    const on = e.target.closest('[data-swapon]');
+    const b = off || on;
+    if (!b) return;
+    try {
+      await api('/api/ponto/swap-week', { method: 'POST', body: JSON.stringify({ seller_id: row.seller_id, week_start: off ? off.dataset.swapoff : on.dataset.swapon, mode: off ? 'off' : 'auto' }) });
+      toast(off ? 'Troca desfeita!' : 'Troca religada!');
+      openPontoUserPopup(row.seller_id, month);
+    } catch (err) { toast(err.message, 'err'); }
+  };
 }
 
 // baixa de horas extras: registra as horas pagas/compensadas no mês (HH:MM)
@@ -2416,7 +2479,7 @@ async function baixarAnaliticoXLSX(month, companyId, ctx) {
     const head = ['Competência', 'Nome', 'Função', 'Empresa', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Feriado', 'Auto'];
     const widths = [12, 26, 16, 22, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 18, 8];
     ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
-    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', troca: 'Troca', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
     for (const x of sortAZ(det.rows)) {
       const days = (x.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
       for (const d of days) {
@@ -2506,7 +2569,7 @@ function baixarDemonstrativoPDF(month, r, ctx) {
     });
     let yy = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(9);
-    const metodo = doc.splitTextToSize(pdfText('Metodologia: jornada padrao seg-sex 10h (08:00-18:00), sab 9h (08:00-17:00), dom 4h (08:00-12:00), feriado 5h (08:00-13:00), salvo carga especial (*). Saldo do dia = trabalhado (saida - entrada) - padrao, minuto a minuto, sem tolerancia: atraso ou saida antecipada gera saldo negativo e abate dos extras no total do mes. Ex.: segunda 08:10-18:00 = 9h50 - 10h = -0h 10min. Dia incompleto (sem entrada ou sem saida) nao soma e deve ser corrigido. * = saida lancada sozinha no teto do expediente (ponto esquecido). Documento simplificado para apuracao de horas (CNPJ sem validacao - nao substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).'), W - 28);
+    const metodo = doc.splitTextToSize(pdfText('Metodologia: jornada padrao seg-sex 10h (08:00-18:00), sab 9h (08:00-17:00), dom 4h (08:00-12:00), feriado 5h (08:00-13:00), salvo carga especial (*). Saldo do dia = trabalhado (saida - entrada) - padrao, minuto a minuto, sem tolerancia: atraso ou saida antecipada gera saldo negativo e abate dos extras no total do mes. Ex.: segunda 08:10-18:00 = 9h50 - 10h = -0h 10min. Dia incompleto (sem entrada ou sem saida) nao soma e deve ser corrigido. * = saida lancada sozinha no teto do expediente (ponto esquecido). Troca semanal automatica 1-para-1 (trabalhou descanso + faltou dia util na mesma semana): sem desconto nem extra. Documento simplificado para apuracao de horas (CNPJ sem validacao - nao substitui o espelho de ponto da Portaria MTP 671 para fins fiscais).'), W - 28);
     if (yy + metodo.length * 4.5 + 30 > 200) { doc.addPage('landscape'); yy = 15; }
     doc.text(metodo, 14, yy);
     yy += metodo.length * 4.5 + 14;
@@ -2536,7 +2599,7 @@ function gerarEspelhoDoc(row, month, ctx) {
     doc.text(pdfText(`${funcaoOf(row)} - ${company}${row.custom_schedule ? ' - * carga especial' : ''}${cnpjLine} - Emitido em ${new Date().toLocaleString('pt-BR')}`), 14, 20);
     doc.setTextColor(0); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Dias: ${row.days || 0} - Trabalhado: ${row.worked_label || '-'} - Extras: +${row.extra_label} - Atrasos: -${row.late_label || '0h 0min'} - Saldo: ${row.balance_label || row.extra_label}`), 14, 27);
-    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', troca: 'Troca', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
     const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
     doc.autoTable({
       head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao',
@@ -2562,7 +2625,7 @@ function gerarEspelhoDoc(row, month, ctx) {
     let yy = doc.lastAutoTable.finalY + 12;
     if (yy > 185) { doc.addPage('landscape'); yy = 15; }
     doc.setFontSize(9);
-    doc.text(pdfText('Metodologia: saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Documento simplificado (CNPJ sem validacao).'), 14, yy, { maxWidth: W - 28 });
+    doc.text(pdfText('Metodologia: saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Troca semanal automatica 1-para-1: sem desconto nem extra. Documento simplificado (CNPJ sem validacao).'), 14, yy, { maxWidth: W - 28 });
     yy += 14;
     doc.text(pdfText('Funcionario'), 30, yy);
     doc.text(pdfText('Responsavel'), W - 90, yy);
@@ -2699,6 +2762,42 @@ async function modalDocumentoPonto(month, r) {
   wireButtons();
 }
 
+// Escala de domingos: próximos 8 domingos, quem trabalha x quem folga
+// (Escala A = semanas ímpares, B = pares). Ajuda a montar e conferir a escala.
+async function tabPontoEscala(body) {
+  body.innerHTML = `<div class="card"><p class="muted">Carregando escala…</p></div>`;
+  try {
+    const { people } = await api('/api/ponto/escalas');
+    const list = people || [];
+    const sundays = [];
+    const dt = new Date();
+    dt.setHours(12, 0, 0, 0);
+    while (sundays.length < 8) {
+      dt.setDate(dt.getDate() + 1);
+      if (dt.getDay() !== 0) continue;
+      sundays.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`);
+    }
+    const cards = sundays.map((iso) => {
+      const odd = isoWeekJS(iso) % 2 === 1;
+      const work = list.filter((p) => sundayWorked(iso, p.sunday_scale || 'off'));
+      const off = list.filter((p) => !sundayWorked(iso, p.sunday_scale || 'off'));
+      return `<div class="sale-card" style="padding:10px 12px">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <span><b>${esc(fmtDateBR(iso))} • Dom</b> <span class="chip" style="font-size:10px;padding:1px 8px" title="Semana ISO ${isoWeekJS(iso)}">Sem. ${odd ? 'ímpar (A)' : 'par (B)'}</span></span>
+          <span class="mono" style="font-size:13px;font-weight:800">${work.length} trab. • ${off.length} folga</span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:4px;overflow-wrap:anywhere"><b>Trabalham:</b> ${work.length ? esc(work.map((p) => p.name).join(' • ')) : '—'}</div>
+        <div class="muted" style="font-size:12px;overflow-wrap:anywhere"><b>Folgam:</b> ${off.length ? esc(off.map((p) => p.name).join(' • ')) : '—'}</div>
+      </div>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="card">
+        <p class="muted" style="font-size:13px;margin-top:0">Escala A = domingos de semanas ímpares • B = pares. Configure por pessoa em Equipe → Editar.</p>
+        ${cards || '<div class="empty">Ninguém cadastrado.</div>'}
+      </div>`;
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
 async function tabPontoFeriados(body) {
   const readOnly = store.user?.role === 'manager';
   let stores = [];
@@ -2798,23 +2897,27 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   maskHHMM($('#mIn')); maskHHMM($('#mOut'));
   // horário comercial do dia: entrada 08:00 + carga padrão
-  // (seg–sex 10h, sáb 9h, dom 4h, feriado 5h ou carga especial da pessoa)
+  // (seg–sex 10h, sáb 9h, dom 4h, folga semanal 0h, feriado 5h ou carga especial da pessoa)
   $('#mAuto').onclick = async () => {
     const btn = $('#mAuto');
     const old = btn.textContent;
     btn.disabled = true; btn.textContent = '…';
     try {
-      let sched = null, defaults = null;
-      try { const r = await api(`/api/users/${sellerId}/schedule`); sched = r.schedule; defaults = r.defaults; } catch {}
+      let sched = null, defaults = null, dayoff = null, scale = 'off';
+      try { const r = await api(`/api/users/${sellerId}/schedule`); sched = r.schedule; defaults = r.defaults; dayoff = r.dayoff_dow; scale = r.sunday_scale || 'off'; } catch {}
       let isHol = false;
       try { const d = await api(`/api/ponto/dia?date=${date}`); isHol = !!d.is_holiday; } catch {}
       const def = defaults || { weekday: 600, saturday: 540, sunday: 240, holiday: 300 };
       const dow = new Date(date + 'T12:00:00').getDay();
-      const std = isHol ? (Number(sched?.holiday_min) || def.holiday)
-        : dow === 0 ? (Number(sched?.sunday_min) || def.sunday)
-        : dow === 6 ? (Number(sched?.saturday_min) || def.saturday)
-        : (Number(sched?.weekday_min) || def.weekday);
-      const out = `${String(Math.floor((8 * 60 + std) / 60)).padStart(2, '0')}:${String((8 * 60 + std) % 60).padStart(2, '0')}`;
+      let std;
+      if (isHol) std = Number(sched?.holiday_min) || def.holiday;
+      else if (dow === 0) std = Number(sched?.sunday_min) || def.sunday;
+      else if (dayoff != null && Number(dayoff) === dow) std = 0;
+      else if (dow === 6) std = Number(sched?.saturday_min) || def.saturday;
+      else std = Number(sched?.weekday_min) || def.weekday;
+      // folga semanal (padrão 0h): sugere o dia normal, p/ lançar troca/venda de folga
+      const suggestStd = std === 0 ? (Number(sched?.weekday_min) || def.weekday) : std;
+      const out = `${String(Math.floor((8 * 60 + suggestStd) / 60)).padStart(2, '0')}:${String((8 * 60 + suggestStd) % 60).padStart(2, '0')}`;
       $('#mIn').value = '08:00';
       $('#mOut').value = out;
       toast(`Horário comercial aplicado: 08:00 → ${out}.`);
@@ -3124,8 +3227,16 @@ async function viewTeam(app) {
     try {
       const { users } = await api('/api/users');
     const people = users.filter((u) => u.role !== 'admin');
+    const scaleTag = (s) => {
+      const parts = [];
+      if (s.dayoff_dow != null && s.dayoff_dow !== '') parts.push(`Folga ${DOWS_PT_SHORT[Number(s.dayoff_dow)] || ''}`);
+      const sc = s.sunday_scale || 'off';
+      if (sc === 'A' || sc === 'B') parts.push(`Dom ${sc}`);
+      else if (sc === 'all') parts.push('Dom todos');
+      return parts.length ? `<br><span class="chip" style="font-size:10px;padding:1px 8px" title="Folga semanal e escala de domingos">${esc(parts.join(' • '))}</span>` : '';
+    };
     const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
-      <td>${storeTag(s.store_name)}</td>
+      <td>${storeTag(s.store_name)}${scaleTag(s)}</td>
       <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
       <td><button class="btn" data-edit="${s.id}">Editar</button></td></tr>`;
     const teamHead = '<table><thead><tr><th>Nome</th><th>Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
@@ -3317,6 +3428,18 @@ async function modalUser(u, reload) {
         <label>Função p/ documento (ex: Vendedor, Mecânico)</label>
         <input id="uJob" maxlength="60" placeholder="Vazio = Vendedor / Funcionário" value="${esc(u?.job_title || '')}">
       </div>
+      <div class="row" style="flex-wrap:nowrap">
+        <div style="flex:1"><label>Folga semanal</label><select id="uDayoff">
+          ${[['', 'Nenhuma'], [1, 'Segunda'], [2, 'Terça'], [3, 'Quarta'], [4, 'Quinta'], [5, 'Sexta'], [6, 'Sábado'], [0, 'Domingo']].map(([v, l]) => `<option value="${v}" ${String(u?.dayoff_dow ?? '') === String(v) ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></div>
+        <div style="flex:1"><label>Domingos</label><select id="uScale">
+          <option value="off" ${(u?.sunday_scale || 'off') === 'off' ? 'selected' : ''}>Folga sempre</option>
+          <option value="A" ${u?.sunday_scale === 'A' ? 'selected' : ''}>Escala A (ímpares)</option>
+          <option value="B" ${u?.sunday_scale === 'B' ? 'selected' : ''}>Escala B (pares)</option>
+          <option value="all" ${u?.sunday_scale === 'all' ? 'selected' : ''}>Todos</option>
+        </select></div>
+      </div>
+      <p class="muted" style="font-size:12px" id="scaleHint"></p>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
       <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
@@ -3346,6 +3469,26 @@ async function modalUser(u, reload) {
     $('#jobFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
     $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
   };
+  // prévia da escala de domingos (ajuda a escolher A/B)
+  const paintScaleHint = () => {
+    const el = $('#scaleHint');
+    if (!el) return;
+    const sc = $('#uScale').value;
+    if (sc === 'off') { el.textContent = 'Domingos: sempre folga.'; return; }
+    if (sc === 'all') { el.textContent = 'Domingos: trabalha todos (padrão 4h).'; return; }
+    const out = [];
+    const dt = new Date();
+    dt.setHours(12, 0, 0, 0);
+    while (out.length < 4) {
+      dt.setDate(dt.getDate() + 1);
+      if (dt.getDay() !== 0) continue;
+      const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      if (sundayWorked(iso, sc)) out.push(`${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}`);
+    }
+    el.textContent = `Próximos domingos (${sc === 'A' ? 'semanas ímpares' : 'pares'}): ${out.join(', ')}.`;
+  };
+  $('#uScale').onchange = paintScaleHint;
+  paintScaleHint();
   // helpers carga horária (HH:MM <-> minutos)
   const minToHHMM = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
   const hhmmToMin = (s) => {
@@ -3378,6 +3521,8 @@ async function modalUser(u, reload) {
         store_id: Number($('#uStore').value),
         company_id: $('#uCompany').value === '' ? null : Number($('#uCompany').value),
         ...((role === 'seller' || role === 'staff') ? { job_title: $('#uJob').value.trim() } : {}),
+        dayoff_dow: $('#uDayoff').value === '' ? null : Number($('#uDayoff').value),
+        sunday_scale: $('#uScale').value,
         ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
       };
       let uid = u?.id;
