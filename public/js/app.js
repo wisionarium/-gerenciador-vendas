@@ -1866,7 +1866,7 @@ function modalStore(s, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">${s ? `Renomear — ${esc(s.name)}` : 'Nova loja'}</h3>
-    <form id="fStore">
+    <form id="fStoreForm">
       <label>Nome da loja *</label><input id="stName" maxlength="60" required placeholder="Ex: Filial Centro" value="${esc(s?.name || '')}">
       ${s ? '' : '<p class="muted" style="font-size:12px">QR e localização são configurados em seguida, no cartão da loja.</p>'}
       <div style="height:12px"></div>
@@ -1876,7 +1876,7 @@ function modalStore(s, reload) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  $('#fStore').onsubmit = async (e) => {
+  $('#fStoreForm').onsubmit = async (e) => {
     e.preventDefault();
     try {
       const body = JSON.stringify({ name: $('#stName').value });
@@ -3371,7 +3371,7 @@ function modalCompany(c, reload) {
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">${c ? 'Editar empresa' : 'Nova empresa'}</h3>
-    <form id="fCompany">
+    <form id="fCompanyForm">
       <label>Razão social *</label><input id="cName" maxlength="80" required placeholder="Ex: Sua Empresa LTDA" value="${esc(c?.name || '')}">
       <label>CNPJ (sem validação)</label><input id="cCnpj" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90" value="${esc(c?.cnpj || '')}">
       <div style="height:12px"></div>
@@ -3381,7 +3381,7 @@ function modalCompany(c, reload) {
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
-  $('#fCompany').onsubmit = async (e) => {
+  $('#fCompanyForm').onsubmit = async (e) => {
     e.preventDefault();
     try {
       const body = JSON.stringify({ name: $('#cName').value, cnpj: $('#cCnpj').value });
