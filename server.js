@@ -132,7 +132,7 @@ const toPublicUser = (u) => ({
   id: u.id, name: u.name, email: u.email, role: u.role, sector: u.sector || 'online',
   store_id: u.store_id || null, store_name: u.store_name || (u.role === 'admin' ? 'Todas' : 'Sede'),
   active: !!u.active, created_at: u.created_at, avatar_url: u.avatar_url || null,
-  job_title: u.job_title || null,
+  job_title: u.job_title || null, company_id: u.company_id || null,
 });
 const validSector = (s) => ['online', 'presencial'].includes(s);
 const CHANNELS = ['WhatsApp', 'CRM', 'Presencial'];
@@ -479,6 +479,102 @@ app.put('/api/stores/:id', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ store: await getStore(store.id) });
 }));
 
+// ---------- EMPRESAS (white-label: cadastro manual, começa vazio) ----------
+// Toda pessoa vincula-se a uma empresa; documentos saem por empresa.
+app.get('/api/companies', requireAuth, requireAdmin, ah(async (req, res) => {
+  const rows = await db.all('SELECT * FROM companies ORDER BY name');
+  const out = await Promise.all(rows.map(async (c) => {
+    let people = 0;
+    try { people = Number((await db.get('SELECT COUNT(*) AS c FROM users WHERE company_id=?', c.id)).c) || 0; } catch {}
+    return { ...c, people };
+  }));
+  res.json({ companies: out });
+}));
+
+app.post('/api/companies', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { name, cnpj } = req.body || {};
+  const clean = String(name ?? '').trim().slice(0, 80);
+  if (!clean) return res.status(400).json({ error: 'Razão social é obrigatória.' });
+  const cleanCnpj = String(cnpj ?? '').trim().slice(0, 20);
+  const r = await db.run('INSERT INTO companies (name, cnpj) VALUES (?,?)', clean, cleanCnpj);
+  res.status(201).json({ company: await db.get('SELECT * FROM companies WHERE id=?', r.lastInsertRowid) });
+}));
+
+app.put('/api/companies/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const co = await db.get('SELECT * FROM companies WHERE id=?', req.params.id);
+  if (!co) return res.status(404).json({ error: 'Empresa não encontrada.' });
+  const { name, cnpj } = req.body || {};
+  const clean = String(name ?? '').trim().slice(0, 80);
+  if (!clean) return res.status(400).json({ error: 'Razão social é obrigatória.' });
+  await db.run('UPDATE companies SET name=?, cnpj=? WHERE id=?', clean, String(cnpj ?? '').trim().slice(0, 20), co.id);
+  res.json({ company: await db.get('SELECT * FROM companies WHERE id=?', co.id) });
+}));
+
+app.delete('/api/companies/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const co = await db.get('SELECT * FROM companies WHERE id=?', req.params.id);
+  if (!co) return res.status(404).json({ error: 'Empresa não encontrada.' });
+  let people = 0;
+  try { people = Number((await db.get('SELECT COUNT(*) AS c FROM users WHERE company_id=?', co.id)).c) || 0; } catch {}
+  if (people > 0) return res.status(409).json({ error: `Esta empresa tem ${people} pessoa(s) vinculada(s). Transfira antes de excluir.`, people });
+  await db.run('DELETE FROM companies WHERE id=?', co.id);
+  res.json({ ok: true, removed: { id: co.id, name: co.name } });
+}));
+
+// ---------- LOJAS: criar e excluir (admin) ----------
+function storeQrCode(short, n) {
+  const base = (String(short || 'LOJA').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) || 'LOJA');
+  return n <= 1 ? `PONTO-${base}-01` : `PONTO-${base}-${String(n).padStart(2, '0')}`;
+}
+
+app.post('/api/stores', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { name } = req.body || {};
+  const clean = String(name ?? '').trim().slice(0, 60);
+  if (!clean) return res.status(400).json({ error: 'Nome da loja é obrigatório.' });
+  const exists = await db.get('SELECT id FROM stores WHERE lower(name)=lower(?)', clean).catch(() => null);
+  if (exists) return res.status(409).json({ error: 'Já existe uma loja com esse nome.' });
+  let qr = null;
+  for (let n = 1; n <= 99; n++) {
+    const cand = storeQrCode(clean, n);
+    const taken = await db.get('SELECT id FROM stores WHERE qr_code=?', cand).catch(() => null);
+    if (!taken) { qr = cand; break; }
+  }
+  if (!qr) return res.status(500).json({ error: 'Não foi possível gerar o QR da loja.' });
+  const short = clean.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) || 'LOJA';
+  const r = await db.run('INSERT INTO stores (name, short, qr_code, radius_m, is_main) VALUES (?,?,?,?,0)',
+    clean, short, qr, 150);
+  res.status(201).json({ store: await getStore(r.lastInsertRowid) });
+}));
+
+app.delete('/api/stores/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const st = await getStore(req.params.id);
+  if (!st) return res.status(404).json({ error: 'Loja não encontrada.' });
+  const totalStores = Number((await db.get('SELECT COUNT(*) AS c FROM stores').catch(() => ({ c: 1 }))).c) || 0;
+  if (totalStores <= 1) return res.status(400).json({ error: 'Não é possível excluir a última loja.' });
+  const count = async (sql, ...p) => {
+    try { return Number((await db.get(sql, ...p)).c) || 0; } catch { return 0; }
+  };
+  const usage = {
+    pessoas: await count('SELECT COUNT(*) AS c FROM users WHERE store_id=?', st.id),
+    pontos: await count('SELECT COUNT(*) AS c FROM punches WHERE store_id=?', st.id),
+    vendas: await count('SELECT COUNT(*) AS c FROM sales WHERE store_id=?', st.id),
+  };
+  const total = usage.pessoas + usage.pontos + usage.vendas;
+  if (total > 0) {
+    const parts = [];
+    if (usage.pessoas) parts.push(`${usage.pessoas} pessoa(s)`);
+    if (usage.pontos) parts.push(`${usage.pontos} ponto(s)`);
+    if (usage.vendas) parts.push(`${usage.vendas} venda(s)`);
+    return res.status(409).json({ error: `Esta loja tem histórico (${parts.join(', ')}). Não é possível excluir.`, usage });
+  }
+  await db.run('DELETE FROM stores WHERE id=?', st.id);
+  // se era a matriz, promove a mais antiga
+  try {
+    const nMain = Number((await db.get('SELECT COUNT(*) AS c FROM stores WHERE is_main=1')).c) || 0;
+    if (nMain === 0) await db.run('UPDATE stores SET is_main=1 WHERE id=(SELECT MIN(id) FROM stores)');
+  } catch {}
+  res.json({ ok: true, removed: { id: st.id, name: st.name } });
+}));
+
 app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   const rows = await db.all(
     'SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id ORDER BY u.role DESC, u.name'
@@ -487,11 +583,17 @@ app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector, store_id, job_title } = req.body || {};
+  const { name, email, password, role, sector, store_id, job_title, company_id } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
   if (!['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
   const jobTitle = String(job_title ?? '').trim().slice(0, 60) || null;
+  let companyId = null;
+  if (company_id != null && company_id !== '') {
+    const co = await db.get('SELECT id FROM companies WHERE id=?', Number(company_id));
+    if (!co) return res.status(400).json({ error: 'Empresa inválida.' });
+    companyId = co.id;
+  }
   let storeId = null;
   if (role !== 'admin') {
     if (store_id != null && store_id !== '') {
@@ -506,8 +608,8 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   }
   if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
   try {
-    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, job_title, active) VALUES (?,?,?,?,?,?,?,1)',
-      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId, jobTitle);
+    const r = await db.run('INSERT INTO users (name, email, password_hash, role, sector, store_id, job_title, company_id, active) VALUES (?,?,?,?,?,?,?,?,1)',
+      name.trim(), email.trim().toLowerCase(), bcrypt.hashSync(String(password), 10), role, validSector(sector) ? sector : 'online', storeId, jobTitle, companyId);
     const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', r.lastInsertRowid);
     res.status(201).json({ user: toPublicUser(u) });
   } catch (e) {
@@ -517,13 +619,22 @@ app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 }));
 
 app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { name, email, password, role, sector, store_id, job_title } = req.body || {};
+  const { name, email, password, role, sector, store_id, job_title, company_id } = req.body || {};
   const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
   if (role && !['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
   const jobTitle = job_title === undefined ? target.job_title : (String(job_title ?? '').trim().slice(0, 60) || null);
+  let companyId = target.company_id || null;
+  if (company_id !== undefined) {
+    if (company_id === null || company_id === '') companyId = null;
+    else {
+      const co = await db.get('SELECT id FROM companies WHERE id=?', Number(company_id));
+      if (!co) return res.status(400).json({ error: 'Empresa inválida.' });
+      companyId = co.id;
+    }
+  }
   const newRole = role || target.role;
   let storeId = target.store_id;
   if (store_id !== undefined) {
@@ -541,8 +652,8 @@ app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
     storeId = null;
   }
   try {
-    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=?, job_title=? WHERE id=?',
-      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, jobTitle, target.id);
+    await db.run('UPDATE users SET name=?, email=?, role=?, sector=?, store_id=?, job_title=?, company_id=? WHERE id=?',
+      name.trim(), email.trim().toLowerCase(), newRole, validSector(sector) ? sector : (target.sector || 'online'), storeId, jobTitle, companyId, target.id);
     if (password) {
       if (String(password).length < 4) return res.status(400).json({ error: 'Senha deve ter ao menos 4 caracteres.' });
       await db.run('UPDATE users SET password_hash=? WHERE id=?', bcrypt.hashSync(String(password), 10), target.id);
@@ -1055,7 +1166,7 @@ app.post('/api/sales', requireAuth, requireManager, ah(async (req, res) => {
   let credit, perSellerCents;
   try {
     credit = db.creditForParticipants(pids.length);
-    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents, store.name);
+    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents, store);
   }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
@@ -1116,7 +1227,7 @@ app.put('/api/sales/:id', requireAuth, requireManager, ah(async (req, res) => {
   let credit, perSellerCents;
   try {
     credit = db.creditForParticipants(pids.length);
-    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents, store.name);
+    perSellerCents = db.commissionCents(sectorsOf(sellers, pids), pids.length, bonus.bonusCents, store);
   }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
@@ -1293,7 +1404,7 @@ app.get('/api/maintenance/verify-commissions', requireAuth, requireAdmin, ah(asy
     try {
       expected = db.commissionCents(
         parts.map((p) => p.sector || 'online'), parts.length,
-        sale.is_bonus ? sale.bonus_cents : null, storeName
+        sale.is_bonus ? sale.bonus_cents : null, store
       );
     } catch { continue; }
     const actual = await db.all('SELECT * FROM commissions WHERE sale_id=?', sale.id);
@@ -1888,10 +1999,23 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   const scope = scopedStoreId(req, req.query.store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const kindFilter = kind === 'staff' ? ` AND u.role='staff'` : kind === 'seller' ? ` AND u.role='seller'` : ` AND u.role IN ('seller','staff')`;
+  const selCo = `u.*, s.name AS store_name, c.name AS company_name, c.cnpj AS company_cnpj`;
+  const joinCo = `FROM users u LEFT JOIN stores s ON s.id=u.store_id LEFT JOIN companies c ON c.id=u.company_id`;
   let sellers = await db.all(
-    `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.active=1${kindFilter}${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
+    `SELECT ${selCo} ${joinCo} WHERE u.active=1${kindFilter}${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
   );
+  // documentos p/ contador: ?company_id= filtra pessoas da empresa (só admin;
+  // gerente mantém a regra da própria loja). 'none' = sem empresa vinculada.
+  // Com empresa, contam-se TODOS os pontos da pessoa (sem filtro de loja nem visitantes).
+  let companyScope = null;
+  if (req.user.role === 'admin' && req.query.company_id != null && req.query.company_id !== '') {
+    companyScope = req.query.company_id;
+    sellers = await db.all(
+      `SELECT ${selCo} ${joinCo} WHERE u.active=1${kindFilter} AND ${companyScope === 'none' ? 'u.company_id IS NULL' : 'u.company_id=?'} ORDER BY u.name`,
+      ...(companyScope === 'none' ? [] : [Number(companyScope)])
+    );
+  }
   // documentos p/ contador usam ?strict=1: só pessoal da casa (sem visitantes
   // de outras lojas), p/ não misturar filiais. O painel continua com visitantes.
   const strictScope = req.query.strict === '1' || req.query.strict === 'true';
@@ -1934,10 +2058,12 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       || null;
   };
   const rows = await Promise.all(sellers.map(async (s) => {
-    // extras contam onde bateu o ponto (filtro por loja quando escopado)
+    // com empresa: todos os pontos da pessoa (sem filtro de loja).
+    // sem empresa (painel): extras contam onde bateu o ponto (filtro por loja quando escopado)
+    const useStoreFilter = scope.storeId != null && !companyScope;
     const ps = await db.all(
-      `SELECT * FROM punches WHERE seller_id=? AND date LIKE ?${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY date`,
-      s.id, `${month}%`, ...(scope.storeId != null ? [scope.storeId] : [])
+      `SELECT * FROM punches WHERE seller_id=? AND date LIKE ?${useStoreFilter ? ' AND store_id=?' : ''} ORDER BY date`,
+      s.id, `${month}%`, ...(useStoreFilter ? [scope.storeId] : [])
     );
     const sched = schedsAll[s.id] || null;
     let extra = 0, late = 0, worked = 0, days = 0, paid = 0;
@@ -2043,6 +2169,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     return {
       seller_id: s.id, name: s.name, role: s.role, sector: s.sector || 'online', store_name: s.store_name || 'Sede', avatar_url: s.avatar_url || null,
       custom_schedule: !!sched, pix_key: s.pix_key || null, job_title: s.job_title || null,
+      company_id: s.company_id || null, company_name: s.company_name || null, company_cnpj: s.company_cnpj || null,
       days, worked_min: worked, worked_label: fmtDur(worked),
       extra_min: extra, extra_label: fmtDur(extra),
       late_min: late, late_label: fmtDur(late),

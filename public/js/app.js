@@ -55,15 +55,20 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const sectorLabel = (s) => (s === 'presencial' ? 'Presencial' : 'Online');
 const sectorTag = (s) => `<span class="chip ${(s || 'online') === 'presencial' ? 'crm' : 'wa'}" style="font-size:10px;padding:1px 8px">${sectorLabel(s || 'online')}</span>`;
 // prévia da comissão (espelha a regra do backend): base por loja+setor ou bônus; metade se dividida
-function previewCommission(sellers, pids, bonusCents, storeName) {
+// storeRef: boolean is_main | objeto loja {is_main} | nome (legado: 'Sede'=matriz)
+function previewCommission(sellers, pids, bonusCents, storeRef) {
   if (!pids.length) return null;
   const sectors = pids.map((id) => {
     const s = (sellers || []).find((x) => Number(x.id) === Number(id));
     return (s && s.sector) || 'online';
   });
+  let isMain = true;
+  if (typeof storeRef === 'boolean') isMain = storeRef;
+  else if (storeRef && typeof storeRef === 'object') isMain = !!storeRef.is_main;
+  else if (typeof storeRef === 'string') isMain = !storeRef || storeRef === 'Sede';
   let base;
   if (bonusCents != null) base = bonusCents;
-  else if (storeName && storeName !== 'Sede') base = 2500;
+  else if (!isMain) base = 2500;
   else base = sectors.every((s) => s === 'presencial') ? 3500 : 2500;
   const each = pids.length === 1 ? base : Math.round(base / 2);
   return { base, each, count: pids.length, isBonus: bonusCents != null };
@@ -1810,16 +1815,50 @@ async function viewPonto(app) {
   await showTab(pontoTab);
 }
 
+// Nova/renomear loja (admin). QR é gerado sozinho; localização ajusta depois no cartão.
+function modalStore(s, reload) {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">${s ? `Renomear — ${esc(s.name)}` : 'Nova loja'}</h3>
+    <form id="fStore">
+      <label>Nome da loja *</label><input id="stName" maxlength="60" required placeholder="Ex: Filial Centro" value="${esc(s?.name || '')}">
+      ${s ? '' : '<p class="muted" style="font-size:12px">QR e localização são configurados em seguida, no cartão da loja.</p>'}
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Salvar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fStore').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const body = JSON.stringify({ name: $('#stName').value });
+      if (s) await api(`/api/stores/${s.id}`, { method: 'PUT', body });
+      else await api('/api/stores', { method: 'POST', body });
+      closeModal(); toast('Loja salva!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
 async function tabPontoLoja(body) {
   body.innerHTML = `<div id="qrBox"><p class="muted">Carregando lojas…</p></div>`;
+  const isAdmin = store.user?.role === 'admin';
   try {
     const { stores } = await api('/api/stores/qr');
-    if (!stores.length) { $('#qrBox').innerHTML = '<div class="card empty">Nenhuma loja cadastrada.</div>'; return; }
-    $('#qrBox').innerHTML = stores.map((s) => `
+    if (!stores.length) {
+      $('#qrBox').innerHTML = `${isAdmin ? `<div class="card" style="margin-bottom:12px"><button class="btn btn-primary btn-big" id="stAdd" style="width:100%">+ Nova loja</button></div>` : ''}<div class="card empty">Nenhuma loja cadastrada.</div>`;
+      const stAdd0 = $('#stAdd');
+      if (stAdd0) stAdd0.onclick = () => modalStore(null, () => tabPontoLoja(body));
+      return;
+    }
+    $('#qrBox').innerHTML = `
+      ${isAdmin ? `<div class="card" style="margin-bottom:12px"><button class="btn btn-primary btn-big" id="stAdd" style="width:100%">+ Nova loja</button></div>` : ''}
+      ${stores.map((s) => `
       <div class="card" style="margin-bottom:12px">
         <div class="row" style="align-items:center;flex-wrap:nowrap">
           <img src="${s.qrImage}" alt="QR ${esc(s.name)}" style="width:96px;height:96px;border-radius:12px">
-          <div style="flex:1"><b>${esc(s.name)}</b>
+          <div style="flex:1"><b>${esc(s.name)}</b>${s.is_main ? ' <span class="chip lime" style="font-size:10px">Matriz</span>' : ''}
             <div class="mono" style="font-weight:800;letter-spacing:.06em">${esc(s.qr_code)}</div>
             <span class="muted" style="font-size:12px">${s.lat != null && s.lng != null ? `📍 Local definido ✓ • raio ${s.radius_m}m` : '📍 Local ainda não definido'}</span>
           </div>
@@ -1828,10 +1867,13 @@ async function tabPontoLoja(body) {
         <div class="row" style="margin-top:10px">
           <button class="btn" data-printqr="${s.id}">🖨️ Imprimir QR</button>
           <button class="btn btn-ghost" data-geostore="${s.id}">📍 Ajustar localização</button>
+          ${isAdmin ? `<button class="btn btn-ghost" data-rename="${s.id}">Renomear</button>
+          <button class="btn btn-ghost" data-storedel="${s.id}" title="Excluir loja">🗑️</button>` : ''}
         </div>
         <div id="geo-${s.id}" style="margin-top:8px"></div>
-        ${s.company_name ? `<div class="muted" style="font-size:12px;margin-top:6px">🏢 ${esc(s.company_name)}${s.cnpj ? ` • CNPJ ${esc(s.cnpj)}` : ''} <span style="font-size:11px">(edita em Equipe → Empresas)</span></div>` : ''}
-      </div>`).join('');
+      </div>`).join('')}`;
+    const stAdd = $('#stAdd');
+    if (stAdd) stAdd.onclick = () => modalStore(null, () => tabPontoLoja(body));
     const byId = Object.fromEntries(stores.map((s) => [s.id, s]));
     $('#qrBox').onclick = async (e) => {
       const pr = e.target.closest('[data-printqr]');
@@ -1840,6 +1882,17 @@ async function tabPontoLoja(body) {
         const w = window.open('', '_blank');
         w.document.write(`<html><head><title>QR Ponto — ${esc(s.name)}</title></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h1>${esc(s.name)} — Ponto</h1><img src="${s.qrImage}" style="width:320px;height:320px"><h2 style="letter-spacing:.1em">${esc(s.qr_code)}</h2><p>Escaneie ao chegar e ao sair. A localização é verificada (raio ${s.radius_m}m).</p><script>onload=()=>{print();}<\/script></body></html>`);
         w.document.close();
+        return;
+      }
+      const rn = e.target.closest('[data-rename]');
+      if (rn) { modalStore(byId[rn.dataset.rename], () => tabPontoLoja(body)); return; }
+      const sd = e.target.closest('[data-storedel]');
+      if (sd) {
+        const s = byId[sd.dataset.storedel];
+        if (!s) return;
+        if (!confirm(`Excluir a loja ${s.name}?\n\nSó é possível sem gente, pontos nem vendas vinculados.`)) return;
+        try { await api(`/api/stores/${s.id}`, { method: 'DELETE' }); toast('Loja excluída!'); tabPontoLoja(body); }
+        catch (err) { toast(err.message, 'err'); }
         return;
       }
       const gs = e.target.closest('[data-geostore]');
@@ -2320,23 +2373,21 @@ function saveBlob(blob, filename) {
 }
 
 // Excel resumo (1 linha por pessoa) — planilha formatada p/ Excel/Sheets
-// ctx: { storeMap } — nomes de empresa por filial
+// ctx: { scopeFile } — sufixo do nome do arquivo
 async function baixarResumoXLSX(month, r, ctx) {
   try {
     if (!window.ExcelJS) return toast('Gerador de Excel ainda carregando. Tente de novo.', 'err');
     toast('Gerando Excel…');
     ctx = ctx || {};
-    const storeMap = ctx.storeMap || {};
-    const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || ''; };
     const wb = new window.ExcelJS.Workbook();
     wb.creator = 'SellDay';
     const ws = wb.addWorksheet(`Resumo ${month}`);
-    const head = ['Competência', 'Nome', 'Função', 'Loja', 'Dias', 'Extras (min)', 'Extras', 'Atrasos (min)', 'Atrasos', 'Saldo (min)', 'Saldo', 'Pago (min)', 'Pago', 'A pagar (min)', 'A pagar', 'PIX'];
+    const head = ['Competência', 'Nome', 'Função', 'Empresa', 'Dias', 'Extras (min)', 'Extras', 'Atrasos (min)', 'Atrasos', 'Saldo (min)', 'Saldo', 'Pago (min)', 'Pago', 'A pagar (min)', 'A pagar', 'PIX'];
     const widths = [12, 26, 16, 22, 8, 12, 12, 12, 12, 12, 12, 11, 12, 12, 12, 28];
     ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
     for (const x of sortAZ(r.rows)) {
       ws.addRow({
-        c0: month, c1: x.name, c2: funcaoOf(x), c3: companyOf(x.store_name),
+        c0: month, c1: x.name, c2: funcaoOf(x), c3: x.company_name || 'Sem empresa',
         c4: x.days || 0, c5: x.extra_min || 0, c6: x.extra_label || '',
         c7: Math.abs(x.late_min || 0), c8: x.late_label || '',
         c9: (x.balance_min ?? 0), c10: x.balance_label || '',
@@ -2352,26 +2403,25 @@ async function baixarResumoXLSX(month, r, ctx) {
 }
 
 // Excel analítico dia a dia (1 linha por pessoa/dia) — o que o contador lança na folha
-async function baixarAnaliticoXLSX(month, storeId, ctx) {
+// companyId: '' = todas, 'none' = sem empresa, id = uma empresa (só admin)
+async function baixarAnaliticoXLSX(month, companyId, ctx) {
   try {
     if (!window.ExcelJS) return toast('Gerador de Excel ainda carregando. Tente de novo.', 'err');
     toast('Gerando Excel dia a dia…');
     ctx = ctx || {};
-    const storeMap = ctx.storeMap || {};
-    const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || ''; };
-    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1&strict=1`);
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''}&detail=1`);
     const wb = new window.ExcelJS.Workbook();
     wb.creator = 'SellDay';
     const ws = wb.addWorksheet(`Dia a dia ${month}`);
-    const head = ['Competência', 'Nome', 'Função', 'Loja', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Loja do ponto', 'Feriado', 'Auto'];
-    const widths = [12, 26, 16, 22, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 20, 18, 8];
+    const head = ['Competência', 'Nome', 'Função', 'Empresa', 'Data', 'Dia', 'Entrada', 'Saída', 'Trabalhado (min)', 'Trabalhado', 'Padrão (min)', 'Padrão', 'Extra (min)', 'Extra', 'Atraso (min)', 'Atraso', 'Saldo (min)', 'Saldo', 'Status', 'Feriado', 'Auto'];
+    const widths = [12, 26, 16, 22, 12, 7, 9, 9, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 18, 8];
     ws.columns = head.map((h, i) => ({ header: h, key: 'c' + i, width: widths[i] }));
     const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
     for (const x of sortAZ(det.rows)) {
       const days = (x.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
       for (const d of days) {
         ws.addRow({
-          c0: month, c1: x.name, c2: funcaoOf(x), c3: companyOf(x.store_name),
+          c0: month, c1: x.name, c2: funcaoOf(x), c3: x.company_name || 'Sem empresa',
           c4: d.date ? fmtDateBR(d.date) : '', c5: weekdayShortBR(d.date || ''),
           c6: d.in_hhmm || '', c7: d.out_hhmm || '',
           c8: d.worked_min ?? null, c9: d.worked_label || '',
@@ -2380,7 +2430,7 @@ async function baixarAnaliticoXLSX(month, storeId, ctx) {
           c14: Math.abs(d.late_min || 0), c15: d.late_label || '',
           c16: d.balance_min ?? null, c17: d.balance_label || '',
           c18: statusLabel[d.status] || d.status || '',
-          c19: companyOf(d.punch_store), c20: d.holiday_label || '', c21: d.auto_closed ? 'sim' : 'não',
+          c19: d.holiday_label || '', c20: d.auto_closed ? 'sim' : 'não',
         });
       }
     }
@@ -2407,14 +2457,12 @@ function pdfFileName(s) {
 }
 
 // Demonstrativo mensal em PDF (arquivo p/ baixar e enviar ao contador)
-// ctx: { storeMap, scopeLabel } — nomes de empresa/CNPJ por filial
+// ctx: { scopeLabel, scopeFile } — empresa do cabeçalho e do nome do arquivo
 function baixarDemonstrativoPDF(month, r, ctx) {
   try {
     if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
     ctx = ctx || {};
-    const storeMap = ctx.storeMap || {};
-    const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || '-'; };
-    const scopeLabel = ctx.scopeLabel || 'Todas as lojas';
+    const scopeLabel = ctx.scopeLabel || 'Todas as empresas';
     const [y, m] = month.split('-');
     const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const W = 297;
@@ -2430,7 +2478,7 @@ function baixarDemonstrativoPDF(month, r, ctx) {
     const tB = r.total_balance_label || tE;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Total extras: +${tE}   -   Total atrasos: -${tL}   -   Saldo do mes: ${tB}`), 14, 33);
-    const head = [['#', 'Nome', 'Função', 'Loja', 'Dias',
+    const head = [['#', 'Nome', 'Função', 'Empresa', 'Dias',
       { content: 'Extras (+)', styles: { halign: 'right' } },
       { content: 'Atrasos (-)', styles: { halign: 'right' } },
       { content: 'Saldo', styles: { halign: 'right' } }]];
@@ -2438,7 +2486,7 @@ function baixarDemonstrativoPDF(month, r, ctx) {
       String(i + 1),
       pdfText(x.name + (x.custom_schedule ? ' *' : '')),
       pdfText(funcaoOf(x)),
-      pdfText(companyOf(x.store_name)),
+      pdfText(x.company_name || 'Sem empresa'),
       String(x.days || 0),
       '+' + pdfText(x.extra_label),
       '-' + pdfText(x.late_label || '0h 0min'),
@@ -2477,10 +2525,8 @@ function gerarEspelhoDoc(row, month, ctx) {
   if (!window.jspdf) throw new Error('Gerador de PDF ainda carregando. Tente de novo.');
   if (!row) throw new Error('Funcionario nao encontrado.');
   ctx = ctx || {};
-  const storeMap = ctx.storeMap || {};
-  const st = storeMap[row.store_name] || {};
-  const company = st.company_name || row.store_name || '';
-  const cnpjLine = st.cnpj ? ` - CNPJ ${st.cnpj}` : '';
+  const company = row.company_name || 'Sem empresa';
+  const cnpjLine = row.company_cnpj ? ` - CNPJ ${row.company_cnpj}` : '';
   const [y, m] = month.split('-');
     const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const W = 297;
@@ -2494,14 +2540,13 @@ function gerarEspelhoDoc(row, month, ctx) {
     const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
     doc.autoTable({
       head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao',
-        { content: 'Saldo', styles: { halign: 'right' } }, 'Status', 'Loja']],
+        { content: 'Saldo', styles: { halign: 'right' } }, 'Status']],
       body: days.map((d) => [
         pdfText(fmtDateBR(d.date)), pdfText(weekdayShortBR(d.date)),
         pdfText(d.in_hhmm || '-'), pdfText(d.out_hhmm || '-'),
         pdfText(d.worked_label || '-'), pdfText(d.std_label || '-'),
         pdfText(d.balance_label || d.extra_label || '-'),
         pdfText((statusLabel[d.status] || d.status || '-') + (d.auto_closed ? ' *' : '') + (d.is_holiday && d.holiday_label ? ` (${d.holiday_label})` : '')),
-        pdfText(d.punch_store || '-'),
       ]),
       startY: 31,
       styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.8 },
@@ -2527,12 +2572,12 @@ function gerarEspelhoDoc(row, month, ctx) {
 }
 
 // Espelho individual em PDF (arquivo p/ baixar)
-async function baixarEspelhoPDF(sellerId, month, knownRow, storeId, ctx) {
+async function baixarEspelhoPDF(sellerId, month, knownRow, ctx) {
   try {
     toast('Gerando espelho…');
     let row = knownRow;
     if (!row || !row.days_list) {
-      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1`);
+      const det = await api(`/api/ponto/resumo?month=${month}&seller_id=${Number(sellerId)}&detail=1`);
       row = (det.rows || [])[0];
     }
     const doc = gerarEspelhoDoc(row, month, ctx);
@@ -2543,14 +2588,14 @@ async function baixarEspelhoPDF(sellerId, month, knownRow, storeId, ctx) {
 }
 
 // Todos os espelhos em 1 ZIP (1 PDF por pessoa, ordem A-Z) — 1 unica consulta ao banco
-async function baixarTodosEspelhosZIP(month, btn, storeId, ctx) {
+async function baixarTodosEspelhosZIP(month, btn, companyId, ctx) {
   const old = btn ? btn.innerHTML : null;
   try {
     if (!window.jspdf) return toast('Gerador de PDF ainda carregando. Tente de novo.', 'err');
     if (!window.JSZip) return toast('Gerador de ZIP ainda carregando. Tente de novo.', 'err');
     if (btn) btn.disabled = true;
     toast('Buscando mês completo…');
-    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${storeId ? `&store_id=${encodeURIComponent(storeId)}` : ''}&detail=1&strict=1`);
+    const det = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''}&detail=1`);
     const people = sortAZ(det.rows);
     if (!people.length) return toast('Sem registros neste mês.', 'err');
     const zip = new window.JSZip();
@@ -2571,30 +2616,40 @@ async function baixarTodosEspelhosZIP(month, btn, storeId, ctx) {
 
 async function modalDocumentoPonto(month, r) {
   const mm = month.slice(5, 7) + '/' + month.slice(0, 4);
-  let stores = [];
-  try { stores = (await api('/api/stores')).stores || []; } catch {}
+  let companies = [];
+  try { companies = (await api('/api/companies')).companies || []; } catch {}
   const isManager = store.user?.role === 'manager';
-  const storeMap = {};
-  for (const s of stores) storeMap[s.name] = s;
-  const companyOf = (name) => { const s = storeMap[name]; return (s && s.company_name) || name || '—'; };
-  // gerente: trava na própria loja; admin: Todas ou uma filial por vez
-  let scopeId = isManager ? String(store.user.store_id || '') : '';
+  // admin: Todas, uma empresa ou Sem empresa; gerente: sem filtro (regra da loja)
+  let companyId = '';
   let scoped = r;
-  const scopeStore = () => stores.find((x) => String(x.id) === String(scopeId)) || null;
+  const companyLabel = (c) => c.name + (c.cnpj ? ` • CNPJ ${c.cnpj}` : '');
   const scopeLabel = () => {
-    const s = scopeStore();
-    if (!s) return 'Todas as lojas';
-    return companyOf(s.name) + (s.cnpj ? ` • CNPJ ${s.cnpj}` : '');
+    if (companyId === 'none') return 'Sem empresa';
+    if (companyId) {
+      const c = companies.find((x) => String(x.id) === String(companyId));
+      return c ? companyLabel(c) : 'Todas as empresas';
+    }
+    const names = [...new Set((scoped.rows || []).map((x) => x.company_name || ''))].filter(Boolean);
+    if (names.length === 1) {
+      const r0 = (scoped.rows || [])[0];
+      return names[0] + (r0.company_cnpj ? ` • CNPJ ${r0.company_cnpj}` : '');
+    }
+    return 'Todas as empresas';
   };
   const scopeFile = () => {
-    const s = scopeStore();
-    return s ? pdfFileName(companyOf(s.name)) : 'todas';
+    if (companyId === 'none') return 'sem-empresa';
+    if (companyId) {
+      const c = companies.find((x) => String(x.id) === String(companyId));
+      return c ? pdfFileName(c.name) : 'todas';
+    }
+    const names = [...new Set((scoped.rows || []).map((x) => x.company_name || ''))].filter(Boolean);
+    return names.length === 1 ? pdfFileName(names[0]) : 'todas';
   };
-  const docCtx = () => ({ storeMap, scopeId, scopeLabel: scopeLabel(), scopeFile: scopeFile() });
+  const docCtx = () => ({ companyId, scopeLabel: scopeLabel(), scopeFile: scopeFile() });
   $('#modalRoot').innerHTML = `
   <div class="modal-bg anim-up" id="mbg"><div class="modal">
     <h3 style="margin:0">Documento p/ contador — ${mm}</h3>
-    ${(!isManager && stores.length > 1) ? `<label>Loja</label><select id="docStore" style="width:100%"><option value="">Todas as lojas</option>${stores.map((s) => `<option value="${s.id}">${esc(companyOf(s.name))}</option>`).join('')}</select>` : ''}
+    ${(!isManager) ? `<label>Empresa</label><select id="docCompany" style="width:100%"><option value="">Todas as empresas</option>${companies.map((c) => `<option value="${c.id}">${esc(companyLabel(c))}</option>`).join('')}<option value="none">Sem empresa</option></select>` : ''}
     <p class="muted" style="font-size:13px" id="docTotals"></p>
     <button class="btn btn-accent btn-big" id="docPdf" style="width:100%">⬇️ Demonstrativo mensal (PDF)</button>
     <div style="height:8px"></div>
@@ -2625,17 +2680,17 @@ async function modalDocumentoPonto(month, r) {
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   $('#docPdf').onclick = () => baixarDemonstrativoPDF(month, scoped, docCtx());
   $('#docCsvR').onclick = async () => { await baixarResumoXLSX(month, scoped, docCtx()); };
-  $('#docCsvA').onclick = async () => { await baixarAnaliticoXLSX(month, scopeId, docCtx()); };
+  $('#docCsvA').onclick = async () => { await baixarAnaliticoXLSX(month, companyId, docCtx()); };
   $('#docEspelho').onclick = async () => {
     const sid = Number($('#docSeller').value);
-    if (sid) baixarEspelhoPDF(sid, month, null, scopeId, docCtx());
+    if (sid) baixarEspelhoPDF(sid, month, null, docCtx());
   };
-  $('#docZip').onclick = (e) => baixarTodosEspelhosZIP(month, e.currentTarget, scopeId, docCtx());
-  const ds = $('#docStore');
+  $('#docZip').onclick = (e) => baixarTodosEspelhosZIP(month, e.currentTarget, companyId, docCtx());
+  const ds = $('#docCompany');
   if (ds) ds.onchange = async () => {
-    scopeId = ds.value;
+    companyId = ds.value;
     try {
-      scoped = await api(`/api/ponto/resumo?month=${month}${scopeId ? `&store_id=${encodeURIComponent(scopeId)}` : ''}&strict=1`);
+      scoped = await api(`/api/ponto/resumo?month=${month}${companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''}`);
     } catch (e) { toast(e.message, 'err'); return; }
     paintTotals();
     wireButtons();
@@ -3093,32 +3148,70 @@ async function viewTeam(app) {
   await loadPhrases();
 }
 
-// Empresas p/ documentos do contador (nome + CNPJ por loja) — fim da tela de Equipe
+// Empresas (cadastro manual p/ documentos) — fim da tela de Equipe, só admin.
+// Começa vazio (white-label); nada é criado sozinho.
 async function loadCompanies() {
   const box = $('#companiesBox');
   if (!box) return;
-  box.innerHTML = `<h3 class="section-title">Empresas (nome + CNPJ p/ documentos)</h3><div class="card"><p class="muted">Carregando…</p></div>`;
+  box.innerHTML = `<h3 class="section-title">Empresas (razão social + CNPJ)</h3><div class="card"><p class="muted">Carregando…</p></div>`;
   try {
-    const { stores } = await api('/api/stores');
-    box.innerHTML = `<h3 class="section-title">Empresas (nome + CNPJ p/ documentos)</h3>
-      <div class="card">${(stores || []).map((s) => `
-        <div style="border-top:1px solid var(--line);padding:10px 0">
-          <b>${esc(s.name)}</b>${s.company_name ? ` <span class="muted" style="font-size:12px">• ${esc(s.company_name)}${s.cnpj ? ` • ${esc(s.cnpj)}` : ''}</span>` : ' <span class="muted" style="font-size:12px">• sem empresa</span>'}
-          <label>Nome da empresa p/ documentos</label><input id="coName-${s.id}" maxlength="80" placeholder="Ex: ASA BIKE LTDA" value="${esc(s.company_name || '')}">
-          <label>CNPJ p/ documentos (sem validação)</label><input id="coCnpj-${s.id}" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90" value="${esc(s.cnpj || '')}">
-          <div style="height:6px"></div>
-          <button class="btn" data-cosave="${s.id}">Salvar empresa</button>
-        </div>`).join('')}</div>`;
+    const { companies } = await api('/api/companies');
+    box.innerHTML = `<h3 class="section-title">Empresas (razão social + CNPJ)</h3>
+      <div class="card">
+        <button class="btn btn-primary btn-big" id="coAdd" style="width:100%">+ Nova empresa</button>
+        <div style="height:8px"></div>
+        ${(companies || []).length ? (companies || []).map((c, i) => `
+        <div style="${i ? 'border-top:1px solid var(--line);' : ''}padding:10px 0">
+          <b>${esc(c.name)}</b>${c.cnpj ? ` <span class="mono" style="font-size:12px">${esc(c.cnpj)}</span>` : ''}<br>
+          <span class="muted" style="font-size:12px">${c.people ? `${c.people} pessoa(s) vinculada(s)` : 'sem gente vinculada'}</span>
+          <div class="row" style="margin-top:6px">
+            <button class="btn" data-coedit="${c.id}">Editar</button>
+            <button class="btn btn-ghost" data-codel="${c.id}" title="Excluir empresa">🗑️</button>
+          </div>
+        </div>`).join('') : '<div class="empty">Nenhuma empresa. Toque em + Nova empresa.</div>'}
+      </div>`;
+    $('#coAdd').onclick = () => modalCompany(null, loadCompanies);
+    const byId = Object.fromEntries((companies || []).map((c) => [c.id, c]));
     box.onclick = async (e) => {
-      const b = e.target.closest('[data-cosave]');
-      if (!b) return;
-      const id = b.dataset.cosave;
-      try {
-        await api(`/api/stores/${id}`, { method: 'PUT', body: JSON.stringify({ company_name: $(`#coName-${id}`).value, cnpj: $(`#coCnpj-${id}`).value }) });
-        toast('Empresa salva!'); loadCompanies();
-      } catch (err) { toast(err.message, 'err'); }
+      const be = e.target.closest('[data-coedit]');
+      if (be) { modalCompany(byId[be.dataset.coedit], loadCompanies); return; }
+      const bd = e.target.closest('[data-codel]');
+      if (bd) {
+        const c = byId[bd.dataset.codel];
+        if (!c) return;
+        if (!confirm(`Excluir ${c.name}?\n\nSó é possível sem gente vinculada.`)) return;
+        try { await api(`/api/companies/${c.id}`, { method: 'DELETE' }); toast('Empresa excluída!'); loadCompanies(); }
+        catch (err) { toast(err.message, 'err'); }
+        return;
+      }
     };
   } catch (e) { box.innerHTML = `<h3 class="section-title">Empresas</h3><div class="card empty">${esc(e.message)}</div>`; }
+}
+
+// Nova/editar empresa (razão social + CNPJ, sem validação de dígito)
+function modalCompany(c, reload) {
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg anim-up" id="mbg"><div class="modal">
+    <h3 style="margin:0">${c ? 'Editar empresa' : 'Nova empresa'}</h3>
+    <form id="fCompany">
+      <label>Razão social *</label><input id="cName" maxlength="80" required placeholder="Ex: Sua Empresa LTDA" value="${esc(c?.name || '')}">
+      <label>CNPJ (sem validação)</label><input id="cCnpj" maxlength="20" inputmode="numeric" placeholder="Ex: 12.345.678/0001-90" value="${esc(c?.cnpj || '')}">
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Salvar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#fCompany').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const body = JSON.stringify({ name: $('#cName').value, cnpj: $('#cCnpj').value });
+      if (c) await api(`/api/companies/${c.id}`, { method: 'PUT', body });
+      else await api('/api/companies', { method: 'POST', body });
+      closeModal(); toast('Empresa salva!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
 }
 
 async function loadPhrases() {
@@ -3198,7 +3291,9 @@ async function askDeleteUser(person, reload) {
 
 async function modalUser(u, reload) {
   let stores = [];
+  let companies = [];
   try { stores = (await api('/api/stores')).stores; } catch {}
+  try { companies = (await api('/api/companies')).companies || []; } catch {}
   const isSeller = !u || u.role === 'seller';
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
@@ -3215,17 +3310,15 @@ async function modalUser(u, reload) {
       </div>
       <label>Loja *</label>
       <select id="uStore">${stores.map((s) => `<option value="${s.id}" ${Number(u?.store_id) === Number(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      <label>Empresa (p/ documentos)</label>
+      <select id="uCompany"><option value="">Sem empresa</option>${companies.map((c) => `<option value="${c.id}" ${Number(u?.company_id) === Number(c.id) ? 'selected' : ''}>${esc(c.name)}${c.cnpj ? ` • ${esc(c.cnpj)}` : ''}</option>`).join('')}</select>
+      ${companies.length ? '' : '<p class="muted" style="font-size:12px">Cadastre em Equipe → Empresas.</p>'}
       <div id="jobFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
         <label>Função p/ documento (ex: Vendedor, Mecânico)</label>
         <input id="uJob" maxlength="60" placeholder="Vazio = Vendedor / Funcionário" value="${esc(u?.job_title || '')}">
       </div>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
-      <div id="compFields">
-        <h4 class="section-title" style="font-size:14px">Empresa da loja</h4>
-        <p class="muted" style="font-size:13px" id="uCompanyLine"></p>
-        <p class="muted" style="font-size:12px">Edite em Equipe → Empresas.</p>
-      </div>
       <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
         <h4 class="section-title" style="font-size:14px">Carga horária especial (opcional)</h4>
         <p class="muted" style="font-size:12px">Vazio = padrão (seg–sex 10h • sáb 9h • dom 4h • feriado 5h). Ex: quem faz 8h–17h seg–sex = 09:00. Sair mais cedo nunca gera hora negativa.</p>
@@ -3253,16 +3346,6 @@ async function modalUser(u, reload) {
     $('#jobFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
     $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
   };
-  // empresa/CNPJ da loja selecionada (só leitura; edita em Equipe → Empresas)
-  const fillCompany = () => {
-    const s = (stores || []).find((x) => String(x.id) === String($('#uStore').value));
-    const line = $('#uCompanyLine');
-    if (line) line.innerHTML = s && (s.company_name || s.cnpj)
-      ? `🏢 <b>${esc(s.company_name || s.name)}</b>${s.cnpj ? ` • CNPJ ${esc(s.cnpj)}` : ''}`
-      : 'Loja sem empresa cadastrada.';
-  };
-  $('#uStore').onchange = fillCompany;
-  fillCompany();
   // helpers carga horária (HH:MM <-> minutos)
   const minToHHMM = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
   const hhmmToMin = (s) => {
@@ -3293,6 +3376,7 @@ async function modalUser(u, reload) {
         name: $('#uName').value.trim(), email: $('#uEmail').value.trim(), role,
         sector: role === 'seller' ? $('#uSector').value : 'online',
         store_id: Number($('#uStore').value),
+        company_id: $('#uCompany').value === '' ? null : Number($('#uCompany').value),
         ...((role === 'seller' || role === 'staff') ? { job_title: $('#uJob').value.trim() } : {}),
         ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
       };

@@ -21,6 +21,7 @@ const SCHEMA = [
     sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
     store_id INTEGER,
     job_title TEXT,
+    company_id INTEGER,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -34,6 +35,7 @@ const SCHEMA = [
     lng REAL,
     company_name TEXT,
     cnpj TEXT,
+    is_main INTEGER NOT NULL DEFAULT 0,
     radius_m INTEGER NOT NULL DEFAULT 150,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -125,6 +127,14 @@ const SCHEMA = [
     radius_m INTEGER NOT NULL DEFAULT 150,
     qr_code TEXT NOT NULL DEFAULT 'PONTO-LOJA-01',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  // empresas manuais (white-label): começam vazias; cada pessoa vincula-se a uma.
+  // Nada é criado sozinho; a migração abaixo aproveita 1x o que já foi digitado nas lojas.
+  `CREATE TABLE IF NOT EXISTS companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    cnpj TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   // feriados por loja: store_id 0 = Todas as lojas; >0 = loja específica (Sede/Magé/Guapimirim)
   `CREATE TABLE IF NOT EXISTS holidays (
@@ -348,18 +358,22 @@ function creditForParticipants(count) {
 }
 
 // ---- Comissão por loja + setor + bônus de modelo especial ----
-// storeName: 'Sede' | filial (Magé/Guapimirim) | null (antigas = Sede)
+// storeRef: boolean is_main | objeto loja {is_main} | nome (legado: 'Sede'=matriz)
 // bonusCents: base exclusiva em centavos (modelo especial) ou null
 // - filial → base 2500 (qualquer setor)
-// - Sede: todos presencial → 3500; se há qualquer online → 2500
+// - matriz: todos presencial → 3500; se há qualquer online → 2500
 // - individual recebe a base cheia; dividida (2–4) recebe metade
-function commissionBaseCents(sectors, bonusCents, storeName) {
+function commissionBaseCents(sectors, bonusCents, storeRef) {
   if (bonusCents != null) return Math.round(Number(bonusCents));
-  if (storeName && storeName !== 'Sede') return 2500;
+  let isMain = true;
+  if (typeof storeRef === 'boolean') isMain = storeRef;
+  else if (storeRef && typeof storeRef === 'object') isMain = !!storeRef.is_main;
+  else if (typeof storeRef === 'string') isMain = !storeRef || storeRef === 'Sede';
+  if (!isMain) return 2500;
   const allPres = Array.isArray(sectors) && sectors.length > 0 && sectors.every((s) => s === 'presencial');
   return allPres ? 3500 : 2500;
 }
-function commissionCents(sectors, count, bonusCents, storeName) {
+function commissionCents(sectors, count, bonusCents, storeRef) {
   if (count < 1 || count > 4) throw new Error('Venda deve ter de 1 a 4 participantes.');
   let bonus = null;
   if (bonusCents != null && bonusCents !== '') {
@@ -367,7 +381,7 @@ function commissionCents(sectors, count, bonusCents, storeName) {
     if (!Number.isFinite(bonus) || bonus <= 0 || bonus > 100000)
       throw new Error('Bônus deve ser entre R$ 0,01 e R$ 1.000,00.');
   }
-  const base = commissionBaseCents(sectors, bonus, storeName);
+  const base = commissionBaseCents(sectors, bonus, storeRef);
   return count === 1 ? base : Math.round(base / 2);
 }
 
@@ -421,6 +435,9 @@ const ready = (async () => {
   try { await run("UPDATE users SET sector='online' WHERE sector IS NULL OR sector NOT IN ('online','presencial')"); } catch {}
   // loja do usuário/venda/ponto
   try { await run('ALTER TABLE users ADD COLUMN store_id INTEGER'); } catch {}
+  // empresa manual da pessoa (white-label) + selo matriz/filial da loja (ANTES dos rebuilds)
+  try { await run('ALTER TABLE users ADD COLUMN company_id INTEGER'); } catch {}
+  try { await run('ALTER TABLE stores ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0'); } catch {}
   // selo de saída automática (ponto esquecido fechado sozinho no fim do expediente)
   try { await run('ALTER TABLE punches ADD COLUMN auto_closed INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE sales ADD COLUMN store_id INTEGER'); } catch {}
@@ -432,6 +449,7 @@ const ready = (async () => {
   try { await run('ALTER TABLE canceled_sales ADD COLUMN bonus_cents INTEGER'); } catch {}
   await migrateTableChecks();
   await seedStores();
+  await migrateCompaniesOnce();
   try {
     const sede = await get("SELECT id FROM stores WHERE name='Sede' LIMIT 1");
     if (sede) {
@@ -550,11 +568,12 @@ async function migrateTableChecks() {
       avatar_url TEXT,
       pix_key TEXT,
       job_title TEXT,
+      company_id INTEGER,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
-    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, job_title, active, created_at)
-      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, job_title, active, created_at FROM users`);
+    await run(`INSERT INTO users_new (id, name, email, password_hash, role, sector, store_id, avatar_url, pix_key, job_title, company_id, active, created_at)
+      SELECT id, name, email, password_hash, role, COALESCE(sector,'online'), store_id, avatar_url, pix_key, job_title, company_id, active, created_at FROM users`);
       await run('DROP TABLE users');
       await run('ALTER TABLE users_new RENAME TO users');
       try { await run("UPDATE sqlite_sequence SET name='users' WHERE name='users_new'"); } catch {}
@@ -690,38 +709,50 @@ async function migrateTableChecks() {
   } catch (e) { console.log('[db] Migração veto de feriado pulada:', e.message); }
 }
 
-// Lojas: Sede herda QR/localização/raio atuais (nada muda para quem já usa);
-// Magé e Guapimirim nascem com QR próprio, pin exato do Google Maps (Supra Bike)
-// e raio 200m (admin pode refinar no painel; o boot só corrige se estiver vazio
-// ou a mais de ~30m do pin correto — evita voltar ao "meio do mato").
-const STORE_PINS = {
-  // Supra Bike Magé — Av. Simão da Motta, 324 - Centro (pin do Google Maps)
-  'Magé': { lat: -22.660877, lng: -43.0353822, radius_m: 200 },
-  // Supra Bike Guapimirim — Av. Dedo de Deus, 720 - Centro (pin do Google Maps)
-  'Guapimirim': { lat: -22.5272307, lng: -42.9830801, radius_m: 200 },
-};
+// White-label: instalação nova nasce com 1 loja neutra (o dono cadastra o resto).
+// Bancos existentes não mudam (só cria se não houver nenhuma loja).
 async function seedStores() {
   try {
+    const n = await get('SELECT COUNT(*) AS c FROM stores');
+    if (Number(n.c) !== 0) return;
     const cfg = await get('SELECT * FROM ponto_config WHERE id=1');
-    await run('INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO NOTHING',
-      'Sede', 'SEDE', (cfg && cfg.qr_code) || 'PONTO-LOJA-01', cfg ? cfg.lat : null, cfg ? cfg.lng : null, (cfg && cfg.radius_m) || 150);
-    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Magé','MAGE','PONTO-MAGE-01',?,?,?) ON CONFLICT(name) DO NOTHING",
-      STORE_PINS['Magé'].lat, STORE_PINS['Magé'].lng, STORE_PINS['Magé'].radius_m);
-    await run("INSERT INTO stores (name, short, qr_code, lat, lng, radius_m) VALUES ('Guapimirim','GUAPI','PONTO-GUAPI-01',?,?,?) ON CONFLICT(name) DO NOTHING",
-      STORE_PINS['Guapimirim'].lat, STORE_PINS['Guapimirim'].lng, STORE_PINS['Guapimirim'].radius_m);
-    // corrige filiais com local vazio ou grosseiramente errado (>~30m do pin),
-    // sem apagar um ajuste fino futuro feito pelo admin no painel
-    for (const [name, pin] of Object.entries(STORE_PINS)) {
-      try {
-        await run(
-          `UPDATE stores SET lat=?, lng=?, radius_m=? WHERE name=?
-           AND (lat IS NULL OR lng IS NULL OR radius_m IS NULL OR radius_m != ?
-             OR ABS(lat - ?) > 0.0003 OR ABS(lng - ?) > 0.0003)`,
-          pin.lat, pin.lng, pin.radius_m, name, pin.radius_m, pin.lat, pin.lng
-        );
-      } catch {}
-    }
+    await run('INSERT INTO stores (name, short, qr_code, lat, lng, radius_m, is_main) VALUES (?,?,?,?,?,?,1)',
+      'Matriz', 'MATRIZ', (cfg && cfg.qr_code) || 'PONTO-LOJA-01', cfg ? cfg.lat : null, cfg ? cfg.lng : null, (cfg && cfg.radius_m) || 150);
+    console.log('[db] Seed lojas: loja neutra "Matriz" criada.');
   } catch (e) { console.log('[db] Seed lojas pulado:', e.message); }
+}
+
+// Migração white-label (roda 1x): importa as empresas já digitadas nas lojas,
+// vincula cada pessoa à empresa da sua loja e marca a matriz (Sede ou 1ª loja).
+async function migrateCompaniesOnce() {
+  try { await run('ALTER TABLE users ADD COLUMN company_id INTEGER'); } catch {}
+  try { await run('ALTER TABLE stores ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try {
+    const nCo = await get('SELECT COUNT(*) AS c FROM companies');
+    if (Number(nCo.c) === 0) {
+      const withCo = await all(
+        "SELECT DISTINCT company_name, COALESCE(cnpj,'') AS cnpj FROM stores WHERE company_name IS NOT NULL AND TRIM(company_name) <> ''"
+      );
+      for (const w of withCo) {
+        await run('INSERT INTO companies (name, cnpj) VALUES (?,?)', w.company_name, w.cnpj || '');
+      }
+      await run(
+        `UPDATE users SET company_id=(
+           SELECT c.id FROM companies c JOIN stores s ON s.company_name=c.name AND COALESCE(s.cnpj,'')=c.cnpj
+           WHERE s.id=users.store_id
+         ) WHERE store_id IS NOT NULL AND company_id IS NULL`
+      );
+      console.log(`[db] Migração empresas: ${withCo.length} empresa(s) importada(s).`);
+    }
+  } catch (e) { console.log('[db] Migração empresas pulada:', e.message); }
+  try {
+    const nMain = await get('SELECT COUNT(*) AS c FROM stores WHERE is_main=1');
+    if (Number(nMain.c) === 0) {
+      const sede = await get("SELECT id FROM stores WHERE name='Sede' LIMIT 1");
+      if (sede) await run('UPDATE stores SET is_main=1 WHERE id=?', sede.id);
+      else await run('UPDATE stores SET is_main=1 WHERE id=(SELECT MIN(id) FROM stores)');
+    }
+  } catch (e) { console.log('[db] Marcação de matriz pulada:', e.message); }
 }
 
 module.exports = { all, get, run, ready, creditForParticipants, commissionCents, commissionBaseCents, isRemote, ARCHIVE_DAYS: 90 };
