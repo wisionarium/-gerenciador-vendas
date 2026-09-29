@@ -2560,12 +2560,12 @@ function baixarDemonstrativoPDF(month, r, ctx) {
     const tB = r.total_balance_label || tE;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(pdfText(`Total extras: +${tE}   -   Total atrasos: -${tL}   -   Saldo do mes: ${tB}`), 14, 33);
-    const head = [['#', 'Nome', 'Função', 'Empresa', 'Dias',
+    const head = [['', 'Nome', 'Função', 'Empresa', 'Dias',
       { content: 'Extras (+)', styles: { halign: 'right' } },
       { content: 'Atrasos (-)', styles: { halign: 'right' } },
       { content: 'Saldo', styles: { halign: 'right' } }]];
-    const body = sortAZ(r.rows).map((x, i) => [
-      String(i + 1),
+    const body = sortAZ(r.rows).map((x) => [
+      '',
       pdfText(x.name + (x.custom_schedule ? ' *' : '')),
       pdfText(funcaoOf(x)),
       pdfText(x.company_name || 'Sem empresa'),
