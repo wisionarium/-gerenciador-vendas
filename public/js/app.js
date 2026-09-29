@@ -2089,12 +2089,13 @@ async function tabPontoDia(body, t) {
   const rowHTML = (r) => {
     const ava = `<span class="ava sm" data-ponto-user="${r.seller_id}" style="cursor:pointer">${r.avatar_url ? `<img src="${r.avatar_url}" alt="">` : esc((r.name || '?')[0].toUpperCase())}</span>`;
     const extra = r.punch && r.punch.extra_min > 0 ? ` <span class="chip lime">＋${esc(r.punch.extra_label)}</span>` : '';
+    const swapped = r.punch?.swapped ? ` <span class="chip" style="font-size:10px;padding:1px 8px;background:#e0f2fe;color:#075985" title="Troca com ${fmtDayBR(r.punch.swap_with)}${r.punch.provisional ? ' (provisória)' : ''} — conta como dia normal">🔄 troca</span>` : '';
     const elsewhere = r.punch?.punch_store && r.punch.punch_store !== (r.store_name || 'Sede') ? ` ${storeTag(r.punch.punch_store)}` : '';
     const wd = weekdayShortBR(currentDate);
     return `
       <div class="sale-card" data-ponto-card="${r.seller_id}" style="cursor:pointer" title="Ver mês completo"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
         <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
-        <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}
+        <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}${swapped}
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
       </div></div>`;

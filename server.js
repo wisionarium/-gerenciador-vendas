@@ -1839,17 +1839,15 @@ app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
 app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
   if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todaySP().slice(0, 7);
-  const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ? ORDER BY date DESC', req.user.id, `${month}%`);
-  const monthHols = await holidaysOfMonth(month);
   const mySched = await scheduleFor(req.user.id);
   await autoClosePunches(); // rede de segurança antes de listar o mês
   const led = await buildLedger({
-    s: req.user, month, ps, monthHols, sched: mySched,
+    s: req.user, month, sched: mySched,
     scopeStoreId: null, swapOff: await swapOffSet(req.user.id), today: todaySP(),
   });
   res.json({
     month,
-    punches: led.days.filter((e) => e.p).sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => {
+    punches: led.days.filter((e) => e.p && e.inMonth).sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => {
       const c = e.calc;
       const conv = e.conv;
       return {
@@ -1912,7 +1910,43 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
       punch: p ? { ...punchCalc(p, !!holRow, scheds[s.id], s), punch_store: await punchStore(p) } : null,
     };
   }));
-  let rows = await buildRows();
+  // troca inteligente no dia (mesma regra do mensal): ponto completo em dia de
+  // descanso já compensado na semana aparece convertido (dia normal) + 🔄.
+  // Usa a janela semanal (cruza o mês) e ignora semanas com troca desligada.
+  const applyDaySwaps = async (rows) => {
+    try {
+      const month = date.slice(0, 7);
+      const cands = rows.filter((r) => r.punch && r.punch.rest_day && r.punch.check_in_at && r.punch.check_out_at);
+      if (!cands.length) return rows;
+      const holsCache = new Map();
+      try { holsCache.set(month, await holidaysOfMonth(month)); } catch {}
+      const offAll = await swapOffMap(cands.map((r) => r.seller_id));
+      const today = todaySP();
+      await Promise.all(cands.map(async (r) => {
+        try {
+          const s = sellers.find((x) => Number(x.id) === Number(r.seller_id));
+          if (!s) return;
+          const led = await buildLedger({
+            s, month, sched: scheds[s.id] || null,
+            scopeStoreId: null, swapOff: offAll[s.id] || new Set(), today, holsCache,
+          });
+          const e = led.days.find((x) => x.date === date);
+          if (e && e.conv) {
+            r.punch = {
+              ...r.punch,
+              std_min: e.conv.std, std_label: fmtDur(e.conv.std),
+              extra_min: e.conv.extra, extra_label: fmtDur(e.conv.extra),
+              late_min: e.conv.late, late_label: fmtDur(e.conv.late),
+              balance_min: e.conv.balance, balance_label: fmtSigned(e.conv.balance),
+              swapped: true, swap_with: e.swap.with, provisional: e.swap.provisional,
+            };
+          }
+        } catch {}
+      }));
+    } catch {}
+    return rows;
+  };
+  let rows = await applyDaySwaps(await buildRows());
   // feriado automático POR LOJA: seg–sáb (ainda não marcado na loja, sem veto do admin)
   // com maioria saindo 12:30–13:30 → marca sozinho (idempotente).
   // Ex: Sede+Magé saem às 13h (feriado municipal) e Guapimirim trabalha normal →
@@ -1931,7 +1965,7 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
     return true;
   };
   if (scope.storeId != null) {
-    if (await autoDetect(scope.storeId, rows)) { auto_holiday = true; rows = await buildRows(); }
+    if (await autoDetect(scope.storeId, rows)) { auto_holiday = true; rows = await applyDaySwaps(await buildRows()); }
   } else {
     // visão "Todas": detecta loja a loja, pelos pontos batidos em cada uma
     const byStore = new Map();
@@ -1945,7 +1979,7 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
       if (storeKey === 0) continue; // sem loja identificada: não infere sozinho
       if (await autoDetect(storeKey, group)) auto_holiday = true;
     }
-    if (auto_holiday) rows = await buildRows();
+    if (auto_holiday) rows = await applyDaySwaps(await buildRows());
   }
   const dayHols = await db.all(
     'SELECT h.*, s.name AS store_name FROM holidays h LEFT JOIN stores s ON s.id=h.store_id WHERE h.date=? ORDER BY h.store_id', date
@@ -1995,40 +2029,72 @@ async function swapOffMap(ids) {
 }
 // ledger mensal de 1 pessoa: classifica cada dia (com folga/escala), aplica as
 // trocas semanais 1-para-1 e totaliza. É a fonte única de extras/atrasos/saldo.
-// s: linha users (dayoff_dow/sunday_scale/store_id); ps: punches do mês;
+// s: linha users (dayoff_dow/sunday_scale/store_id); ps opcional (senão busca
+// a janela estendida em semanas completas, pois a troca pode cruzar o mês).
 // scopeStoreId: filtra pontos por loja (painel); null = tudo (mês da pessoa, docs).
 // Retorna { days, pairs, totals, summary }.
-async function buildLedger({ s, month, ps, monthHols, sched, scopeStoreId = null, swapOff = new Set(), today }) {
+async function buildLedger({ s, month, sched, scopeStoreId = null, swapOff = new Set(), today, holsCache = null, ps = null }) {
   const person = { dayoff_dow: s.dayoff_dow, sunday_scale: s.sunday_scale };
   const [yy, mm] = month.split('-').map(Number);
   const lastDay = new Date(yy, mm, 0).getDate();
   const pad2 = (n) => String(n).padStart(2, '0');
-  const byDate = new Map(ps.map((p) => [p.date, p]));
+  // janela estendida em semanas completas: a troca pode cruzar o mês
+  // (ex: faltou dia 30 + trabalhou descanso dia 1º)
+  const startMon = weekKey(`${month}-01`);
+  const endSunDt = new Date(weekKey(`${month}-${pad2(lastDay)}`) + 'T12:00:00Z');
+  endSunDt.setUTCDate(endSunDt.getUTCDate() + 6);
+  const endSun = endSunDt.toISOString().slice(0, 10);
+  const months = [...new Set([startMon.slice(0, 7), month, endSun.slice(0, 7)])];
+  const holsByMonth = {};
+  for (const m of months) {
+    if (holsCache && holsCache.has(m)) holsByMonth[m] = holsCache.get(m);
+    else {
+      const h = await holidaysOfMonth(m);
+      holsByMonth[m] = h;
+      if (holsCache) holsCache.set(m, h);
+    }
+  }
+  let punches = ps;
+  if (!punches) {
+    punches = await db.all('SELECT * FROM punches WHERE seller_id=? AND date>=? AND date<=? ORDER BY date', s.id, startMon, endSun);
+  }
+  const byDate = new Map(punches.map((p) => [p.date, p]));
+  const holFor = (dateISO, p) => {
+    const hols = holsByMonth[dateISO.slice(0, 7)] || [];
+    if (p) return holidayForPunch(hols, p, s.store_id);
+    return holidayForDay(hols, dateISO, s.store_id);
+  };
   const days = [];
-  for (let d = 1; d <= lastDay; d++) {
-    const dateISO = `${month}-${pad2(d)}`;
-    const dow = new Date(dateISO + 'T12:00:00Z').getUTCDay();
-    const p = byDate.get(dateISO);
-    const inScope = !p || scopeStoreId == null || Number(p.store_id) === Number(scopeStoreId);
-    const hol = p ? holidayForPunch(monthHols, p, s.store_id) : holidayForDay(monthHols, dateISO, s.store_id);
-    const rule = dayRule(dateISO, !!hol, sched, person);
-    const isFuture = dateISO > today;
-    let status, calc = null;
-    const complete = !!(p && p.check_in_at && p.check_out_at);
-    if (p && inScope) {
-      calc = punchCalc(p, !!hol, sched, person);
-      status = complete ? 'trabalhado' : 'incompleto';
-    } else if (p && !inScope) {
-      status = 'outra-loja';
-      calc = punchCalc(p, !!hol, sched, person);
-    } else if (isFuture) status = 'futuro';
-    else if (hol) status = 'feriado';
-    else if (rule.rest) status = 'folga';
-    else status = 'falta';
-    days.push({
-      date: dateISO, dow, p: p || null, inScope, hol, rule, status, calc, complete,
-      conv: null, swap: null,
-    });
+  {
+    const cur = new Date(startMon + 'T12:00:00Z');
+    const end = new Date(endSun + 'T12:00:00Z');
+    while (cur <= end) {
+      const dateISO = cur.toISOString().slice(0, 10);
+      const inMonth = dateISO.slice(0, 7) === month;
+      const dow = cur.getUTCDay();
+      const p = byDate.get(dateISO);
+      const inScope = !p || scopeStoreId == null || Number(p.store_id) === Number(scopeStoreId);
+      const hol = holFor(dateISO, p);
+      const rule = dayRule(dateISO, !!hol, sched, person);
+      const isFuture = dateISO > today;
+      let status, calc = null;
+      const complete = !!(p && p.check_in_at && p.check_out_at);
+      if (p && inScope) {
+        calc = punchCalc(p, !!hol, sched, person);
+        status = complete ? 'trabalhado' : 'incompleto';
+      } else if (p && !inScope) {
+        status = 'outra-loja';
+        calc = punchCalc(p, !!hol, sched, person);
+      } else if (isFuture) status = 'futuro';
+      else if (hol) status = 'feriado';
+      else if (rule.rest) status = 'folga';
+      else status = 'falta';
+      days.push({
+        date: dateISO, dow, inMonth, p: p || null, inScope, hol, rule, status, calc, complete,
+        conv: null, swap: null,
+      });
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
   }
   // pareia por semana (seg-dom): trabalhou descanso + faltou dia normal
   const byWeek = new Map();
@@ -2043,12 +2109,19 @@ async function buildLedger({ s, month, ps, monthHols, sched, scopeStoreId = null
     if (swapOff.has(wk)) continue;
     const worked = list.filter((e) => e.status === 'trabalhado' && e.complete && e.rule.rest && !e.hol)
       .sort((a, b) => (a.date < b.date ? -1 : 1));
-    const missed = list.filter((e) => e.status === 'falta')
-      .sort((a, b) => (a.date < b.date ? -1 : 1));
-    const n = Math.min(worked.length, missed.length);
+    const free = new Set(list.filter((e) => e.status === 'falta'));
     const provisional = !weekClosed(wk, today);
-    for (let i = 0; i < n; i++) {
-      const w = worked[i], m = missed[i];
+    for (const w of worked) {
+      // pareia com o dia faltado MAIS PRÓXIMO (troca de um dia para o outro);
+      // desempate: o mais antigo primeiro
+      let best = null, bestDist = Infinity;
+      for (const m of free) {
+        const dist = Math.abs(Date.parse(m.date) - Date.parse(w.date));
+        if (dist < bestDist || (dist === bestDist && best && m.date < best.date)) { best = m; bestDist = dist; }
+      }
+      if (!best) break;
+      free.delete(best);
+      const m = best;
       // o trabalhado assume o papel do faltado: padrão normal do dia faltado
       const convStd = stdMinutesFor(m.date, false, sched);
       const wm = w.calc.worked_min;
@@ -2060,10 +2133,11 @@ async function buildLedger({ s, month, ps, monthHols, sched, scopeStoreId = null
       pairs.push({ a: w.date, b: m.date, week: wk, provisional });
     }
   }
-  // totais (só pontos completos no escopo, com conversão)
+  // totais e contadores: só dias DO MÊS (a troca pode cruzar o mês vizinho)
   let extra = 0, late = 0, worked = 0, daysN = 0;
   let nTrab = 0, nInc = 0, nFalta = 0, nFolga = 0, nFer = 0, nTroca = 0;
   for (const e of days) {
+    if (!e.inMonth) continue;
     if (e.swap && e.status === 'troca') { nTroca++; continue; }
     if (e.status === 'incompleto') { nInc++; continue; }
     if (e.status === 'trabalhado' && e.inScope && e.complete) {
@@ -2092,10 +2166,8 @@ async function monthExtra(sellerId, month) {
   const person = await db.get('SELECT * FROM users WHERE id=?', Number(sellerId));
   if (!person) return { extra: 0, late_min: 0, balance: 0, paid: 0, pending: 0 };
   const sched = await scheduleFor(person.id);
-  const ps = await db.all('SELECT * FROM punches WHERE seller_id=? AND date LIKE ?', person.id, `${month}%`);
-  const monthHols = await holidaysOfMonth(month);
   const led = await buildLedger({
-    s: person, month, ps, monthHols, sched,
+    s: person, month, sched,
     scopeStoreId: null, swapOff: await swapOffSet(person.id), today: todaySP(),
   });
   const t = led.totals;
@@ -2257,6 +2329,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   }
   await autoClosePunches(); // rede de segurança antes de somar o mês
   const monthHols = await holidaysOfMonth(month);
+  const holsCache = new Map([[month, monthHols]]);
   // auditoria: ?seller_id= + ?detail=1 devolve o dia a dia que compõe o total
   // (data, entrada, saída, trabalhado, padrão do dia, extra e feriado aplicado).
   const onlySid = req.query.seller_id != null && req.query.seller_id !== '' ? Number(req.query.seller_id) : null;  if (onlySid != null) sellers = sellers.filter((s) => Number(s.id) === onlySid);
@@ -2276,17 +2349,14 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
     // com empresa: todos os pontos da pessoa (sem filtro de loja).
     // sem empresa (painel): extras contam onde bateu o ponto (filtro por loja quando escopado)
     const useStoreFilter = scope.storeId != null && !companyScope;
-    const ps = await db.all(
-      `SELECT * FROM punches WHERE seller_id=? AND date LIKE ?${useStoreFilter ? ' AND store_id=?' : ''} ORDER BY date`,
-      s.id, `${month}%`, ...(useStoreFilter ? [scope.storeId] : [])
-    );
     const sched = schedsAll[s.id] || null;
     // ledger do mês: classifica, aplica trocas semanais e totaliza (fonte única)
     const led = await buildLedger({
-      s, month, ps, monthHols, sched,
+      s, month, sched,
       scopeStoreId: useStoreFilter ? scope.storeId : null,
       swapOff: (swapOffAll[s.id] || new Set()),
       today: todaySP(),
+      holsCache,
     });
     const t = led.totals;
     let paid = 0;
@@ -2297,6 +2367,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       detail = [];
       fullDays = [];
       for (const e of led.days) {
+        if (!e.inMonth) continue;
         if (!e.p || !e.inScope) continue;
         const c = e.calc;
         const conv = e.conv;
@@ -2321,6 +2392,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
       // folgas, feriados, faltas, trocas e futuros) — p/ o popup do nome.
       const zeroNum = { extra_min: 0, extra_label: fmtDur(0), late_min: 0, late_label: fmtDur(0), balance_min: 0, balance_label: fmtDur(0) };
       for (const e of led.days) {
+        if (!e.inMonth) continue;
         const c = e.calc;
         const conv = e.conv;
         const useCalc = !!(e.p && c && (e.inScope || e.status === 'outra-loja'));
