@@ -2348,7 +2348,7 @@ function modalExtraDetail(month, row) {
       <p class="muted" style="font-size:13px;margin:8px 0 0;text-align:center">Extra: <b class="mono">${esc(row.extra_label)}</b> • Trab.: <b class="mono">${esc(row.worked_label || '0h 0min')}</b> em ${row.days || 0} dia(s)${row.paid_min > 0 ? ` • Pago ${esc(row.paid_label)}` : ''}${nTrocas ? ` • 🔄 ${nTrocas} troca(s)` : ''}</p>
     </div>
     <div id="xList" style="overflow-y:auto;margin-top:10px;padding-right:2px;min-height:0">${groups.length ? groups.map((g) => weekBanner(g) + g.items.map(dayRow).join('')).join('') : '<div class="card empty">Sem registros neste mês.</div>'}</div>
-    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h (trabalhado), folga semanal 0h, feriado 5h. Extra = trabalhado − padrão. 🔄 = troca semanal automática 1–1 (sem desconto nem extra).</p>
+    <p class="muted" style="font-size:11px;flex:none;margin:8px 0 0">Padrão: seg–sex 10h, sáb 9h, dom 4h (trabalhado), folga = padrão normal do dia, feriado 5h. Extra = trabalhado − padrão. 🔄 = troca semanal automática 1–1 (sem desconto nem extra).</p>
     <button class="btn btn-ghost btn-big" id="cancel" style="flex:none">Fechar</button>
   </div></div>`;
   $('#cancel').onclick = closeModal;
@@ -2916,14 +2916,14 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
   maskHHMM($('#mIn')); maskHHMM($('#mOut'));
   // horário comercial do dia: entrada 08:00 + carga padrão
-  // (seg–sex 10h, sáb 9h, dom 4h, folga semanal 0h, feriado 5h ou carga especial da pessoa)
+  // (seg–sex 10h, sáb 9h, dom 4h, folga = padrão normal do dia, feriado 5h ou carga especial da pessoa)
   $('#mAuto').onclick = async () => {
     const btn = $('#mAuto');
     const old = btn.textContent;
     btn.disabled = true; btn.textContent = '…';
     try {
-      let sched = null, defaults = null, dayoff = null, scale = 'off';
-      try { const r = await api(`/api/users/${sellerId}/schedule`); sched = r.schedule; defaults = r.defaults; dayoff = r.dayoff_dow; scale = r.sunday_scale || 'off'; } catch {}
+      let sched = null, defaults = null;
+      try { const r = await api(`/api/users/${sellerId}/schedule`); sched = r.schedule; defaults = r.defaults; } catch {}
       let isHol = false;
       try { const d = await api(`/api/ponto/dia?date=${date}`); isHol = !!d.is_holiday; } catch {}
       const def = defaults || { weekday: 600, saturday: 540, sunday: 240, holiday: 300 };
@@ -2931,12 +2931,10 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
       let std;
       if (isHol) std = Number(sched?.holiday_min) || def.holiday;
       else if (dow === 0) std = Number(sched?.sunday_min) || def.sunday;
-      else if (dayoff != null && Number(dayoff) === dow) std = 0;
       else if (dow === 6) std = Number(sched?.saturday_min) || def.saturday;
       else std = Number(sched?.weekday_min) || def.weekday;
-      // folga semanal (padrão 0h): sugere o dia normal, p/ lançar troca/venda de folga
-      const suggestStd = std === 0 ? (Number(sched?.weekday_min) || def.weekday) : std;
-      const out = `${String(Math.floor((8 * 60 + suggestStd) / 60)).padStart(2, '0')}:${String((8 * 60 + suggestStd) % 60).padStart(2, '0')}`;
+      // folga trabalhada conta como dia normal: sugere o padrão normal do dia
+      const out = `${String(Math.floor((8 * 60 + std) / 60)).padStart(2, '0')}:${String((8 * 60 + std) % 60).padStart(2, '0')}`;
       $('#mIn').value = '08:00';
       $('#mOut').value = out;
       toast(`Horário comercial aplicado: 08:00 → ${out}.`);

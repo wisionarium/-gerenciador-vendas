@@ -1618,7 +1618,8 @@ function weekKey(dateISO) {
 // regra do dia p/ a pessoa: { std, rest } — rest = descanso esperado (folga semanal ou domingo de folga)
 // person: { dayoff_dow (0=Dom..6=Sáb|null), sunday_scale ('off'|'A'|'B'|'all') }; vazio = regra atual
 // - domingo trabalhado (escala): padrão 4h (sunday_min); passou = extra
-// - folga semanal (não-domingo): padrão 0h; tudo = extra (salvo troca semanal)
+// - folga semanal trabalhada: conta como dia normal (padrão normal do dia da semana;
+//   só o que passar vira extra). rest:true é só anotação + base da troca semanal.
 // - feriado e dia normal: regra atual
 function dayRule(dateISO, isHoliday, sched, person) {
   if (!isHoliday) {
@@ -1634,7 +1635,8 @@ function dayRule(dateISO, isHoliday, sched, person) {
       return { std: Number(sched?.sunday_min) || STD_DEFAULTS.sunday, rest: !work };
     }
     if (p.dayoff_dow != null && p.dayoff_dow !== '' && Number(p.dayoff_dow) === dow) {
-      return { std: 0, rest: true };
+      // folga trabalhada = dia normal (só o excedente vira extra); rest é só anotação
+      return { std: stdMinutesFor(dateISO, false, sched), rest: true };
     }
   }
   return { std: stdMinutesFor(dateISO, isHoliday, sched), rest: false };
