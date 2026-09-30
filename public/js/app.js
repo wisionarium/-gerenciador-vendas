@@ -20,7 +20,7 @@ async function api(path, opts = {}) {
     throw new Error('Sem conexão com o servidor. Deixe a janela do servidor aberta e recarregue a página (Ctrl+F5).');
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Erro inesperado.');
+  if (!res.ok) { const err = new Error(data.error || 'Erro inesperado.'); err.data = data; throw err; }
   return data;
 }
 
@@ -607,7 +607,7 @@ function modalPonto(onSaved) {
   let scanning = false;
   let done = false;
   const stopScan = () => { scanning = false; try { window.__qrScanner?.stop().catch(() => {}); } catch {} window.__qrScanner = null; if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} stream = null; } const v = $('#scanVideo'); if (v) { try { v.srcObject = null; v.innerHTML = ''; } catch {} } };
-  const punch = async (code) => {
+  const punch = async (code, confirmExit = false) => {
     if (done) return;
     done = true;
     scanning = false;
@@ -623,12 +623,28 @@ function modalPonto(onSaved) {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
+          ...(confirmExit ? { confirm_exit: true } : {}),
         }),
       });
       stopScan(); closeModal();
       toast(r.type === 'in' ? `Entrada registrada: ${r.punch.in_hhmm}` : (r.incomplete ? `Saída ${r.punch.out_hhmm} registrada sem entrada hoje — avise o admin para completar.` : `Saída registrada: ${r.punch.out_hhmm}`));
       if (onSaved) onSaved();
-    } catch (err) { done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err'); }
+    } catch (err) {
+      // saída muito rápida após a entrada: provável batida dupla — confirma antes
+      if (err && err.data && err.data.need_confirm) {
+        const inH = err.data.in_hhmm || '';
+        if (confirm(`Você bateu a ENTRADA às ${inH} há poucos minutos.\n\nTem certeza que está SAINDO agora?\n\nOK = registrar saída • Cancelar = manter só a entrada.`)) {
+          done = false;
+          if (st) st.textContent = 'Confirmando saída…';
+          return punch(code, true);
+        }
+        done = false;
+        if (st) st.textContent = 'Aponte para o QR…';
+        toast('Saída cancelada. Só a entrada foi mantida.', 'err');
+        return;
+      }
+      done = false; if (st) st.textContent = 'Aponte para o QR…'; toast(err.message, 'err');
+    }
   };
   // abre DIRETO no toque (sem telas no meio): o iOS só libera a câmera dentro do gesto
   $('#scanBtn').onclick = async () => {
@@ -1838,7 +1854,7 @@ async function viewPonto(app) {
     <div class="mini-pills" id="pontoTabs">
       <button data-tab="dia" class="${pontoTab === 'dia' ? 'on' : ''}">Dia</button>
       <button data-tab="extras" class="${pontoTab === 'extras' ? 'on' : ''}">Extras</button>
-      <button data-tab="escala" class="${pontoTab === 'escala' ? 'on' : ''}">Escala Dom</button>
+      <button data-tab="folgas" class="${pontoTab === 'folgas' ? 'on' : ''}">Folgas</button>
       <button data-tab="feriados" class="${pontoTab === 'feriados' ? 'on' : ''}">Feriados</button>
       <button data-tab="loja" class="${pontoTab === 'loja' ? 'on' : ''}">QR / Loja</button>
     </div>
@@ -1850,7 +1866,7 @@ async function viewPonto(app) {
     $$('#pontoTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
     if (tab === 'dia') return tabPontoDia(body, t);
     if (tab === 'extras') return tabPontoExtras(body, t);
-    if (tab === 'escala') return tabPontoEscala(body);
+    if (tab === 'folgas') return tabPontoFolgas(body);
     if (tab === 'feriados') return tabPontoFeriados(body);
     return tabPontoLoja(body);
   };
@@ -2783,36 +2799,44 @@ async function modalDocumentoPonto(month, r) {
 
 // Escala de domingos: próximos 8 domingos, quem trabalha x quem folga
 // (Escala A = semanas ímpares, B = pares). Ajuda a montar e conferir a escala.
-async function tabPontoEscala(body) {
-  body.innerHTML = `<div class="card"><p class="muted">Carregando escala…</p></div>`;
+async function tabPontoFolgas(body) {
+  body.innerHTML = `<div class="card"><p class="muted">Carregando folgas…</p></div>`;
   try {
     const { people } = await api('/api/ponto/escalas');
     const list = people || [];
-    const sundays = [];
-    const dt = new Date();
-    dt.setHours(12, 0, 0, 0);
-    while (sundays.length < 8) {
-      dt.setDate(dt.getDate() + 1);
-      if (dt.getDay() !== 0) continue;
-      sundays.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`);
+    const DOW = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+    // blocos Seg..Sáb pela folga fixa; Domingo pela escala (off = sempre, A/B = alternado)
+    const byDay = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 0: [] };
+    const noFixed = [];
+    for (const p of list) {
+      let hasWeekly = false;
+      if (p.dayoff_dow != null && byDay[p.dayoff_dow] !== undefined) { byDay[p.dayoff_dow].push(p); hasWeekly = true; }
+      const sc = p.sunday_scale || 'off';
+      if (sc === 'all') { if (!hasWeekly) noFixed.push(p); continue; }
+      byDay[0].push({ ...p, alt: sc === 'off' ? '' : sc });
     }
-    const cards = sundays.map((iso) => {
-      const odd = isoWeekJS(iso) % 2 === 1;
-      const work = list.filter((p) => sundayWorked(iso, p.sunday_scale || 'off'));
-      const off = list.filter((p) => !sundayWorked(iso, p.sunday_scale || 'off'));
+    const nameGrid = (arr) => `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 12px;margin-top:6px">` +
+      arr.map((p) => `<div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}${p.alt ? ` <span class="chip" style="font-size:10px;padding:1px 8px" title="Domingo alternado (escala ${esc(p.alt)})">alt. ${esc(p.alt)}</span>` : ''}</div>`).join('') + `</div>`;
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const cards = order.map((d) => {
+      const arr = byDay[d].slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
       return `<div class="sale-card" style="padding:10px 12px">
         <div class="row" style="justify-content:space-between;align-items:center">
-          <span><b>${esc(fmtDateBR(iso))} • Dom</b> <span class="chip" style="font-size:10px;padding:1px 8px" title="Semana ISO ${isoWeekJS(iso)}">Sem. ${odd ? 'ímpar (A)' : 'par (B)'}</span></span>
-          <span class="mono" style="font-size:13px;font-weight:800">${work.length} trab. • ${off.length} folga</span>
+          <b style="font-size:15px">${DOW[d]}</b>
+          <span class="mono" style="font-size:13px;font-weight:800">${arr.length} ${arr.length === 1 ? 'pessoa' : 'pessoas'}</span>
         </div>
-        <div class="muted" style="font-size:12px;margin-top:4px;overflow-wrap:anywhere"><b>Trabalham:</b> ${work.length ? esc(work.map((p) => p.name).join(' • ')) : '—'}</div>
-        <div class="muted" style="font-size:12px;overflow-wrap:anywhere"><b>Folgam:</b> ${off.length ? esc(off.map((p) => p.name).join(' • ')) : '—'}</div>
+        ${arr.length ? nameGrid(arr) : '<div class="muted" style="font-size:13px;margin-top:4px">Ninguém.</div>'}
       </div>`;
     }).join('');
+    const noFixCard = noFixed.length ? `<div class="sale-card" style="padding:10px 12px">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <b style="font-size:15px">Sem folga fixa</b>
+        <span class="mono" style="font-size:13px;font-weight:800">${noFixed.length} ${noFixed.length === 1 ? 'pessoa' : 'pessoas'}</span>
+      </div>${nameGrid(noFixed)}</div>` : '';
     body.innerHTML = `
       <div class="card">
-        <p class="muted" style="font-size:13px;margin-top:0">Escala A = domingos de semanas ímpares • B = pares. Configure por pessoa em Equipe → Editar.</p>
-        ${cards || '<div class="empty">Ninguém cadastrado.</div>'}
+        <p class="muted" style="font-size:13px;margin-top:0">Folga semanal de cada pessoa. Configure em Equipe → Editar.</p>
+        ${cards || '<div class="empty">Ninguém cadastrado.</div>'}${noFixCard}
       </div>`;
   } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }

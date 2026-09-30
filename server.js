@@ -1817,8 +1817,16 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   if (!p.check_in_at && p.check_out_at)
     return res.status(409).json({ error: 'Saída já registrada (sem entrada hoje). Fale com o admin para completar sua entrada.' });
   if (p.check_in_at && !p.check_out_at) {
-    if (Date.parse(now) - Date.parse(p.check_in_at) < 3 * 60000)
+    const sinceIn = Date.parse(now) - Date.parse(p.check_in_at);
+    if (sinceIn < 3 * 60000)
       return res.status(409).json({ error: 'Entrada registrada agora mesmo. Aguarde alguns minutos antes da saída.' });
+    // saída muito próxima da entrada: provável batida dupla sem querer —
+    // não registra direto; o app pergunta antes (confirm_exit confirma)
+    if (sinceIn < 30 * 60000 && !(req.body || {}).confirm_exit) {
+      const mins = Math.max(1, Math.round(sinceIn / 60000));
+      const inH = hhmmFromISO(p.check_in_at);
+      return res.status(409).json({ error: `Você bateu a ENTRADA às ${inH} (há ${mins}min). Se escaneou sem querer, cancele. Para registrar a SAÍDA mesmo assim, confirme.`, need_confirm: true, in_hhmm: inH });
+    }
     await db.run('UPDATE punches SET check_out_at=?, check_out_lat=?, check_out_lng=?, check_out_acc=?, updated_at=datetime(\'now\') WHERE id=?',
       now, nLat, nLng, acc, p.id);
     p = await db.get('SELECT * FROM punches WHERE id=?', p.id);
@@ -2124,11 +2132,12 @@ async function buildLedger({ s, month, sched, scopeStoreId = null, swapOff = new
       if (!best) break;
       free.delete(best);
       const m = best;
-      // o trabalhado assume o papel do faltado: padrão normal do dia faltado
-      const convStd = stdMinutesFor(m.date, false, sched);
+      // folga é só visual: o trabalhado mantém o padrão normal do PRÓPRIO dia
+      // (só o excedente vira extra). A troca só perdoa a falta (sem desconto).
       const wm = w.calc.worked_min;
-      const bal = wm - convStd;
-      w.conv = { std: convStd, extra: Math.max(0, bal), late: Math.min(0, bal), balance: bal };
+      const ownStd = w.calc.std_min;
+      const bal = wm - ownStd;
+      w.conv = { std: ownStd, extra: Math.max(0, bal), late: Math.min(0, bal), balance: bal };
       w.swap = { with: m.date, provisional };
       m.status = 'troca';
       m.swap = { with: w.date, provisional };
