@@ -1739,7 +1739,6 @@ function modalCallsAdmin() {
       </form>
     </div></div>`;
   $('#cancel').onclick = closeModal;
-  if (u && $('#delUser')) $('#delUser').onclick = () => { closeModal(); askDeleteUser(u, reload); };
     $('#fCallsA').onsubmit = async (e) => {
       e.preventDefault();
       try {
