@@ -2191,17 +2191,34 @@ async function tabPontoDia(body, t) {
 }
   // mês
 async function tabPontoExtras(body, t) {
+  const isAdmin = store.user?.role === 'admin';
+  let companies = [], stores = [];
+  try { companies = (await api('/api/companies')).companies || []; } catch {}
+  try { stores = (await api('/api/stores')).stores || []; } catch {}
+  let exCompany = '', exStore = '', exSort = 'saldo', exSearch = '';
+  let fullR = null;
+  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   body.innerHTML = `
     <div class="card">
       <div class="row" style="flex-wrap:nowrap;align-items:end">
         <div style="flex:1"><label>Mês</label><input type="month" id="pMonth" value="${t.slice(0, 7)}"></div>
         <button class="btn btn-primary" id="pMonthGo">Ver mês</button>
       </div>
+      <div class="row" style="margin-top:10px">
+        ${isAdmin ? `<div style="flex:1;min-width:140px"><label>Empresa</label><select id="exCompany" style="width:100%"><option value="">Todas</option>${companies.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}<option value="none">Sem empresa</option></select></div>` : ''}
+        ${isAdmin ? `<div style="flex:1;min-width:140px"><label>Loja</label><select id="exStore" style="width:100%"><option value="">Todas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>` : ''}
+        <div style="flex:1;min-width:140px"><label>Ordem</label><select id="exSort" style="width:100%">
+          <option value="saldo">Maior saldo</option>
+          <option value="pending">Maior a pagar</option>
+          <option value="az">A–Z</option>
+        </select></div>
+      </div>
       <div class="mini-pills" id="pMonthKind" style="margin-top:10px">
         <button data-k="" class="${!pontoKind ? 'on' : ''}">Todos</button>
         <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
         <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
       </div>
+      <div style="margin-top:10px"><input id="exSearch" placeholder="🔍 Buscar por nome…" autocomplete="off"></div>
       <div id="pMonthBody" style="margin-top:12px"><p class="muted">Carregando…</p></div>
     </div>`;
   $('#pMonthKind').onclick = (e) => {
@@ -2210,62 +2227,87 @@ async function tabPontoExtras(body, t) {
     $$('#pMonthKind button').forEach((x) => x.classList.toggle('on', x === b));
     loadMonth();
   };
+  const exCompanyEl = $('#exCompany');
+  if (exCompanyEl) exCompanyEl.onchange = () => { exCompany = exCompanyEl.value; loadMonth(); };
+  const exStoreEl = $('#exStore');
+  if (exStoreEl) exStoreEl.onchange = () => { exStore = exStoreEl.value; loadMonth(); };
+  $('#exSort').onchange = (e) => { exSort = e.target.value; renderExtras(); };
+  $('#exSearch').oninput = (e) => { exSearch = e.target.value; renderExtras(); };
+  // lista visível: busca por nome + ordenação (tudo local, sem recarregar)
+  const visibleRows = () => {
+    let rows = ((fullR && fullR.rows) || []).slice();
+    if (exSearch) { const q = norm(exSearch); rows = rows.filter((x) => norm(x.name).includes(q)); }
+    if (exSort === 'az') rows.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+    else if (exSort === 'pending') rows.sort((a, b) => (b.pending_min || 0) - (a.pending_min || 0));
+    return rows;
+  };
+  const renderExtras = () => {
+    const box = $('#pMonthBody');
+    if (!box || !fullR) return;
+    const month = $('#pMonth').value || t.slice(0, 7);
+    const vis = visibleRows();
+    const msg = `*HORAS EXTRAS — ${month.slice(5, 7)}/${month.slice(0, 4)}*\n` +
+      vis.map((x) => `• ${x.name}: ${x.extra_label}${x.paid_min > 0 ? ` (pago ${x.paid_label})` : ''}${x.pix_key ? ` • PIX ${x.pix_key}` : ''}`).join('\n');
+    const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
+    box.innerHTML = `
+      ${vis.length ? compactListHTML(vis, (x, i) => `
+        <div class="sale-card" data-extra-sid="${x.seller_id}" style="cursor:pointer;padding:10px 12px" title="Toque para ver o dia a dia">
+        <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
+          <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
+          <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
+          <span><b title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
+          <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
+          <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
+        </div>
+        ${x.pending_min > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
+        </div>`, exSearch ? vis.length : 8)
+      : `<div class="card empty">${exSearch ? `Nenhum nome encontrado para “${esc(exSearch)}”.` : 'Sem registros neste mês.'}</div>`}
+      ${vis.length ? `<p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o mês completo: datas, horários, folgas, feriados e faltas.</p>
+      <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
+      <input id="exPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
+      <div style="height:10px"></div>
+      <a class="btn btn-green btn-big" id="exWa" href="${waLink('')}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">Enviar no WhatsApp</a>
+      <div class="row" style="margin-top:8px">
+        <button class="btn btn-big" id="copyExtra" style="flex:1">Copiar resumo</button>
+        <button class="btn btn-big" id="printExtra" style="flex:1">🖨️ Imprimir / PDF</button>
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn btn-accent btn-big" id="docPonto" style="width:100%">🧾 Gerar documento p/ contador</button>
+      </div>` : ''}`;
+    bindCompactList(box);
+    const exPhone = $('#exPhone');
+    if (exPhone) exPhone.oninput = (e) => { localStorage.setItem('ec_wa_phone', e.target.value); $('#exWa').href = waLink(e.target.value); };
+    const copyBtn = $('#copyExtra');
+    if (copyBtn) copyBtn.onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Resumo copiado!'); };
+    const printBtn = $('#printExtra');
+    if (printBtn) printBtn.onclick = () => printExtrasPDF(month, { ...fullR, rows: vis });
+    const docBtn = $('#docPonto');
+    if (docBtn) docBtn.onclick = () => modalDocumentoPonto(month, fullR);
+    // popup: clique no nome/ cartão abre o mês completo da pessoa (direto do banco)
+    box.onclick = async (e) => {
+      if (e.target.closest('[data-more]')) return;
+      const px = e.target.closest('[data-pix]');
+      if (px) { await navigator.clipboard.writeText(px.dataset.pix || '').catch(() => {}); toast('Chave PIX copiada!'); return; }
+      const pe = e.target.closest('[data-payextra]');
+      if (pe) {
+        const person = (fullR.rows || []).find((x) => String(x.seller_id) === String(pe.dataset.payextra));
+        if (person) modalPagarExtra(person, month, loadMonth);
+        return;
+      }
+      const card = e.target.closest('[data-extra-sid]');
+      if (!card) return;
+      const sid = Number(card.dataset.extraSid);
+      if (!sid) return;
+      openPontoUserPopup(sid, month);
+    };
+  };
   const loadMonth = async () => {
     const month = $('#pMonth').value || t.slice(0, 7);
     const box = $('#pMonthBody');
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
-      const r = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}`);
-      const msg = `*HORAS EXTRAS — ${month.slice(5, 7)}/${month.slice(0, 4)}*\n` +
-        r.rows.map((x) => `• ${x.name}: ${x.extra_label}${x.paid_min > 0 ? ` (pago ${x.paid_label})` : ''}${x.pix_key ? ` • PIX ${x.pix_key}` : ''}`).join('\n');
-      const waLink = (phone) => `https://wa.me/${phone ? phone.replace(/\D/g, '') : ''}?text=${encodeURIComponent(msg)}`;
-      const fmtHM = (m) => `${Math.floor((m || 0) / 60)}h ${(m || 0) % 60}min`;
-      box.innerHTML = `
-        ${compactListHTML(r.rows, (x, i) => `
-          <div class="sale-card" data-extra-sid="${x.seller_id}" style="cursor:pointer;padding:10px 12px" title="Toque para ver o dia a dia">
-          <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-            <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><b class="mono muted">#${i + 1}</b>
-            <span class="ava sm">${x.avatar_url ? `<img src="${x.avatar_url}" alt="">` : esc((x.name || '?')[0].toUpperCase())}</span>
-            <span><b title="Ver mês completo">${esc(x.name)}</b> ${x.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(x.sector)}<br>
-            <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
-            <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
-          </div>
-          ${x.pending_min > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
-          </div>`, 8)}
-        <p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o mês completo: datas, horários, folgas, feriados e faltas.</p>
-        <label style="margin-top:14px">Número de destino (opcional, com DDI+DDD)</label>
-        <input id="exPhone" inputmode="tel" placeholder="Ex: 5511999999999" value="${esc(localStorage.getItem('ec_wa_phone') || '')}">
-        <div style="height:10px"></div>
-        <a class="btn btn-green btn-big" id="exWa" href="${waLink('')}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">Enviar no WhatsApp</a>
-        <div class="row" style="margin-top:8px">
-          <button class="btn btn-big" id="copyExtra" style="flex:1">Copiar resumo</button>
-          <button class="btn btn-big" id="printExtra" style="flex:1">🖨️ Imprimir / PDF</button>
-        </div>
-        <div style="margin-top:8px">
-          <button class="btn btn-accent btn-big" id="docPonto" style="width:100%">🧾 Gerar documento p/ contador</button>
-        </div>`;
-      bindCompactList(box);
-      $('#exPhone').oninput = (e) => { localStorage.setItem('ec_wa_phone', e.target.value); $('#exWa').href = waLink(e.target.value); };
-      $('#copyExtra').onclick = async () => { await navigator.clipboard.writeText(msg).catch(() => {}); toast('Resumo copiado!'); };
-      $('#printExtra').onclick = () => printExtrasPDF(month, r);
-      $('#docPonto').onclick = () => modalDocumentoPonto(month, r);
-      // popup: clique no nome/ cartão abre o mês completo da pessoa (direto do banco)
-      box.onclick = async (e) => {
-        if (e.target.closest('[data-more]')) return;
-        const px = e.target.closest('[data-pix]');
-        if (px) { await navigator.clipboard.writeText(px.dataset.pix || '').catch(() => {}); toast('Chave PIX copiada!'); return; }
-        const pe = e.target.closest('[data-payextra]');
-        if (pe) {
-          const person = r.rows.find((x) => String(x.seller_id) === String(pe.dataset.payextra));
-          if (person) modalPagarExtra(person, month, loadMonth);
-          return;
-        }
-        const card = e.target.closest('[data-extra-sid]');
-        if (!card) return;
-        const sid = Number(card.dataset.extraSid);
-        if (!sid) return;
-        openPontoUserPopup(sid, month);
-      };
+      fullR = await api(`/api/ponto/resumo?month=${month}${pontoKind ? `&kind=${pontoKind}` : ''}${exStore ? `&store_id=${exStore}` : ''}${exCompany ? `&company_id=${exCompany}` : ''}`);
+      renderExtras();
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
   $('#pMonthGo').onclick = loadMonth;
