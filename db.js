@@ -318,22 +318,24 @@ if (isRemote) {
     return rs.rows.map((r) => Object.fromEntries(r.map((v, i) => [cols[i], v])));
   };
 
-  // Vercel ↔ Turso às vezes derruba a conexão (ECONNRESET/TLS/timeout).
-  // Retenta só falha de TRANSPORTE (3 tentativas, backoff 200/500ms).
+  // Vercel ↔ Turso às vezes derruba a conexão (ECONNRESET/TLS/timeout) ou o
+  // storage do Turso falha de forma transitória (S3/InternalServerError).
+  // Retenta só falha de TRANSPORTE/STORAGE (4 tentativas, backoff 300ms/1s/2.5s).
   // Erro de lógica SQL (ex: CONSTRAINT) falha rápido, sem retry.
-  const isTransportError = (e) => {
+  const isRetryableError = (e) => {
     const msg = String((e && e.message) || e || '') + ' ' + String((e && e.cause && e.cause.message) || '');
-    return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|socket disconnected|TLS|network|terminated|timeout|input error/i.test(msg)
-      && !/SQLITE_CONSTRAINT|UNIQUE|CHECK constraint|no such (table|column)/i.test(msg);
+    if (/SQLITE_CONSTRAINT|UNIQUE|CHECK constraint|no such (table|column)/i.test(msg)) return false;
+    return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|socket disconnected|TLS|network|terminated|timeout|input error|S3 error|InternalServerError|failed to list objects|SQLITE_BUSY/i.test(msg);
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const BACKOFF = [300, 1000, 2500];
   const execTurso = async (sql, params, attempt = 1) => {
     try {
       return await client.execute({ sql, args: params });
     } catch (e) {
-      if (attempt < 3 && isTransportError(e)) {
-        console.log(`[db] retry Turso (tentativa ${attempt + 1}/3): ${String(e.message || e).slice(0, 100)}`);
-        await sleep(attempt === 1 ? 200 : 500);
+      if (attempt <= BACKOFF.length && isRetryableError(e)) {
+        console.log(`[db] retry Turso (tentativa ${attempt + 1}/${BACKOFF.length + 1}): ${String(e.message || e).slice(0, 100)}`);
+        await sleep(BACKOFF[attempt - 1]);
         return execTurso(sql, params, attempt + 1);
       }
       throw e;
