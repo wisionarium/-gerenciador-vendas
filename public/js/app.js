@@ -523,9 +523,9 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
-  // saldo da vendedora = comissão do MÊS vigente (cada mês conta do zero;
-  // o pendente geral continua no admin em Comissões). Meses anteriores ficam
-  // armazenados e podem ser revistos no seletor de mês do histórico.
+  // saldo da vendedora = comissão do MÊS vigente (cada mês conta do zero, sem
+  // "pendente"). Meses anteriores ficam armazenados e podem ser revistos no
+  // seletor de mês do histórico.
   api('/api/commissions/me').then((r) => { saldoCents = r.month_cents; renderSaldo(); }).catch(() => {});
   let saldoCents = null;
   let saldoHidden = false;
@@ -3118,20 +3118,19 @@ async function viewComissoes(app) {
     try {
       const s = await api(`/api/commissions/summary?month=${month}${commSector ? `&sector=${commSector}` : ''}${commStore ? `&store_id=${commStore}` : ''}`);
       box.innerHTML = `
-        <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Pendente geral: <b class="mono">${fmtBRL(s.total_pending_cents)}</b></p>
+        <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b></p>
         ${compactListHTML(s.rows, (r) => `
           <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
             <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name && r.store_name !== 'Sede' ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
             <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
           </div>
-          <div class="muted" style="font-size:13px;margin-top:2px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
           <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
           </div>`, 8)}
         <button class="btn btn-big" id="copyComm">Copiar resumo</button>`;
       bindCompactList(box);
       $('#copyComm').onclick = async () => {
-        const msg = `*COMISSÕES — ${month}*\nMês: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\nPendente: ${(s.total_pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n` +
-          s.rows.map((r) => `• ${r.name}: mês ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • pendente ${(r.pending_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}${r.pix_key ? ` • PIX ${r.pix_key}` : ''}`).join('\n');
+        const msg = `*COMISSÕES — ${month}*\nMês: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n` +
+          s.rows.map((r) => `• ${r.name}: ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}${r.pix_key ? ` • PIX ${r.pix_key}` : ''}`).join('\n');
         await navigator.clipboard.writeText(msg).catch(() => {});
         toast('Resumo copiado!');
       };
