@@ -523,7 +523,10 @@ async function viewSeller(app) {
   `;
   $('#goalEdit').onclick = () => modalGoal(target, mk);
   countUp($('#goalMonth'), monthSum.salesCredit);
-  api('/api/commissions/me').then((r) => { saldoCents = r.pending_cents; renderSaldo(); }).catch(() => {});
+  // saldo da vendedora = comissão do MÊS vigente (cada mês conta do zero;
+  // o pendente geral continua no admin em Comissões). Meses anteriores ficam
+  // armazenados e podem ser revistos no seletor de mês do histórico.
+  api('/api/commissions/me').then((r) => { saldoCents = r.month_cents; renderSaldo(); }).catch(() => {});
   let saldoCents = null;
   let saldoHidden = false;
   try { saldoHidden = localStorage.getItem('ec_saldo_hide_' + me.id) === '1'; } catch {}
@@ -1189,18 +1192,21 @@ async function viewHistory(app) {
           <button data-k="ontem">Ontem</button>
           <button data-k="hoje">Hoje</button>
         </div>
+        <div class="row" style="flex-wrap:nowrap;align-items:end;margin-top:8px">
+          <div style="flex:1"><label style="margin-top:0">Mês referente</label><input type="month" id="hMonthRef" max="${t.slice(0, 7)}"></div>
+          <button class="btn btn-primary" id="hMonthGo">Ver</button>
+        </div>
         <div class="search-row">
           <input id="hQ" placeholder="Buscar cliente, produto…">
         </div>
       </div>
+      <div id="hCommTotal"></div>
       <div id="hList"><div class="card empty">Carregando…</div></div>
     </div>
     <div id="hHoursWrap" style="display:none">
       <div class="card">
-        <div class="row" style="flex-wrap:nowrap;align-items:end">
-          <div style="flex:1"><label>Mês</label><input type="month" id="hhMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}"></div>
-          <button class="btn btn-primary" id="hhGo">Ver mês</button>
-        </div>
+        <div><label style="margin-top:0">Mês</label><input type="month" id="hhMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}" style="font-size:17px;padding:14px"></div>
+        <button class="btn btn-primary btn-big" id="hhGo" style="width:100%;margin-top:10px">Ver mês</button>
         <div id="hhTotal" style="margin-top:12px"></div>
         <div id="hhList" style="margin-top:8px"><p class="muted">Carregando…</p></div>
       </div>
@@ -1208,8 +1214,15 @@ async function viewHistory(app) {
     <div class="foot">Desenvolvido pela Wisionarium</div>
   `;
   let key = 'mes';
+  let customMonth = ''; // YYYY-MM escolhido no seletor (fica armazenado por mês)
+  const monthRangeYM = (ym) => {
+    const [y, m] = String(ym).split('-').map(Number);
+    const last = new Date(y, m, 0).getDate();
+    const p2 = (n) => String(n).padStart(2, '0');
+    return { from: `${y}-${p2(m)}-01`, to: `${y}-${p2(m)}-${p2(last)}`, label: `${p2(m)}/${y}` };
+  };
   const load = async () => {
-    const r = key === 'mes' ? { ...monthRange(0), label: 'Mês' } : rangeFor(key);
+    const r = customMonth ? monthRangeYM(customMonth) : (key === 'mes' ? { ...monthRange(0), label: 'Mês' } : rangeFor(key));
     const qs = new URLSearchParams({ from: r.from, to: r.to });
     if ($('#hQ').value.trim()) qs.set('q', $('#hQ').value.trim());
     try {
@@ -1222,11 +1235,35 @@ async function viewHistory(app) {
     } catch (e) {
       $('#hList').innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
     }
+    // comissão do mês em destaque (só em visão mensal; cada mês conta do zero)
+    const commBox = $('#hCommTotal');
+    if (commBox) {
+      const ym = customMonth || (key === 'mes' ? t.slice(0, 7) : '');
+      if (ym) {
+        try {
+          const c = await api(`/api/commissions/me?month=${ym}`);
+          commBox.innerHTML = `
+          <div class="card" style="margin-bottom:12px"><div style="text-align:center;padding:8px 8px 10px">
+            <div style="font-size:12px;color:#4b5563">Comissão no mês (${esc(ym.slice(5, 7))}/${esc(ym.slice(0, 4))})</div>
+            <div class="mono" style="font-size:38px;font-weight:800;line-height:1.25">${fmtBRL(Number(c.month_cents) || 0)}</div>
+          </div></div>`;
+        } catch { commBox.innerHTML = ''; }
+      } else commBox.innerHTML = '';
+    }
   };
   $('#hPills').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     $$('#hPills button').forEach((x) => x.classList.toggle('on', x === b));
-    key = b.dataset.k; load();
+    key = b.dataset.k; customMonth = '';
+    const mi = $('#hMonthRef'); if (mi) mi.value = '';
+    load();
+  };
+  $('#hMonthGo').onclick = () => {
+    const v = $('#hMonthRef').value;
+    if (!v) return toast('Escolha o mês.', 'err');
+    customMonth = v; key = 'mes';
+    $$('#hPills button').forEach((x) => x.classList.toggle('on', x.dataset.k === 'mes'));
+    load();
   };
   let deb = null;
   $('#hQ').oninput = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
@@ -2259,7 +2296,6 @@ async function tabPontoExtras(body, t) {
           <span class="muted" style="font-size:12px">${x.pix_key ? `<b class="mono">${esc(x.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(x.pix_key)}">copiar</button>` : 'sem chave PIX'}</span></span></span>
           <span style="text-align:right"><b class="mono" style="font-size:17px">${x.extra_label}</b>${x.paid_min > 0 ? `<br><span class="muted" style="font-size:11px">Pago ${esc(x.paid_label)} • Restam ${esc(x.pending_label)}</span>` : ''}</span>
         </div>
-        ${x.pending_min > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-payextra="${x.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
         </div>`, exSearch ? vis.length : 8)
       : `<div class="card empty">${exSearch ? `Nenhum nome encontrado para “${esc(exSearch)}”.` : 'Sem registros neste mês.'}</div>`}
       ${vis.length ? `<p class="muted" style="font-size:12px;margin:8px 2px 0">👆 Toque num nome para ver o mês completo: datas, horários, folgas, feriados e faltas.</p>
@@ -2288,12 +2324,6 @@ async function tabPontoExtras(body, t) {
       if (e.target.closest('[data-more]')) return;
       const px = e.target.closest('[data-pix]');
       if (px) { await navigator.clipboard.writeText(px.dataset.pix || '').catch(() => {}); toast('Chave PIX copiada!'); return; }
-      const pe = e.target.closest('[data-payextra]');
-      if (pe) {
-        const person = (fullR.rows || []).find((x) => String(x.seller_id) === String(pe.dataset.payextra));
-        if (person) modalPagarExtra(person, month, loadMonth);
-        return;
-      }
       const card = e.target.closest('[data-extra-sid]');
       if (!card) return;
       const sid = Number(card.dataset.extraSid);
@@ -3096,7 +3126,6 @@ async function viewComissoes(app) {
           </div>
           <div class="muted" style="font-size:13px;margin-top:2px">Pendente: <b class="mono">${fmtBRL(r.pending_cents)}</b></div>
           <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
-          ${r.pending_cents > 0 ? `<div class="sale-foot" style="margin-top:4px"><button class="btn" data-pay="${r.seller_id}">Marcar como pago</button></div>` : `<div class="sale-foot" style="margin-top:4px;visibility:hidden" aria-hidden="true"><button class="btn" tabindex="-1">Marcar como pago</button></div>`}
           </div>`, 8)}
         <button class="btn btn-big" id="copyComm">Copiar resumo</button>`;
       bindCompactList(box);
@@ -3106,10 +3135,6 @@ async function viewComissoes(app) {
         await navigator.clipboard.writeText(msg).catch(() => {});
         toast('Resumo copiado!');
       };
-      $$('#cBody [data-pay]').forEach((b) => (b.onclick = () => {
-        const row = s.rows.find((x) => String(x.seller_id) === String(b.dataset.pay));
-        modalPagar(row, month, () => { load(); loadPays(); });
-      }));
       $$('#cBody [data-pix]').forEach((b) => (b.onclick = async (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
