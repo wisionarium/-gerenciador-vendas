@@ -1506,16 +1506,25 @@ app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, re
     } catch { sc = null; }
     const credit = sc ? Number(sc.t) : 0;
     const count = Number(cnt.t) || 0;
+    let disc = { q: 0, c: 0 };
+    try {
+      disc = await db.get('SELECT COALESCE(SUM(qty),0) AS q, COALESCE(SUM(amount_cents),0) AS c FROM commission_discounts WHERE seller_id=? AND month_disc=?', s.id, month) || disc;
+    } catch { disc = { q: 0, c: 0 }; }
+    const discQty = Number(disc.q) || 0;
+    const discCents = Number(disc.c) || 0;
+    const gross = Number(m.t);
+    const net = Math.max(0, gross - discCents);
     return {
       seller_id: s.id, name: s.name, sector: s.sector || 'online', store_id: s.store_id, store_name: s.store_name || 'Sede',
       active: !!s.active, avatar_url: s.avatar_url || null, pix_key: s.pix_key || null,
-      month_cents: Number(m.t), paid_month_cents: Number(pm.t),
+      month_cents: gross, paid_month_cents: Number(pm.t),
       sales_count: count, sales_credit: credit > 0 ? credit : count,
+      disc_qty: discQty, disc_cents: discCents, net_cents: net,
       pending_cents: await pendingCents(s.id),
     };
   }));
   const tot = (k) => rows.reduce((a, r) => a + r[k], 0);
-  res.json({ month, sector: validSector(sector) ? sector : 'all', rows, total_month_cents: tot('month_cents'), total_pending_cents: tot('pending_cents') });
+  res.json({ month, sector: validSector(sector) ? sector : 'all', rows, total_month_cents: tot('month_cents'), total_disc_cents: tot('disc_cents'), total_net_cents: tot('net_cents'), total_pending_cents: tot('pending_cents') });
 }));
 
 // histórico de pagamentos (admin)
@@ -1550,6 +1559,94 @@ app.post('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, r
   const r = await db.run('INSERT INTO payouts (seller_id, month, amount_cents, created_by) VALUES (?,?,?,?)',
     seller.id, m, cents, req.user.id);
   res.status(201).json({ payout: await db.get('SELECT * FROM payouts WHERE id=?', r.lastInsertRowid), pending_cents: pend - cents });
+}));
+
+// ---------- DESCONTOS DE COMISSÃO (cancelamento mensal) ----------
+// Lança qtd (0,5 = dividida) num mês qualquer, sem mexer na venda original.
+// month_disc = mês onde desconta; month_ref = mês da venda (só registro).
+function discountBaseFor(seller, storeRow) {
+  let isMain = true;
+  if (storeRow) isMain = !!storeRow.is_main;
+  else if (seller && seller.store_name) isMain = seller.store_name === 'Sede';
+  else if (seller && seller.store_id != null) isMain = false;
+  if (!isMain) return 2500;
+  return ((seller && seller.sector) || 'online') === 'presencial' ? 3500 : 2500;
+}
+function discountCentsFromQty(qty, base) {
+  const intPart = Math.floor(qty);
+  const frac = qty - intPart;
+  let total = intPart * base;
+  if (frac >= 0.75) total += base;
+  else if (frac >= 0.25) total += Math.round(base / 2);
+  return total;
+}
+function parseDiscQty(v) {
+  const q = Math.round(Number(String(v ?? '').replace(',', '.')) * 100) / 100;
+  if (!Number.isFinite(q) || q <= 0 || q > 1000) return { error: 'Qtd inválida (use 0,5 para dividida).' };
+  if (Math.abs(q * 2 - Math.round(q * 2)) > 1e-9) return { error: 'Qtd deve ser múltipla de 0,5.' };
+  return { qty: Math.round(q * 100) / 100 };
+}
+app.get('/api/commissions/discounts', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { month, seller_id } = req.query;
+  const conds = [];
+  const params = [];
+  if (month && /^\d{4}-\d{2}$/.test(month)) { conds.push('d.month_disc=?'); params.push(month); }
+  if (seller_id) { conds.push('d.seller_id=?'); params.push(Number(seller_id)); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const rows = await db.all(
+    `SELECT d.*, u.name AS seller_name, s.name AS store_name FROM commission_discounts d
+     JOIN users u ON u.id=d.seller_id LEFT JOIN stores s ON s.id=u.store_id ${where}
+     ORDER BY d.month_disc DESC, u.name LIMIT 500`, ...params);
+  res.json({ discounts: rows });
+}));
+app.post('/api/commissions/discounts', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { seller_id, month_disc, month_ref, qty, amount_cents, note } = req.body || {};
+  const seller = await db.get("SELECT u.*, s.name AS store_name, s.is_main FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=? AND u.role='seller'", Number(seller_id));
+  if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  if (!month_disc || !/^\d{4}-\d{2}$/.test(month_disc)) return res.status(400).json({ error: 'Mês do desconto inválido.' });
+  if (month_ref && month_ref !== '' && !/^\d{4}-\d{2}$/.test(month_ref)) return res.status(400).json({ error: 'Mês de referência inválido.' });
+  const pq = parseDiscQty(qty);
+  if (pq.error) return res.status(400).json({ error: pq.error });
+  let cents;
+  if (amount_cents != null && amount_cents !== '') {
+    cents = Math.round(Number(amount_cents));
+    if (!Number.isFinite(cents) || cents <= 0 || cents > 10000000) return res.status(400).json({ error: 'Valor inválido.' });
+  } else {
+    cents = discountCentsFromQty(pq.qty, discountBaseFor(seller, seller.is_main != null ? { is_main: seller.is_main } : null));
+  }
+  const r = await db.run('INSERT INTO commission_discounts (seller_id, month_disc, month_ref, qty, amount_cents, note, created_by) VALUES (?,?,?,?,?,?,?)',
+    seller.id, month_disc, month_ref || '', pq.qty, cents, String(note || '').slice(0, 140), req.user.id);
+  res.status(201).json({ discount: await db.get('SELECT * FROM commission_discounts WHERE id=?', r.lastInsertRowid) });
+}));
+app.put('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const cur = await db.get('SELECT * FROM commission_discounts WHERE id=?', Number(req.params.id));
+  if (!cur) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+  const seller = await db.get("SELECT u.*, s.name AS store_name, s.is_main FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=? AND u.role='seller'", Number(req.body?.seller_id ?? cur.seller_id));
+  if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  const month_disc = req.body?.month_disc ?? cur.month_disc;
+  const month_ref = req.body?.month_ref ?? cur.month_ref;
+  if (!/^\d{4}-\d{2}$/.test(month_disc)) return res.status(400).json({ error: 'Mês do desconto inválido.' });
+  if (month_ref && month_ref !== '' && !/^\d{4}-\d{2}$/.test(month_ref)) return res.status(400).json({ error: 'Mês de referência inválido.' });
+  const pq = parseDiscQty(req.body?.qty ?? cur.qty);
+  if (pq.error) return res.status(400).json({ error: pq.error });
+  let cents;
+  if (req.body?.amount_cents != null && req.body.amount_cents !== '') {
+    cents = Math.round(Number(req.body.amount_cents));
+    if (!Number.isFinite(cents) || cents <= 0 || cents > 10000000) return res.status(400).json({ error: 'Valor inválido.' });
+  } else if (req.body?.qty != null) {
+    cents = discountCentsFromQty(pq.qty, discountBaseFor(seller, seller.is_main != null ? { is_main: seller.is_main } : null));
+  } else {
+    cents = Number(cur.amount_cents);
+  }
+  await db.run('UPDATE commission_discounts SET seller_id=?, month_disc=?, month_ref=?, qty=?, amount_cents=?, note=? WHERE id=?',
+    seller.id, month_disc, month_ref || '', pq.qty, cents, String(req.body?.note ?? cur.note ?? '').slice(0, 140), cur.id);
+  res.json({ discount: await db.get('SELECT * FROM commission_discounts WHERE id=?', cur.id) });
+}));
+app.delete('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const cur = await db.get('SELECT * FROM commission_discounts WHERE id=?', Number(req.params.id));
+  if (!cur) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+  await db.run('DELETE FROM commission_discounts WHERE id=?', cur.id);
+  res.json({ ok: true });
 }));
 
 // ---------- PONTO (QR + localização) ----------

@@ -3100,6 +3100,8 @@ async function viewComissoes(app) {
       <div style="height:10px"></div><button class="btn btn-primary" id="cGo">Ver mês</button>
       <div id="cBody" style="margin-top:12px"></div>
     </div>
+    <h3 class="section-title">Cancelamento mensal</h3>
+    <div class="card"><div id="discBody"><p class="muted">Carregando…</p></div></div>
     <h3 class="section-title">Pagamentos</h3>
     <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
@@ -3117,33 +3119,87 @@ async function viewComissoes(app) {
     box.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const s = await api(`/api/commissions/summary?month=${month}${commSector ? `&sector=${commSector}` : ''}${commStore ? `&store_id=${commStore}` : ''}`);
+      const totDisc = s.total_disc_cents ?? s.rows.reduce((a, r) => a + (Number(r.disc_cents) || 0), 0);
+      const totNet = s.total_net_cents ?? (Number(s.total_month_cents || 0) - totDisc);
+      const totDiscTxt = (Number(totDisc) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const totNetTxt = (Math.max(0, Number(totNet)) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
       box.innerHTML = `
-        <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b></p>
+        <p class="muted" style="font-size:13px">Bruto: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Descontos: <b class="mono">-${totDiscTxt}</b> • Líquido: <b class="mono">${totNetTxt}</b></p>
         ${compactListHTML(s.rows, (r) => {
           const qtd = fmtV(r.sales_credit ?? r.sales_count ?? 0);
+          const dq = Number(r.disc_qty) || 0;
+          const dc = Number(r.disc_cents) || 0;
+          const net = r.net_cents != null ? Number(r.net_cents) : Math.max(0, Number(r.month_cents || 0) - dc);
           return `
           <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
             <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
-            <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
+            <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(net)}</span>
           </div>
-          <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${qtd} vendas • ${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${qtd} vendas${dq > 0 ? ` • ${fmtV(dq)} canc. (-${fmtBRL(dc)})` : ''} • ${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
+          ${dq > 0 || Number(r.month_cents || 0) > 0 ? `<div class="muted" style="font-size:11px;margin-top:2px">Bruto ${fmtBRL(r.month_cents)}${dq > 0 ? ` • Desconto -${fmtBRL(dc)}` : ''} <button class="btn" style="font-size:11px;padding:2px 8px" data-disc="${r.seller_id}">lançar cancelamento</button></div>` : `<div style="margin-top:4px"><button class="btn" style="font-size:11px;padding:2px 8px" data-disc="${r.seller_id}">lançar cancelamento</button></div>`}
           </div>`;
         }, 8)}
         <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-big" id="copyComm" style="flex:1">Copiar resumo</button><button class="btn btn-big btn-primary" id="pdfComm" style="flex:1">Baixar PDF comissão</button></div>`;
       bindCompactList(box);
       $('#copyComm').onclick = async () => {
-        const msg = `*COMISSÕES — ${month}*\nMês: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n` +
-          s.rows.map((r) => `• ${r.name} - vendas ${fmtV(r.sales_credit ?? r.sales_count ?? 0)} - ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}${r.pix_key ? ` • PIX ${r.pix_key}` : ''}`).join('\n');
+        const msg = `*COMISSÕES — ${month}*\nBruto: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • Descontos: -${totDiscTxt} • Líquido: ${totNetTxt}\n` +
+          s.rows.map((r) => {
+            const dq2 = Number(r.disc_qty) || 0;
+            const dc2 = Number(r.disc_cents) || 0;
+            const net2 = r.net_cents != null ? Number(r.net_cents) : Math.max(0, Number(r.month_cents || 0) - dc2);
+            return `• ${r.name} - vendas ${fmtV(r.sales_credit ?? r.sales_count ?? 0)} - canc ${fmtV(dq2)} (-${(dc2 / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) - comissão ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} - receber ${(net2 / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+          }).join('\n');
         await navigator.clipboard.writeText(msg).catch(() => {});
         toast('Resumo copiado!');
       };
-      $('#pdfComm').onclick = () => openCommissionsPDF(s.rows, month, s.total_month_cents);
+      $('#pdfComm').onclick = () => openCommissionsPDF(s.rows, month, s.total_month_cents, totDisc, totNet);
       $$('#cBody [data-pix]').forEach((b) => (b.onclick = async (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
         toast('Chave PIX copiada!');
       }));
+      $$('#cBody [data-disc]').forEach((b) => (b.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        modalDiscount(null, s.rows, month, Number(b.dataset.disc), load);
+      }));
+      await loadDiscs(month);
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const loadDiscs = async (month) => {
+    const el = $('#discBody');
+    if (!el) return;
+    el.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const { discounts } = await api(`/api/commissions/discounts?month=${month}`);
+      const totQ = (discounts || []).reduce((a, d) => a + Number(d.qty || 0), 0);
+      const totC = (discounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
+      el.innerHTML = `
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <span class="muted" style="font-size:13px">Mês desconto: <b class="mono">${esc(month)}</b> • Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b></span>
+          <button class="btn btn-primary" id="discAdd">+ Lançar cancelamento</button>
+        </div>
+        <div style="height:8px"></div>
+        ${(discounts || []).length ? discounts.map((d) => `
+          <div class="row" style="justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:8px 0">
+            <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span></div>
+            <div class="row" style="align-items:center;gap:6px"><b class="mono">-${fmtBRL(d.amount_cents)}</b>
+              <button class="btn" data-dedit="${d.id}">Editar</button>
+              <button class="btn btn-ghost" data-ddel="${d.id}">🗑️</button>
+            </div>
+          </div>`).join('') : '<div class="empty">Sem cancelamentos neste mês.</div>'}`;
+      $('#discAdd').onclick = () => modalDiscount(null, null, month, null, async () => { await load(); });
+      $$('#discBody [data-dedit]').forEach((b) => (b.onclick = async () => {
+        try {
+          const cur = (discounts || []).find((x) => String(x.id) === String(b.dataset.dedit));
+          modalDiscount(cur, null, month, cur?.seller_id, async () => { await load(); });
+        } catch (err) { toast(err.message, 'err'); }
+      }));
+      $$('#discBody [data-ddel]').forEach((b) => (b.onclick = async () => {
+        if (!confirm('Excluir este cancelamento? O líquido volta a subir.')) return;
+        try { await api(`/api/commissions/discounts/${b.dataset.ddel}`, { method: 'DELETE' }); toast('Excluído!'); await load(); }
+        catch (err) { toast(err.message, 'err'); }
+      }));
+    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
   const loadPays = async () => {
     try {
@@ -3160,30 +3216,118 @@ async function viewComissoes(app) {
   await loadPays();
 }
 
-function openCommissionsPDF(rows, month, totalCents) {
+function openCommissionsPDF(rows, month, totalCents, totDisc, totNet) {
   const monthLabel = (() => {
     const m = String(month || '').match(/^(\d{4})-(\d{2})$/);
     if (!m) return String(month || '');
     const nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
     return `${nomes[Number(m[2]) - 1]} de ${m[1]}`;
   })();
-  const totalTxt = ((Number(totalCents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const brl = (c) => ((Number(c) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const totalTxt = brl(totalCents);
+  const discTxt = brl(totDisc ?? (rows || []).reduce((a, r) => a + (Number(r.disc_cents) || 0), 0));
+  const netTxt = brl(Math.max(0, Number(totNet ?? ((Number(totalCents) || 0) - (Number(totDisc) || 0)))));
   const trs = (rows || []).map((r) => {
     const qtd = fmtV(r.sales_credit ?? r.sales_count ?? 0);
-    const valor = ((Number(r.month_cents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    return `<tr><td>${esc(r.name)}</td><td>${esc(r.store_name || '—')}</td><td style="text-align:center">${esc(qtd)}</td><td>${esc(r.pix_key || '—')}</td><td style="text-align:right;font-weight:700">${esc(valor)}</td></tr>`;
+    const dq = Number(r.disc_qty) || 0;
+    const dc = Number(r.disc_cents) || 0;
+    const net = r.net_cents != null ? Number(r.net_cents) : Math.max(0, Number(r.month_cents || 0) - dc);
+    const canc = dq > 0 ? `${fmtV(dq)} (-${brl(dc)})` : '0';
+    return `<tr><td>${esc(r.name)}</td><td>${esc(r.store_name || '—')}</td><td style="text-align:center">${esc(qtd)}</td><td>${esc(r.pix_key || '—')}</td><td style="text-align:center">${esc(canc)}</td><td style="text-align:right">${esc(brl(r.month_cents))}</td><td style="text-align:right;font-weight:700">${esc(brl(net))}</td></tr>`;
   }).join('');
   const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comissões — ${esc(monthLabel)}</title>
-  <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h1{font-size:18px;margin:0}h1 small{font-weight:400;color:#555}p.total{margin:6px 0 14px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #999;padding:8px}th{background:#f0f0f0;text-align:left}tfoot td{font-weight:700}</style></head><body>
-  <h1>COMISSÕES — ${esc(monthLabel)}</h1><p class="total">Total do mês: ${esc(totalTxt)}</p>
-  <table><thead><tr><th>Vendedor</th><th>Loja</th><th style="text-align:center">Vendas</th><th>Chave PIX</th><th style="text-align:right">Valor a receber</th></tr></thead>
-  <tbody>${trs || '<tr><td colspan="5">Sem comissões neste mês.</td></tr>'}</tbody>
-  <tfoot><tr><td colspan="4">Total</td><td style="text-align:right">${esc(totalTxt)}</td></tr></tfoot></table>
+  <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h1{font-size:18px;margin:0}p.total{margin:6px 0 14px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #999;padding:7px}th{background:#f0f0f0;text-align:left}tfoot td{font-weight:700}</style></head><body>
+  <h1>COMISSÕES — ${esc(monthLabel)}</h1><p class="total">Bruto: ${esc(totalTxt)} • Descontos: -${esc(discTxt)} • Líquido: ${esc(netTxt)}</p>
+  <table><thead><tr><th>Vendedor</th><th>Loja</th><th style="text-align:center">Vendas</th><th>Chave PIX</th><th style="text-align:center">Cancelamentos</th><th style="text-align:right">Comissão</th><th style="text-align:right">Valor a receber</th></tr></thead>
+  <tbody>${trs || '<tr><td colspan="7">Sem comissões neste mês.</td></tr>'}</tbody>
+  <tfoot><tr><td colspan="5">Total</td><td style="text-align:right">${esc(totalTxt)}</td><td style="text-align:right">${esc(netTxt)}</td></tr></tfoot></table>
   <script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`;
   const w = window.open('', '_blank');
   if (!w) { toast('Permita pop-up para baixar o PDF.', 'err'); return; }
   w.document.write(html);
   w.document.close();
+}
+
+function discBasePreview(seller) {
+  if (!seller) return 2500;
+  const isMain = !seller.store_name || seller.store_name === 'Sede';
+  if (!isMain) return 2500;
+  return (seller.sector || 'online') === 'presencial' ? 3500 : 2500;
+}
+function discPreviewCents(qty, base) {
+  const q = Number(String(qty ?? '').replace(',', '.'));
+  if (!Number.isFinite(q) || q <= 0) return 0;
+  const ip = Math.floor(q);
+  const fr = q - ip;
+  let t = ip * base;
+  if (fr >= 0.75) t += base;
+  else if (fr >= 0.25) t += Math.round(base / 2);
+  return t;
+}
+function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload) {
+  const list = Array.isArray(sellers) && sellers.length ? sellers : null;
+  const selOpts = list
+    ? list.map((s) => `<option value="${s.seller_id}" ${String(presetSellerId ?? cur?.seller_id ?? '') === String(s.seller_id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')
+    : `<option value="${esc(String(presetSellerId ?? cur?.seller_id ?? ''))}">${esc(cur?.seller_name || 'Vendedora')}</option>`;
+  const needSellerList = !list;
+  $('#modalRoot').innerHTML = `
+  <div class="modal-bg" id="mbg"><div class="modal">
+    <h3 style="margin:0">${cur ? 'Editar cancelamento' : 'Lançar cancelamento'}</h3>
+    <p class="muted" style="font-size:13px">Desconta da comissão sem cancelar a venda. Qtd aceita 0,5 (dividida). Valor calculado sozinho.</p>
+    <form id="fDisc">
+      <label>Vendedora *</label><select id="dSeller" ${cur ? 'disabled' : ''}>${selOpts}</select>
+      <label>Mês do desconto *</label><input id="dMonthDisc" type="month" required value="${esc(cur?.month_disc || monthDisc || '')}">
+      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || '')}">
+      <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : '')}">
+      <p class="muted" style="font-size:12px;margin:4px 0" id="dPrev"></p>
+      <label><span style="font-weight:normal;font-size:12px"><input type="checkbox" id="dManual" style="width:auto"> editar valor manual</span></label>
+      <label>Valor a descontar (R$) *</label><input id="dVal" inputmode="decimal" placeholder="Calculado sozinho" value="${esc(cur ? (Number(cur.amount_cents) / 100).toFixed(2).replace('.', ',') : '')}">
+      <label>Motivo/obs</label><input id="dNote" maxlength="140" placeholder="Ex: cliente desistiu bike mês 4" value="${esc(cur?.note || '')}">
+      <div style="height:12px"></div>
+      <button class="btn btn-accent btn-big" type="submit">Salvar</button>
+      <button class="btn btn-ghost btn-big" type="button" id="cancel">Cancelar</button>
+    </form>
+  </div></div>`;
+  $('#cancel').onclick = closeModal;
+  $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  const sellerById = (id) => (list || []).find((x) => String(x.seller_id) === String(id));
+  const refreshPrev = () => {
+    const q = $('#dQty').value;
+    const manual = $('#dManual').checked;
+    const s = sellerById($('#dSeller').value);
+    const base = discBasePreview(s || { sector: 'online', store_name: 'Sede' });
+    const auto = discPreviewCents(q, base) / 100;
+    $('#dPrev').textContent = `Valor calculado: ${auto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} (base ${base === 3500 ? 'presencial R$35/R$17,50' : 'R$25/R$12,50'})`;
+    if (!manual) $('#dVal').value = auto ? auto.toFixed(2).replace('.', ',') : '';
+    $('#dVal').disabled = !manual;
+  };
+  $('#dQty').oninput = refreshPrev;
+  $('#dSeller').onchange = refreshPrev;
+  $('#dManual').onchange = refreshPrev;
+  refreshPrev();
+  if (needSellerList) {
+    api('/api/commissions/summary?month=' + encodeURIComponent(cur?.month_disc || monthDisc || todayISO().slice(0, 7))).then((s) => {
+      const el = $('#dSeller');
+      if (!el || !s.rows) return;
+      el.innerHTML = s.rows.map((x) => `<option value="${x.seller_id}" ${String(presetSellerId ?? cur?.seller_id ?? '') === String(x.seller_id) ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
+      refreshPrev();
+    }).catch(() => {});
+  }
+  $('#fDisc').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const seller_id = Number($('#dSeller').value);
+      const month_disc = $('#dMonthDisc').value;
+      const month_ref = $('#dMonthRef').value || '';
+      const manual = $('#dManual').checked;
+      const valStr = String($('#dVal').value || '').trim().replace(',', '.');
+      const body = { seller_id, month_disc, month_ref, qty: String($('#dQty').value).replace(',', '.'), note: $('#dNote').value };
+      if (manual && valStr !== '') body.amount_cents = Math.round(Number(valStr) * 100);
+      if (cur) await api(`/api/commissions/discounts/${cur.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      else await api('/api/commissions/discounts', { method: 'POST', body: JSON.stringify(body) });
+      closeModal(); toast('Cancelamento salvo!'); if (reload) reload();
+    } catch (err) { toast(err.message, 'err'); }
+  };
 }
 
 function modalPagar(row, month, reload) {

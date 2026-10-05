@@ -188,6 +188,20 @@ const SCHEMA = [
     UNIQUE (sale_id, seller_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_comm_seller_month ON commissions(seller_id, month)`,
+  // descontos de comissão (cancelamento mensal): lança qtd (0,5 = dividida) num mês qualquer,
+  // sem mexer na venda original. month_disc = mês onde desconta; month_ref = mês da venda (só registro).
+  `CREATE TABLE IF NOT EXISTS commission_discounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    month_disc TEXT NOT NULL,
+    month_ref TEXT NOT NULL DEFAULT '',
+    qty REAL NOT NULL CHECK (qty > 0 AND qty <= 1000),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    note TEXT NOT NULL DEFAULT '',
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_disc_seller_month ON commission_discounts(seller_id, month_disc)`,
   // baixas de horas extras pagas/compensadas pelo admin (em minutos)
   `CREATE TABLE IF NOT EXISTS extra_payouts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
