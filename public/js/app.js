@@ -3119,21 +3119,25 @@ async function viewComissoes(app) {
       const s = await api(`/api/commissions/summary?month=${month}${commSector ? `&sector=${commSector}` : ''}${commStore ? `&store_id=${commStore}` : ''}`);
       box.innerHTML = `
         <p class="muted" style="font-size:13px">Mês: <b class="mono">${fmtBRL(s.total_month_cents)}</b></p>
-        ${compactListHTML(s.rows, (r) => `
+        ${compactListHTML(s.rows, (r) => {
+          const qtd = fmtV(r.sales_credit ?? r.sales_count ?? 0);
+          return `
           <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
-            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name && r.store_name !== 'Sede' ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
+            <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
             <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(r.month_cents)}</span>
           </div>
-          <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
-          </div>`, 8)}
-        <button class="btn btn-big" id="copyComm">Copiar resumo</button>`;
+          <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${qtd} vendas • ${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
+          </div>`;
+        }, 8)}
+        <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-big" id="copyComm" style="flex:1">Copiar resumo</button><button class="btn btn-big btn-primary" id="pdfComm" style="flex:1">Baixar PDF comissão</button></div>`;
       bindCompactList(box);
       $('#copyComm').onclick = async () => {
         const msg = `*COMISSÕES — ${month}*\nMês: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n` +
-          s.rows.map((r) => `• ${r.name}: ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}${r.pix_key ? ` • PIX ${r.pix_key}` : ''}`).join('\n');
+          s.rows.map((r) => `• ${r.name} - vendas ${fmtV(r.sales_credit ?? r.sales_count ?? 0)} - ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}${r.pix_key ? ` • PIX ${r.pix_key}` : ''}`).join('\n');
         await navigator.clipboard.writeText(msg).catch(() => {});
         toast('Resumo copiado!');
       };
+      $('#pdfComm').onclick = () => openCommissionsPDF(s.rows, month, s.total_month_cents);
       $$('#cBody [data-pix]').forEach((b) => (b.onclick = async (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
@@ -3154,6 +3158,32 @@ async function viewComissoes(app) {
   $('#cGo').onclick = load;
   await load();
   await loadPays();
+}
+
+function openCommissionsPDF(rows, month, totalCents) {
+  const monthLabel = (() => {
+    const m = String(month || '').match(/^(\d{4})-(\d{2})$/);
+    if (!m) return String(month || '');
+    const nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+    return `${nomes[Number(m[2]) - 1]} de ${m[1]}`;
+  })();
+  const totalTxt = ((Number(totalCents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const trs = (rows || []).map((r) => {
+    const qtd = fmtV(r.sales_credit ?? r.sales_count ?? 0);
+    const valor = ((Number(r.month_cents) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    return `<tr><td>${esc(r.name)}</td><td>${esc(r.store_name || '—')}</td><td style="text-align:center">${esc(qtd)}</td><td>${esc(r.pix_key || '—')}</td><td style="text-align:right;font-weight:700">${esc(valor)}</td></tr>`;
+  }).join('');
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comissões — ${esc(monthLabel)}</title>
+  <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h1{font-size:18px;margin:0}h1 small{font-weight:400;color:#555}p.total{margin:6px 0 14px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #999;padding:8px}th{background:#f0f0f0;text-align:left}tfoot td{font-weight:700}</style></head><body>
+  <h1>COMISSÕES — ${esc(monthLabel)}</h1><p class="total">Total do mês: ${esc(totalTxt)}</p>
+  <table><thead><tr><th>Vendedor</th><th>Loja</th><th style="text-align:center">Vendas</th><th>Chave PIX</th><th style="text-align:right">Valor a receber</th></tr></thead>
+  <tbody>${trs || '<tr><td colspan="5">Sem comissões neste mês.</td></tr>'}</tbody>
+  <tfoot><tr><td colspan="4">Total</td><td style="text-align:right">${esc(totalTxt)}</td></tr></tfoot></table>
+  <script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { toast('Permita pop-up para baixar o PDF.', 'err'); return; }
+  w.document.write(html);
+  w.document.close();
 }
 
 function modalPagar(row, month, reload) {

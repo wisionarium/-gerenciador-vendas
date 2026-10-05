@@ -1497,10 +1497,20 @@ app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, re
   const rows = await Promise.all(sellers.map(async (s) => {
     const m = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM commissions WHERE seller_id=? AND month=?', s.id, month);
     const pm = await db.get('SELECT COALESCE(SUM(amount_cents),0) AS t FROM payouts WHERE seller_id=? AND month=?', s.id, month);
+    const cnt = await db.get('SELECT COUNT(*) AS t FROM commissions WHERE seller_id=? AND month=?', s.id, month);
+    let sc = null;
+    try {
+      sc = await db.get(
+        `SELECT COALESCE(SUM(sp.credit),0) AS t FROM sale_participants sp JOIN sales s2 ON s2.id=sp.sale_id WHERE sp.seller_id=? AND substr(s2.sale_date,1,7)=?`,
+        s.id, month);
+    } catch { sc = null; }
+    const credit = sc ? Number(sc.t) : 0;
+    const count = Number(cnt.t) || 0;
     return {
       seller_id: s.id, name: s.name, sector: s.sector || 'online', store_id: s.store_id, store_name: s.store_name || 'Sede',
       active: !!s.active, avatar_url: s.avatar_url || null, pix_key: s.pix_key || null,
       month_cents: Number(m.t), paid_month_cents: Number(pm.t),
+      sales_count: count, sales_credit: credit > 0 ? credit : count,
       pending_cents: await pendingCents(s.id),
     };
   }));
