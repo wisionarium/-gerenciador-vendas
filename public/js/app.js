@@ -1214,7 +1214,7 @@ async function viewHistory(app) {
     </div>
     <div id="hCancWrap" style="display:none">
       <div class="card">
-        <div><label style="margin-top:0">Mês do desconto</label><input type="month" id="hcMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}" style="font-size:17px;padding:14px"></div>
+        <div><label style="margin-top:0">Mês</label><input type="month" id="hcMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}" style="font-size:17px;padding:14px"></div>
         <button class="btn btn-primary btn-big" id="hcGo" style="width:100%;margin-top:10px">Ver mês</button>
         <div id="hcTotal" style="margin-top:12px"></div>
         <div id="hcList" style="margin-top:8px"><p class="muted">Carregando…</p></div>
@@ -1311,13 +1311,13 @@ async function viewHistory(app) {
       const totQ = (discounts || []).reduce((a, d) => a + Number(d.qty || 0), 0);
       $('#hcTotal').innerHTML = `
         <div style="text-align:center;padding:16px 8px 10px">
-          <div style="font-size:12px;color:#4b5563">${fmtV(totQ)} cancelamento(s) descontados em ${esc(month.slice(5, 7))}/${esc(month.slice(0, 4))}</div>
+          <div style="font-size:12px;color:#4b5563">${fmtV(totQ)} cancelamento(s)</div>
           <div class="mono" style="font-size:30px;font-weight:800;line-height:1.25">-${fmtBRL(totC)}</div>
         </div>`;
       const discCards = (discounts || []).map((d) => `
         <div class="sale-card" style="padding:10px 12px">
           <div class="row" style="justify-content:space-between;align-items:center"><b>${esc(d.customer_name || 'Cancelamento')}</b><b class="mono">-${fmtBRL(d.amount_cents)}</b></div>
-          <div class="muted" style="font-size:12.5px;margin-top:2px">${d.product ? `🧾 ${esc(d.product)} • ` : ''}vendida ${(d.sale_date || d.month_ref) ? fmtDateBR(d.sale_date || (d.month_ref + '-01')) : esc(d.month_ref || '—')} • desconto ${esc(d.month_disc)}</div>
+          <div class="muted" style="font-size:12.5px;margin-top:2px">${d.product ? `🧾 ${esc(d.product)} • ` : ''}vendida ${(d.sale_date || d.month_ref) ? fmtDateBR(d.sale_date || (d.month_ref + '-01')) : esc(d.month_ref || '—')}</div>
           ${d.note ? `<div class="muted" style="font-size:12px">${esc(d.note)}</div>` : ''}
         </div>`).join('');
       const pendCards = (canceled || []).filter((c) => {
@@ -3249,13 +3249,13 @@ async function viewComissoes(app) {
       const totC = (discounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
       el.innerHTML = `
         <div class="row" style="justify-content:space-between;align-items:center">
-          <span class="muted" style="font-size:13px">Mês desconto: <b class="mono">${esc(month)}</b> • Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b></span>
+          <span class="muted" style="font-size:13px">Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b></span>
           <button class="btn btn-primary" id="discAdd">+ Lançar cancelamento</button>
         </div>
         <div style="height:8px"></div>
         ${(discounts || []).length ? discounts.map((d) => `
           <div class="row" style="justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:8px 0">
-            <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • desconto ${esc(d.month_disc || '—')} • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span>
+            <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span>
             ${(d.customer_name || d.product) ? `<div class="muted" style="font-size:12px">🧾 ${esc(d.customer_name || '—')} • ${esc(d.product || '—')}${d.sale_date ? ` • vendida ${fmtDateBR(d.sale_date)}` : ''}${d.canceled_at ? ` • cancelada ${fmtDateBR(String(d.canceled_at).slice(0, 10))}` : ''}</div>` : ''}</div>
             <div class="row" style="align-items:center;gap:6px"><b class="mono">-${fmtBRL(d.amount_cents)}</b>
               <button class="btn" data-dedit="${d.id}">Editar</button>
@@ -3295,7 +3295,7 @@ async function viewComissoes(app) {
         const parts = (c.participants || []).map((p) => esc(p.seller_name)).join(', ');
         const linkedDiscs = byCanc[c.id] || [];
         const status = linkedDiscs.length
-          ? `<span class="chip wa">descontado em ${esc(linkedDiscs.map((d) => d.month_disc).join(', '))}</span>`
+          ? `<span class="chip wa">descontado</span>`
           : `<span class="chip lime">sem desconto lançado</span>`;
         return `<div class="sale-card" style="padding:10px 12px">
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap"><b>${esc(c.customer_name)}</b>${status}</div>
