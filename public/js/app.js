@@ -163,7 +163,7 @@ function toast(msg, type = 'ok') {
 // ---------- shell / nav ----------
 const ICONS = {
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5V20a1.5 1.5 0 0 1-1.5 1.5H14v-6h-4v6H5.5A1.5 1.5 0 0 1 4 20z"/></svg>',
-  tag: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2.5" x2="12" y2="21.5"/><path d="M16.8 6.2H9.6a3.3 3.3 0 0 0 0 6.6h4.8a3.3 3.3 0 0 1 0 6.6H7.2"/></svg>',
   doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l5 5V20.5H7z"/><path d="M14 3.5V9h5"/></svg>',
   chart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21V10h4v11zm7 0V3h4v18zm7 0v-7h4v7z"/></svg>',
   team: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/></svg>',
@@ -1638,7 +1638,8 @@ async function viewAdmin(app) {
       <div style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Online / Presencial:</span><select id="fSector" style="width:100%"><option value="">Todos</option><option value="online" ${adminSector === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${adminSector === 'presencial' ? 'selected' : ''}>Presencial</option></select></div>
       ${isManager ? '' : `<div style="flex:1;min-width:0"><span class="muted" style="font-size:12px;display:block;margin:0 0 4px 2px">Empresa:</span><select id="fStore" style="width:100%"><option value="">Todas</option>${stores.map((s) => `<option value="${s.id}" ${String(adminStore) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>`}
     </div>
-    <div id="rankWrap"></div>`;
+    <div id="rankWrap"></div>
+    <div id="salesWrap" style="margin-top:6px"></div>`;
   const fStoreEl = $('#fStore');
   if (fStoreEl) fStoreEl.onchange = () => { adminStore = fStoreEl.value; adminSeller = ''; route(); };
   bindPeriodPills((p) => {
@@ -1664,6 +1665,7 @@ async function viewAdmin(app) {
     const storeQs = adminStore ? `&store_id=${adminStore}` : '';
     const kpi = $('#kpiWrap');
     const rank = $('#rankWrap');
+    const salesBox = $('#salesWrap');
     const [summary, ranking] = await Promise.all([
       api(`/api/stats/summary?${qs}${adminSeller ? `&seller_id=${adminSeller}` : sectorQs + storeQs}`),
       api(`/api/stats/ranking?${qs}${sectorQs}${storeQs}`),
@@ -1692,6 +1694,23 @@ async function viewAdmin(app) {
       </div>` : '<div class="card empty">Não há dados neste período.</div>'}
     `;
     bindCompactList(rank);
+    // breve histórico de vendas (até 5) abaixo do ranking — Ver mais abre a aba de vendas
+    if (salesBox) {
+      salesBox.innerHTML = `<h3 class="section-title">Últimas vendas</h3><div class="card"><p class="muted">Carregando…</p></div>`;
+      try {
+        const salesQs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(adminSeller ? { seller_id: adminSeller } : {}), ...(adminStore ? { store_id: adminStore } : {}) });
+        const { sales } = await api(`/api/sales?${salesQs}`);
+        const recent = (sales || []).slice(0, 5);
+        salesBox.innerHTML = `
+          <h3 class="section-title">Últimas vendas</h3>
+          ${recent.length ? `<div class="card" style="padding:8px;display:flex;flex-direction:column;gap:8px">${recent.map((s) => saleCard(s)).join('')}
+            <a class="btn btn-ghost btn-big" href="#/admin/vendas" style="text-decoration:none;text-align:center">Ver mais</a>
+          </div>` : '<div class="card empty">Nenhuma venda neste período.</div>'}
+        `;
+      } catch {
+        salesBox.innerHTML = `<h3 class="section-title">Últimas vendas</h3><div class="card empty">Não foi possível carregar as vendas. <a href="#/admin/vendas">Ver mais</a></div>`;
+      }
+    }
   }
 }
 
@@ -3741,7 +3760,8 @@ async function modalUser(u, reload) {
     <form id="fUser">
       <label>Nome *</label><input id="uName" required value="${esc(u?.name || '')}">
       <label>E-mail *</label><input id="uEmail" type="email" required value="${esc(u?.email || '')}">
-      <label>${u ? 'Nova senha (opcional)' : 'Senha *'}</label><input id="uPass" type="password" ${u ? '' : 'required'} placeholder="mín. 4 caracteres">
+      <label>${u ? 'Nova senha (opcional)' : 'Senha *'}</label><div style="position:relative"><input id="uPass" type="password" ${u ? '' : 'required'} placeholder="mín. 4 caracteres" style="padding-right:46px;width:100%;box-sizing:border-box"><button type="button" id="uPassEye" title="Mostrar/ocultar senha" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;font-size:18px;line-height:1;padding:6px">👁️</button></div>
+      ${u ? '<p class="muted" style="font-size:12px">Por segurança a senha atual fica escondida e não pode ser recuperada (é salva criptografada). Deixe em branco para manter, ou digite uma nova e use o 👁️ para conferir antes de salvar.</p>' : ''}
       <label>Perfil *</label>
       <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option><option value="staff" ${u?.role === 'staff' ? 'selected' : ''}>Funcionário (só ponto)</option></select>
       <div id="sellerFields" style="display:${isSeller ? 'block' : 'none'}">
@@ -3790,6 +3810,15 @@ async function modalUser(u, reload) {
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
+  const eyeBtn = $('#uPassEye');
+  if (eyeBtn) eyeBtn.onclick = () => {
+    const inp = $('#uPass');
+    if (!inp) return;
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    eyeBtn.textContent = show ? '🙈' : '👁️';
+    inp.focus();
+  };
   $('#uRole').onchange = () => {
     const role = $('#uRole').value;
     $('#sellerFields').style.display = role === 'seller' ? 'block' : 'none';
