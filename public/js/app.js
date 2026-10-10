@@ -3389,14 +3389,14 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
     <p class="muted" style="font-size:13px">Desconta da comissão sem cancelar a venda. Qtd aceita 0,5 (dividida). Valor calculado sozinho.</p>
     <form id="fDisc">
       <label>Vendedora *</label><select id="dSeller" ${cur ? 'disabled' : ''}>${selOpts}</select>
-      <label>Mês do desconto *</label><input id="dMonthDisc" type="month" required value="${esc(cur?.month_disc || monthDisc || '')}">
+      <label>Nome do cliente</label><input id="dCustomer" maxlength="120" placeholder="Nome do cliente" value="${esc(cur?.customer_name || presetCanc?.customer_name || '')}">
+      <label>Produto/modelo</label><input id="dProduct" maxlength="120" placeholder="Ex: bike aro 29" value="${esc(cur?.product || presetCanc?.product || '')}">
+      <input id="dMonthDisc" type="hidden" value="${esc(cur?.month_disc || monthDisc || todayISO().slice(0, 7))}">
       <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || '')}">
       <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : (presetCanc ? String((presetCanc.participants || []).find((p) => String(p.seller_id) === String(presetSellerId ?? presetCanc?.participants?.[0]?.seller_id))?.credit ?? presetCanc?.participants?.[0]?.credit ?? '').replace('.', ',') : ''))}">
       <p class="muted" style="font-size:12px;margin:4px 0" id="dPrev"></p>
       <label>Venda cancelada (vínculo p/ histórico)</label><select id="dCanc"><option value="">Avulso (sem vínculo)</option>${presetCanc ? `<option value="${presetCanc.id}" selected>${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • ${fmtDateBR(presetCanc.sale_date)}</option>` : ''}</select>
       <p class="muted" style="font-size:12px;margin:4px 0" id="dCancInfo">${presetCanc ? `🧾 ${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • vendida ${fmtDateBR(presetCanc.sale_date)} • cancelada ${fmtDateBR(String(presetCanc.canceled_at || '').slice(0, 10))}` : (cur?.customer_name || cur?.product ? `🧾 ${esc(cur.customer_name || '—')} • ${esc(cur.product || '—')}${cur.sale_date ? ` • vendida ${fmtDateBR(cur.sale_date)}` : ''}` : '')}</p>
-      <label>Cliente (aparece no histórico)</label><input id="dCustomer" maxlength="120" placeholder="Nome do cliente" value="${esc(cur?.customer_name || presetCanc?.customer_name || '')}">
-      <label>Produto/modelo</label><input id="dProduct" maxlength="120" placeholder="Ex: bike aro 29" value="${esc(cur?.product || presetCanc?.product || '')}">
       <label><span style="font-weight:normal;font-size:12px"><input type="checkbox" id="dManual" style="width:auto"> editar valor manual</span></label>
       <label>Valor a descontar (R$) *</label><input id="dVal" inputmode="decimal" placeholder="Calculado sozinho" value="${esc(cur ? (Number(cur.amount_cents) / 100).toFixed(2).replace('.', ',') : '')}">
       <label>Motivo/obs</label><input id="dNote" maxlength="140" placeholder="Ex: cliente desistiu bike mês 4" value="${esc(cur?.note || '')}">
