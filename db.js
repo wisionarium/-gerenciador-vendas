@@ -198,6 +198,11 @@ const SCHEMA = [
     qty REAL NOT NULL CHECK (qty > 0 AND qty <= 1000),
     amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
     note TEXT NOT NULL DEFAULT '',
+    customer_name TEXT,
+    product TEXT,
+    sale_date TEXT,
+    canceled_at TEXT,
+    canceled_sale_id INTEGER,
     created_by INTEGER REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
@@ -478,6 +483,12 @@ const ready = (async () => {
   try { await run('ALTER TABLE sales ADD COLUMN bonus_cents INTEGER'); } catch {}
   try { await run('ALTER TABLE canceled_sales ADD COLUMN is_bonus INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { await run('ALTER TABLE canceled_sales ADD COLUMN bonus_cents INTEGER'); } catch {}
+  // vínculo desconto <-> venda cancelada (snapshot p/ histórico; nullable = lançamentos antigos)
+  try { await run('ALTER TABLE commission_discounts ADD COLUMN customer_name TEXT'); } catch {}
+  try { await run('ALTER TABLE commission_discounts ADD COLUMN product TEXT'); } catch {}
+  try { await run('ALTER TABLE commission_discounts ADD COLUMN sale_date TEXT'); } catch {}
+  try { await run('ALTER TABLE commission_discounts ADD COLUMN canceled_at TEXT'); } catch {}
+  try { await run('ALTER TABLE commission_discounts ADD COLUMN canceled_sale_id INTEGER'); } catch {}
   await migrateTableChecks();
   await seedStores();
   await migrateCompaniesOnce();

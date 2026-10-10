@@ -1600,11 +1600,39 @@ app.get('/api/commissions/discounts', requireAuth, requireAdmin, ah(async (req, 
   res.json({ discounts: rows });
 }));
 app.post('/api/commissions/discounts', requireAuth, requireAdmin, ah(async (req, res) => {
-  const { seller_id, month_disc, month_ref, qty, amount_cents, note } = req.body || {};
+  const { seller_id, month_disc, month_ref, qty, amount_cents, note, canceled_sale_id, customer_name, product } = req.body || {};
   const seller = await db.get("SELECT u.*, s.name AS store_name, s.is_main FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=? AND u.role='seller'", Number(seller_id));
   if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
   if (!month_disc || !/^\d{4}-\d{2}$/.test(month_disc)) return res.status(400).json({ error: 'Mês do desconto inválido.' });
   if (month_ref && month_ref !== '' && !/^\d{4}-\d{2}$/.test(month_ref)) return res.status(400).json({ error: 'Mês de referência inválido.' });
+  // vínculo opcional com venda cancelada: preenche cliente/produto/datas e sugere qtd
+  let snap = { customer_name: String(customer_name || '').trim().slice(0, 120) || null, product: String(product || '').trim().slice(0, 120) || null, sale_date: null, canceled_at: null, canceled_sale_id: null };
+  let refMonth = month_ref || '';
+  if (canceled_sale_id != null && canceled_sale_id !== '') {
+    const canc = await db.get('SELECT * FROM canceled_sales WHERE id=?', Number(canceled_sale_id));
+    if (!canc) return res.status(400).json({ error: 'Venda cancelada não encontrada.' });
+    let parts = [];
+    try { parts = JSON.parse(canc.participants || '[]'); } catch { parts = []; }
+    const mine = parts.find((p) => Number(p.seller_id) === Number(seller.id));
+    if (!mine) return res.status(400).json({ error: 'Vendedora não participou dessa venda.' });
+    snap = { customer_name: canc.customer_name, product: canc.product, sale_date: canc.sale_date, canceled_at: canc.canceled_at, canceled_sale_id: canc.id };
+    if (!refMonth) refMonth = String(canc.sale_date || '').slice(0, 7);
+    if ((qty == null || qty === '') && mine) {
+      const pq2 = parseDiscQty(mine.credit);
+      if (!pq2.error) {
+        let cents2;
+        if (amount_cents != null && amount_cents !== '') {
+          cents2 = Math.round(Number(amount_cents));
+          if (!Number.isFinite(cents2) || cents2 <= 0 || cents2 > 10000000) return res.status(400).json({ error: 'Valor inválido.' });
+        } else {
+          cents2 = discountCentsFromQty(pq2.qty, discountBaseFor(seller, seller.is_main != null ? { is_main: seller.is_main } : null));
+        }
+        const r2 = await db.run('INSERT INTO commission_discounts (seller_id, month_disc, month_ref, qty, amount_cents, note, customer_name, product, sale_date, canceled_at, canceled_sale_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+          seller.id, month_disc, refMonth || '', pq2.qty, cents2, String(note || '').slice(0, 140), snap.customer_name, snap.product, snap.sale_date, snap.canceled_at, snap.canceled_sale_id, req.user.id);
+        return res.status(201).json({ discount: await db.get('SELECT * FROM commission_discounts WHERE id=?', r2.lastInsertRowid) });
+      }
+    }
+  }
   const pq = parseDiscQty(qty);
   if (pq.error) return res.status(400).json({ error: pq.error });
   let cents;
@@ -1614,8 +1642,8 @@ app.post('/api/commissions/discounts', requireAuth, requireAdmin, ah(async (req,
   } else {
     cents = discountCentsFromQty(pq.qty, discountBaseFor(seller, seller.is_main != null ? { is_main: seller.is_main } : null));
   }
-  const r = await db.run('INSERT INTO commission_discounts (seller_id, month_disc, month_ref, qty, amount_cents, note, created_by) VALUES (?,?,?,?,?,?,?)',
-    seller.id, month_disc, month_ref || '', pq.qty, cents, String(note || '').slice(0, 140), req.user.id);
+  const r = await db.run('INSERT INTO commission_discounts (seller_id, month_disc, month_ref, qty, amount_cents, note, customer_name, product, sale_date, canceled_at, canceled_sale_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    seller.id, month_disc, refMonth || '', pq.qty, cents, String(note || '').slice(0, 140), snap.customer_name, snap.product, snap.sale_date, snap.canceled_at, snap.canceled_sale_id, req.user.id);
   res.status(201).json({ discount: await db.get('SELECT * FROM commission_discounts WHERE id=?', r.lastInsertRowid) });
 }));
 app.put('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async (req, res) => {
@@ -1638,8 +1666,12 @@ app.put('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async (r
   } else {
     cents = Number(cur.amount_cents);
   }
-  await db.run('UPDATE commission_discounts SET seller_id=?, month_disc=?, month_ref=?, qty=?, amount_cents=?, note=? WHERE id=?',
-    seller.id, month_disc, month_ref || '', pq.qty, cents, String(req.body?.note ?? cur.note ?? '').slice(0, 140), cur.id);
+  await db.run('UPDATE commission_discounts SET seller_id=?, month_disc=?, month_ref=?, qty=?, amount_cents=?, note=?, customer_name=?, product=?, sale_date=?, canceled_at=?, canceled_sale_id=? WHERE id=?',
+    seller.id, month_disc, month_ref || '', pq.qty, cents, String(req.body?.note ?? cur.note ?? '').slice(0, 140),
+    req.body?.customer_name !== undefined ? (String(req.body.customer_name || '').trim().slice(0, 120) || null) : (cur.customer_name || null),
+    req.body?.product !== undefined ? (String(req.body.product || '').trim().slice(0, 120) || null) : (cur.product || null),
+    req.body?.sale_date !== undefined ? (String(req.body.sale_date || '').slice(0, 10) || null) : (cur.sale_date || null),
+    cur.canceled_at || null, cur.canceled_sale_id || null, cur.id);
   res.json({ discount: await db.get('SELECT * FROM commission_discounts WHERE id=?', cur.id) });
 }));
 app.delete('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async (req, res) => {
@@ -1647,6 +1679,42 @@ app.delete('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async
   if (!cur) return res.status(404).json({ error: 'Lançamento não encontrado.' });
   await db.run('DELETE FROM commission_discounts WHERE id=?', cur.id);
   res.json({ ok: true });
+}));
+
+// histórico de cancelamentos da própria pessoa (vendedora/funcionária):
+// descontos lançados p/ ela + vendas canceladas em que participou (inclui arquivo 90d)
+app.get('/api/me/cancellations', requireAuth, ah(async (req, res) => {
+  if (req.user.role !== 'seller' && req.user.role !== 'staff')
+    return res.status(403).json({ error: 'Recurso da equipe.' });
+  const { month } = req.query;
+  const me = Number(req.user.id);
+  let discounts = [];
+  try {
+    if (month && /^\d{4}-\d{2}$/.test(month))
+      discounts = await db.all('SELECT * FROM commission_discounts WHERE seller_id=? AND month_disc=? ORDER BY month_disc DESC, id DESC LIMIT 200', me, month);
+    else
+      discounts = await db.all('SELECT * FROM commission_discounts WHERE seller_id=? ORDER BY month_disc DESC, id DESC LIMIT 200', me);
+  } catch { discounts = []; }
+  const mine = (r) => {
+    try {
+      const parts = JSON.parse(r.participants || '[]');
+      return parts.some((p) => Number(p.seller_id) === me);
+    } catch { return false; }
+  };
+  const parse = (r) => ({ ...r, participants: (() => { try { return JSON.parse(r.participants || '[]'); } catch { return []; } })() });
+  let canceled = [];
+  try {
+    const rows = await db.all('SELECT * FROM canceled_sales ORDER BY id DESC LIMIT 500');
+    canceled = rows.map(parse).filter(mine);
+    try {
+      const arch = await db.all('SELECT * FROM archived_canceled ORDER BY id DESC LIMIT 500');
+      for (const r of arch.map(parse)) {
+        if (mine(r) && !canceled.some((c) => c.sale_id === r.sale_id && c.sale_date === r.sale_date)) canceled.push(r);
+      }
+    } catch {}
+    canceled = canceled.slice(0, 200);
+  } catch { canceled = []; }
+  res.json({ discounts, canceled });
 }));
 
 // ---------- PONTO (QR + localização) ----------

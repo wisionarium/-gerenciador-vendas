@@ -1182,6 +1182,7 @@ async function viewHistory(app) {
     <h2 style="margin:4px 0">Meu histórico</h2>
     <div class="mini-pills" id="hMainTabs" style="margin-bottom:10px">
       <button data-m="vendas" class="on">Vendas</button>
+      <button data-m="canc">❌ Canc.</button>
       <button data-m="horas">⏱ Horas</button>
     </div>
     <div id="hSalesWrap">
@@ -1209,6 +1210,14 @@ async function viewHistory(app) {
         <button class="btn btn-primary btn-big" id="hhGo" style="width:100%;margin-top:10px">Ver mês</button>
         <div id="hhTotal" style="margin-top:12px"></div>
         <div id="hhList" style="margin-top:8px"><p class="muted">Carregando…</p></div>
+      </div>
+    </div>
+    <div id="hCancWrap" style="display:none">
+      <div class="card">
+        <div><label style="margin-top:0">Mês do desconto</label><input type="month" id="hcMonth" value="${t.slice(0, 7)}" max="${t.slice(0, 7)}" style="font-size:17px;padding:14px"></div>
+        <button class="btn btn-primary btn-big" id="hcGo" style="width:100%;margin-top:10px">Ver mês</button>
+        <div id="hcTotal" style="margin-top:12px"></div>
+        <div id="hcList" style="margin-top:8px"><p class="muted">Carregando…</p></div>
       </div>
     </div>
     <div class="foot">Desenvolvido pela Wisionarium</div>
@@ -1290,13 +1299,56 @@ async function viewHistory(app) {
   };
   $('#hhGo').onclick = loadHours;
   $('#hhMonth').onchange = loadHours;
+  // aba Cancelamentos: descontos do mês + vendas canceladas em que participou
+  let cancLoaded = false;
+  const loadCanc = async () => {
+    const month = $('#hcMonth').value || t.slice(0, 7);
+    const box = $('#hcList');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const { discounts, canceled } = await api(`/api/me/cancellations?month=${month}`);
+      const totC = (discounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
+      const totQ = (discounts || []).reduce((a, d) => a + Number(d.qty || 0), 0);
+      $('#hcTotal').innerHTML = `
+        <div style="text-align:center;padding:16px 8px 10px">
+          <div style="font-size:12px;color:#4b5563">${fmtV(totQ)} cancelamento(s) descontados em ${esc(month.slice(5, 7))}/${esc(month.slice(0, 4))}</div>
+          <div class="mono" style="font-size:30px;font-weight:800;line-height:1.25">-${fmtBRL(totC)}</div>
+        </div>`;
+      const discCards = (discounts || []).map((d) => `
+        <div class="sale-card" style="padding:10px 12px">
+          <div class="row" style="justify-content:space-between;align-items:center"><b>${esc(d.customer_name || 'Cancelamento')}</b><b class="mono">-${fmtBRL(d.amount_cents)}</b></div>
+          <div class="muted" style="font-size:12.5px;margin-top:2px">${d.product ? `🧾 ${esc(d.product)} • ` : ''}vendida ${(d.sale_date || d.month_ref) ? fmtDateBR(d.sale_date || (d.month_ref + '-01')) : esc(d.month_ref || '—')} • desconto ${esc(d.month_disc)}</div>
+          ${d.note ? `<div class="muted" style="font-size:12px">${esc(d.note)}</div>` : ''}
+        </div>`).join('');
+      const pendCards = (canceled || []).filter((c) => {
+        const ref = String(c.sale_date || '').slice(0, 7);
+        return true;
+      }).slice(0, 50).map((c) => {
+        const mine = (c.participants || []).filter((p) => p.seller_id === me.id).reduce((a, p) => a + Number(p.credit), 0);
+        const hasDisc = (discounts || []).some((d) => Number(d.canceled_sale_id) === Number(c.id));
+        return `
+        <div class="sale-card" style="padding:10px 12px;opacity:${hasDisc ? '1' : '.85'}">
+          <div class="row" style="justify-content:space-between;align-items:center"><b>${esc(c.customer_name)}</b><span class="chip ${hasDisc ? 'wa' : 'lime'}" style="font-size:10px">${hasDisc ? 'descontado' : 'aguardando desconto'}</span></div>
+          <div class="muted" style="font-size:12.5px;margin-top:2px">🧾 ${esc(c.product)} • ${esc(c.color)} • +${fmtV(mine)} vendida ${fmtDateBR(c.sale_date)}</div>
+          <div class="muted" style="font-size:12px">Cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))}${c.reason ? ` • ${esc(c.reason)}` : ''}</div>
+        </div>`;
+      }).join('');
+      box.innerHTML = (discCards || pendCards)
+        ? `${discCards ? `<p class="muted" style="font-size:12px;margin:8px 0 4px">Descontos neste mês</p>${discCards}` : '<div class="card empty">Nenhum desconto neste mês.</div>'}${pendCards ? `<p class="muted" style="font-size:12px;margin:12px 0 4px">Minhas vendas canceladas</p>${pendCards}` : ''}`
+        : '<div class="card empty">Nenhum cancelamento.</div>';
+    } catch (e) { box.innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
+  };
+  $('#hcGo').onclick = loadCanc;
+  $('#hcMonth').onchange = loadCanc;
   $('#hMainTabs').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     $$('#hMainTabs button').forEach((x) => x.classList.toggle('on', x === b));
-    const isHours = b.dataset.m === 'horas';
-    $('#hSalesWrap').style.display = isHours ? 'none' : '';
-    $('#hHoursWrap').style.display = isHours ? '' : 'none';
-    if (isHours && !hoursLoaded) { hoursLoaded = true; loadHours(); }
+    const m = b.dataset.m;
+    $('#hSalesWrap').style.display = m === 'vendas' ? '' : 'none';
+    $('#hHoursWrap').style.display = m === 'horas' ? '' : 'none';
+    $('#hCancWrap').style.display = m === 'canc' ? '' : 'none';
+    if (m === 'horas' && !hoursLoaded) { hoursLoaded = true; loadHours(); }
+    if (m === 'canc' && !cancLoaded) { cancLoaded = true; loadCanc(); }
   };
 }
 
@@ -3121,6 +3173,8 @@ async function viewComissoes(app) {
     </div>
     <h3 class="section-title">Cancelamento mensal</h3>
     <div class="card"><div id="discBody"><p class="muted">Carregando…</p></div></div>
+    <h3 class="section-title">Vendas canceladas (histórico)</h3>
+    <div class="card"><div id="cancBody"><p class="muted">Carregando…</p></div></div>
     <h3 class="section-title">Pagamentos</h3>
     <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
@@ -3182,6 +3236,7 @@ async function viewComissoes(app) {
         modalDiscount(null, s.rows, month, Number(b.dataset.disc), load);
       }));
       await loadDiscs(month);
+      await loadCancs(month);
     } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
   const loadDiscs = async (month) => {
@@ -3200,7 +3255,8 @@ async function viewComissoes(app) {
         <div style="height:8px"></div>
         ${(discounts || []).length ? discounts.map((d) => `
           <div class="row" style="justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:8px 0">
-            <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span></div>
+            <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • desconto ${esc(d.month_disc || '—')} • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span>
+            ${(d.customer_name || d.product) ? `<div class="muted" style="font-size:12px">🧾 ${esc(d.customer_name || '—')} • ${esc(d.product || '—')}${d.sale_date ? ` • vendida ${fmtDateBR(d.sale_date)}` : ''}${d.canceled_at ? ` • cancelada ${fmtDateBR(String(d.canceled_at).slice(0, 10))}` : ''}</div>` : ''}</div>
             <div class="row" style="align-items:center;gap:6px"><b class="mono">-${fmtBRL(d.amount_cents)}</b>
               <button class="btn" data-dedit="${d.id}">Editar</button>
               <button class="btn btn-ghost" data-ddel="${d.id}">🗑️</button>
@@ -3217,6 +3273,44 @@ async function viewComissoes(app) {
         if (!confirm('Excluir este cancelamento? O líquido volta a subir.')) return;
         try { await api(`/api/commissions/discounts/${b.dataset.ddel}`, { method: 'DELETE' }); toast('Excluído!'); await load(); }
         catch (err) { toast(err.message, 'err'); }
+      }));
+    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  // histórico de vendas canceladas (auditoria) + atalho p/ lançar desconto vinculado
+  const loadCancs = async (month) => {
+    const el = $('#cancBody');
+    if (!el) return;
+    el.innerHTML = '<p class="muted">Carregando…</p>';
+    try {
+      const [{ canceled }, { discounts: allDiscs }] = await Promise.all([
+        api('/api/sales/canceled'),
+        api('/api/commissions/discounts').catch(() => ({ discounts: [] })),
+      ]);
+      const byCanc = {};
+      for (const d of allDiscs || []) {
+        if (!d.canceled_sale_id) continue;
+        (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
+      }
+      el.innerHTML = (canceled || []).length ? compactListHTML(canceled || [], (c) => {
+        const parts = (c.participants || []).map((p) => esc(p.seller_name)).join(', ');
+        const linkedDiscs = byCanc[c.id] || [];
+        const status = linkedDiscs.length
+          ? `<span class="chip wa">descontado em ${esc(linkedDiscs.map((d) => d.month_disc).join(', '))}</span>`
+          : `<span class="chip lime">sem desconto lançado</span>`;
+        return `<div class="sale-card" style="padding:10px 12px">
+          <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap"><b>${esc(c.customer_name)}</b>${status}</div>
+          <div class="muted" style="font-size:12.5px;margin-top:2px">🧾 ${esc(c.product)} • ${esc(c.color)} • ${esc(c.channel)}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px">Vendida ${fmtDateBR(c.sale_date)} • Cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))} • 👥 ${parts}${c.reason ? ` • ${esc(c.reason)}` : ''}${c.note ? ` • ${esc(c.note)}` : ''}</div>
+          ${linkedDiscs.length ? '' : `<div style="margin-top:6px"><button class="btn" style="font-size:12px;padding:6px 10px" data-claunch="${c.id}">Lançar desconto</button></div>`}
+        </div>`;
+      }, 6) : '<div class="empty">Nenhuma venda cancelada.</div>';
+      bindCompactList(el);
+      $$('#cancBody [data-claunch]').forEach((b) => (b.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        const canc = (canceled || []).find((x) => String(x.id) === String(b.dataset.claunch));
+        if (!canc) return;
+        const firstSeller = (canc.participants || [])[0];
+        modalDiscount(null, null, month, firstSeller ? firstSeller.seller_id : null, async () => { await load(); }, canc);
       }));
     } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
@@ -3283,11 +3377,11 @@ function discPreviewCents(qty, base) {
   else if (fr >= 0.25) t += Math.round(base / 2);
   return t;
 }
-function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload) {
+function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCanc) {
   const list = Array.isArray(sellers) && sellers.length ? sellers : null;
   const selOpts = list
-    ? list.map((s) => `<option value="${s.seller_id}" ${String(presetSellerId ?? cur?.seller_id ?? '') === String(s.seller_id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')
-    : `<option value="${esc(String(presetSellerId ?? cur?.seller_id ?? ''))}">${esc(cur?.seller_name || 'Vendedora')}</option>`;
+    ? list.map((s) => `<option value="${s.seller_id}" ${String(presetSellerId ?? cur?.seller_id ?? presetCanc?.participants?.[0]?.seller_id ?? '') === String(s.seller_id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')
+    : `<option value="${esc(String(presetSellerId ?? cur?.seller_id ?? presetCanc?.participants?.[0]?.seller_id ?? ''))}">${esc(cur?.seller_name || presetCanc?.participants?.[0]?.seller_name || 'Vendedora')}</option>`;
   const needSellerList = !list;
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
@@ -3296,9 +3390,13 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload) {
     <form id="fDisc">
       <label>Vendedora *</label><select id="dSeller" ${cur ? 'disabled' : ''}>${selOpts}</select>
       <label>Mês do desconto *</label><input id="dMonthDisc" type="month" required value="${esc(cur?.month_disc || monthDisc || '')}">
-      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || '')}">
-      <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : '')}">
+      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || '')}">
+      <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : (presetCanc ? String((presetCanc.participants || []).find((p) => String(p.seller_id) === String(presetSellerId ?? presetCanc?.participants?.[0]?.seller_id))?.credit ?? presetCanc?.participants?.[0]?.credit ?? '').replace('.', ',') : ''))}">
       <p class="muted" style="font-size:12px;margin:4px 0" id="dPrev"></p>
+      <label>Venda cancelada (vínculo p/ histórico)</label><select id="dCanc"><option value="">Avulso (sem vínculo)</option>${presetCanc ? `<option value="${presetCanc.id}" selected>${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • ${fmtDateBR(presetCanc.sale_date)}</option>` : ''}</select>
+      <p class="muted" style="font-size:12px;margin:4px 0" id="dCancInfo">${presetCanc ? `🧾 ${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • vendida ${fmtDateBR(presetCanc.sale_date)} • cancelada ${fmtDateBR(String(presetCanc.canceled_at || '').slice(0, 10))}` : (cur?.customer_name || cur?.product ? `🧾 ${esc(cur.customer_name || '—')} • ${esc(cur.product || '—')}${cur.sale_date ? ` • vendida ${fmtDateBR(cur.sale_date)}` : ''}` : '')}</p>
+      <label>Cliente (aparece no histórico)</label><input id="dCustomer" maxlength="120" placeholder="Nome do cliente" value="${esc(cur?.customer_name || presetCanc?.customer_name || '')}">
+      <label>Produto/modelo</label><input id="dProduct" maxlength="120" placeholder="Ex: bike aro 29" value="${esc(cur?.product || presetCanc?.product || '')}">
       <label><span style="font-weight:normal;font-size:12px"><input type="checkbox" id="dManual" style="width:auto"> editar valor manual</span></label>
       <label>Valor a descontar (R$) *</label><input id="dVal" inputmode="decimal" placeholder="Calculado sozinho" value="${esc(cur ? (Number(cur.amount_cents) / 100).toFixed(2).replace('.', ',') : '')}">
       <label>Motivo/obs</label><input id="dNote" maxlength="140" placeholder="Ex: cliente desistiu bike mês 4" value="${esc(cur?.note || '')}">
@@ -3324,6 +3422,33 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload) {
   $('#dSeller').onchange = refreshPrev;
   $('#dManual').onchange = refreshPrev;
   refreshPrev();
+  // lista de canceladas p/ vincular (só criação avulsa; com preset já vem selecionada)
+  if (!cur && !presetCanc) {
+    api('/api/sales/canceled').then(({ canceled }) => {
+      const el = $('#dCanc');
+      if (!el || !canceled) return;
+      const sid = $('#dSeller')?.value;
+      const mine = (canceled || []).filter((c) => !sid || (c.participants || []).some((p) => String(p.seller_id) === String(sid))).slice(0, 100);
+      el.innerHTML = `<option value="">Avulso (sem vínculo)</option>` + mine.map((c) => `<option value="${c.id}">${esc(c.customer_name)} • ${esc(c.product)} • ${fmtDateBR(c.sale_date)}</option>`).join('');
+      el.onchange = () => {
+        const c = (canceled || []).find((x) => String(x.id) === String(el.value));
+        const info = $('#dCancInfo');
+        if (!c) { if (info) info.textContent = ''; return; }
+        if (info) info.textContent = `🧾 ${c.customer_name} • ${c.product} • vendida ${fmtDateBR(c.sale_date)} • cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))}`;
+        const mr = $('#dMonthRef');
+        if (mr && !mr.value && c.sale_date) mr.value = String(c.sale_date).slice(0, 7);
+        const q = $('#dQty');
+        if (q && !q.value) {
+          const part = (c.participants || []).find((p) => String(p.seller_id) === String($('#dSeller')?.value)) || (c.participants || [])[0];
+          if (part) { q.value = String(part.credit).replace('.', ','); refreshPrev(); }
+        }
+        const dc = $('#dCustomer');
+        if (dc && !dc.value) dc.value = c.customer_name || '';
+        const dp = $('#dProduct');
+        if (dp && !dp.value) dp.value = c.product || '';
+      };
+    }).catch(() => {});
+  }
   if (needSellerList) {
     api('/api/commissions/summary?month=' + encodeURIComponent(cur?.month_disc || monthDisc || todayISO().slice(0, 7))).then((s) => {
       const el = $('#dSeller');
@@ -3340,7 +3465,9 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload) {
       const month_ref = $('#dMonthRef').value || '';
       const manual = $('#dManual').checked;
       const valStr = String($('#dVal').value || '').trim().replace(',', '.');
-      const body = { seller_id, month_disc, month_ref, qty: String($('#dQty').value).replace(',', '.'), note: $('#dNote').value };
+      const body = { seller_id, month_disc, month_ref, qty: String($('#dQty').value).replace(',', '.'), note: $('#dNote').value, customer_name: $('#dCustomer')?.value || '', product: $('#dProduct')?.value || '' };
+      const cancVal = $('#dCanc')?.value;
+      if (cancVal) body.canceled_sale_id = Number(cancVal);
       if (manual && valStr !== '') body.amount_cents = Math.round(Number(valStr) * 100);
       if (cur) await api(`/api/commissions/discounts/${cur.id}`, { method: 'PUT', body: JSON.stringify(body) });
       else await api('/api/commissions/discounts', { method: 'POST', body: JSON.stringify(body) });
