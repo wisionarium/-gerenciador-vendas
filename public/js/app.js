@@ -3761,7 +3761,8 @@ async function modalUser(u, reload) {
       <label>Nome *</label><input id="uName" required value="${esc(u?.name || '')}">
       <label>E-mail *</label><input id="uEmail" type="email" required value="${esc(u?.email || '')}">
       <label>${u ? 'Nova senha (opcional)' : 'Senha *'}</label><div style="position:relative"><input id="uPass" type="password" ${u ? '' : 'required'} placeholder="mín. 4 caracteres" style="padding-right:46px;width:100%;box-sizing:border-box"><button type="button" id="uPassEye" title="Mostrar/ocultar senha" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;font-size:18px;line-height:1;padding:6px">👁️</button></div>
-      ${u ? '<p class="muted" style="font-size:12px">Por segurança a senha atual fica escondida e não pode ser recuperada (é salva criptografada). Deixe em branco para manter, ou digite uma nova e use o 👁️ para conferir antes de salvar.</p>' : ''}
+      <div class="row" style="margin-top:6px"><button type="button" id="uGenPass" class="btn" style="font-size:12px;padding:6px 10px">🎲 Gerar temporária</button><button type="button" id="uCopyPass" class="btn btn-ghost" style="font-size:12px;padding:6px 10px">📋 Copiar</button></div>
+      ${u ? '<p class="muted" style="font-size:12px">Por segurança a senha atual fica escondida e não pode ser recuperada (é salva criptografada). Deixe em branco para manter, ou gere/digite uma nova e use o 👁️ para conferir antes de salvar. Avise a funcionária da nova senha.</p>' : ''}
       <label>Perfil *</label>
       <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option><option value="staff" ${u?.role === 'staff' ? 'selected' : ''}>Funcionário (só ponto)</option></select>
       <div id="sellerFields" style="display:${isSeller ? 'block' : 'none'}">
@@ -3818,6 +3819,27 @@ async function modalUser(u, reload) {
     inp.type = show ? 'text' : 'password';
     eyeBtn.textContent = show ? '🙈' : '👁️';
     inp.focus();
+  };
+  const genBtn = $('#uGenPass');
+  if (genBtn) genBtn.onclick = () => {
+    const inp = $('#uPass');
+    if (!inp) return;
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+    let pw = '';
+    const rnd = window.crypto && window.crypto.getRandomValues ? window.crypto.getRandomValues(new Uint32Array(6)) : [0, 0, 0, 0, 0, 0].map(() => Math.floor(Math.random() * 4294967296));
+    for (let i = 0; i < 6; i++) pw += chars[Number(rnd[i]) % chars.length];
+    inp.value = pw;
+    inp.type = 'text';
+    if (eyeBtn) eyeBtn.textContent = '🙈';
+    inp.focus();
+  };
+  const copyBtn = $('#uCopyPass');
+  if (copyBtn) copyBtn.onclick = async () => {
+    const inp = $('#uPass');
+    const v = inp ? inp.value : '';
+    if (!v) { toast('Nada para copiar.', 'err'); return; }
+    try { await navigator.clipboard.writeText(v); toast('Senha copiada!'); }
+    catch { try { inp.focus(); inp.select(); document.execCommand('copy'); toast('Senha copiada!'); } catch { toast('Não foi possível copiar.', 'err'); } }
   };
   $('#uRole').onchange = () => {
     const role = $('#uRole').value;
