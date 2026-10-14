@@ -3204,12 +3204,12 @@ async function viewComissoes(app) {
           const dc = Number(r.disc_cents) || 0;
           const net = r.net_cents != null ? Number(r.net_cents) : Math.max(0, Number(r.month_cents || 0) - dc);
           return `
-          <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:center">
+          <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:flex-start">
             <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
-            <span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(net)}</span>
+            <span style="text-align:right;flex:none;margin-left:8px"><span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(net)}</span><br><button class="btn" style="font-size:11px;padding:2px 8px;margin-top:4px" data-disc="${r.seller_id}">lançar cancelamento</button></span>
           </div>
           <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${qtd} vendas${dq > 0 ? ` • ${fmtV(dq)} canc. (-${fmtBRL(dc)})` : ''} • ${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
-          ${dq > 0 || Number(r.month_cents || 0) > 0 ? `<div class="muted" style="font-size:11px;margin-top:2px">Bruto ${fmtBRL(r.month_cents)}${dq > 0 ? ` • Desconto -${fmtBRL(dc)}` : ''} <button class="btn" style="font-size:11px;padding:2px 8px" data-disc="${r.seller_id}">lançar cancelamento</button></div>` : `<div style="margin-top:4px"><button class="btn" style="font-size:11px;padding:2px 8px" data-disc="${r.seller_id}">lançar cancelamento</button></div>`}
+          ${dq > 0 || Number(r.month_cents || 0) > 0 ? `<div class="muted" style="font-size:11px;margin-top:2px">Bruto ${fmtBRL(r.month_cents)}${dq > 0 ? ` • Desconto -${fmtBRL(dc)}` : ''}</div>` : ''}
           </div>`;
         }, 8)}
         <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-big" id="copyComm" style="flex:1">Copiar resumo</button><button class="btn btn-big btn-primary" id="pdfComm" style="flex:1">Baixar PDF comissão</button></div>`;
