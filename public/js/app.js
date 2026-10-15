@@ -1536,10 +1536,21 @@ function modalCancelSale(sale, onSaved) {
       <div style="height:12px"></div>
       <button class="btn btn-primary btn-big" type="submit">Confirmar cancelamento</button>
       <button class="btn btn-ghost btn-big" type="button" id="cancel">Voltar</button>
+      <div style="height:8px"></div>
+      <button class="btn btn-ghost btn-big btn-del" type="button" id="hardDel" style="color:var(--red)">🗑️ Excluir venda em definitivo</button>
+      <p class="muted" style="font-size:11px;margin:4px 0 0">Cancelar: sai das vendas e vai para o histórico de canceladas. Excluir: some de tudo, sem rastro (erro de cadastro).</p>
     </form>
   </div></div>`;
   $('#cancel').onclick = closeModal;
   $('#mbg').onclick = (e) => { if (e.target.id === 'mbg') closeModal(); };
+  $('#hardDel').onclick = async () => {
+    if (!confirm(`Excluir a venda #${sale.id} EM DEFINITIVO?\n\nEla some de tudo (vendas, ranking, comissões) e NÃO vai para o histórico de canceladas.\nUse só para erro de cadastro.`)) return;
+    if (!confirm('Tem certeza absoluta? Essa ação não pode ser desfeita.')) return;
+    try {
+      await api(`/api/sales/${sale.id}`, { method: 'DELETE' });
+      closeModal(); toast('Venda excluída em definitivo.'); if (onSaved) onSaved();
+    } catch (err) { toast(err.message, 'err'); }
+  };
   $('#fCancelSale').onsubmit = async (e) => {
     e.preventDefault();
     const reason = ($('input[name="reason"]:checked') || {}).value;
@@ -3169,17 +3180,80 @@ async function viewComissoes(app) {
     <div class="card">
       <label>Mês</label><input type="month" id="cMonth" value="${t.slice(0, 7)}">
       <div style="height:10px"></div><button class="btn btn-primary" id="cGo">Ver mês</button>
-      <div id="cBody" style="margin-top:12px"></div>
     </div>
-    <h3 class="section-title">Cancelamento mensal</h3>
-    <div class="card"><div id="discBody"><p class="muted">Carregando…</p></div></div>
-    <h3 class="section-title">Vendas canceladas (histórico)</h3>
-    <div class="card"><div id="cancBody"><p class="muted">Carregando…</p></div></div>
-    <h3 class="section-title">Pagamentos</h3>
-    <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
+    <div class="mini-pills" id="commTabs" style="margin:12px 0 10px">
+      <button data-tab="comm" class="on">Comissões</button>
+      <button data-tab="canc">Cancelamentos</button>
+      <button data-tab="pay">Pagamentos</button>
+    </div>
+    <div class="card"><label>Buscar</label><input id="commQ" placeholder="Vendedora, cliente, produto, PIX…">
+    <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
+      <select id="commStoreF" style="flex:1"><option value="">Todas as lojas</option></select>
+      <button class="btn btn-primary" id="commGo">Filtrar</button>
+    </div></div>
+    <div id="tabComm" style="margin-top:12px"><div class="card"><div id="cBody"><p class="muted">Carregando…</p></div></div></div>
+    <div id="tabCanc" style="display:none;margin-top:12px">
+      <h3 class="section-title">Cancelamento mensal</h3>
+      <div class="card"><div id="discBody"><p class="muted">Carregando…</p></div></div>
+      <h3 class="section-title">Vendas canceladas (histórico)</h3>
+      <div class="card"><div id="cancBody"><p class="muted">Carregando…</p></div></div>
+    </div>
+    <div id="tabPay" style="display:none;margin-top:12px">
+      <h3 class="section-title">Pagamentos</h3>
+      <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
+    </div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
   let commSector = '';
   let commStore = store.user?.role === 'manager' ? String(store.user.store_id || '') : '';
+  let commTab = 'comm';
+  let commQ = '';
+  let commStoreF = '';
+  let cacheSummary = null;
+  let cacheDiscounts = [];
+  let cacheCanceled = [];
+  let cacheAllDiscs = [];
+  let cachePayouts = [];
+  const commNorm = (s) => normSearch(s);
+  const matchStore = (storeName) => !commStoreF || commNorm(storeName || '') === commNorm(commStoreF) || String(storeName || '') === String(commStoreF);
+  const showTab = (tab) => {
+    commTab = tab;
+    $$('#commTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
+    $('#tabComm').style.display = tab === 'comm' ? '' : 'none';
+    $('#tabCanc').style.display = tab === 'canc' ? '' : 'none';
+    $('#tabPay').style.display = tab === 'pay' ? '' : 'none';
+  };
+  $('#commTabs').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    showTab(b.dataset.tab);
+  };
+  const applyCommFilter = () => {
+    renderCommRows();
+    renderDiscs();
+    renderCancs();
+    renderPays();
+  };
+  $('#commGo').onclick = () => {
+    commQ = $('#commQ').value.trim();
+    commStoreF = $('#commStoreF').value || '';
+    applyCommFilter();
+  };
+  let commDeb = null;
+  $('#commQ').oninput = () => { clearTimeout(commDeb); commDeb = setTimeout(() => { commQ = $('#commQ').value.trim(); applyCommFilter(); }, 400); };
+  $('#commStoreF').onchange = () => { commStoreF = $('#commStoreF').value || ''; applyCommFilter(); };
+  const loadStoreFilter = async () => {
+    const sel = $('#commStoreF');
+    if (!sel) return;
+    if (store.user?.role === 'manager') {
+      sel.innerHTML = `<option value="">Minha loja</option>`;
+      sel.disabled = true;
+      return;
+    }
+    try {
+      const { stores } = await api('/api/stores');
+      const names = [...new Set((stores || []).map((s) => s.name))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      sel.innerHTML = `<option value="">Todas as lojas</option>` + names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    } catch { /* mantém só "Todas as lojas" */ }
+  };
   $('#commSector').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     commSector = b.dataset.s;
@@ -3196,9 +3270,26 @@ async function viewComissoes(app) {
       const totNet = s.total_net_cents ?? (Number(s.total_month_cents || 0) - totDisc);
       const totDiscTxt = (Number(totDisc) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
       const totNetTxt = (Math.max(0, Number(totNet)) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-      box.innerHTML = `
-        <p class="muted" style="font-size:13px">Bruto: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Descontos: <b class="mono">-${totDiscTxt}</b> • Líquido: <b class="mono">${totNetTxt}</b></p>
-        ${compactListHTML(s.rows, (r) => {
+      cacheSummary = { s, month, totDisc, totDiscTxt, totNet, totNetTxt };
+      renderCommRows();
+      await loadDiscs(month);
+      await loadCancs(month);
+    } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const renderCommRows = () => {
+    if (!cacheSummary) return;
+    const { s, month, totDisc, totDiscTxt, totNet, totNetTxt } = cacheSummary;
+    const box = $('#cBody');
+    if (!box) return;
+    const q = commNorm(commQ);
+    const rows = (s.rows || []).filter((r) => {
+      if (!matchStore(r.store_name)) return false;
+      if (!q) return true;
+      return commNorm(r.name).includes(q) || commNorm(r.pix_key).includes(q) || commNorm(r.store_name).includes(q);
+    });
+    box.innerHTML = `
+        <p class="muted" style="font-size:13px">Bruto: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Descontos: <b class="mono">-${totDiscTxt}</b> • Líquido: <b class="mono">${totNetTxt}</b>${(q || commStoreF) && rows.length !== (s.rows || []).length ? ` • filtro: <b>${rows.length}</b> de <b>${(s.rows || []).length}</b>` : ''}</p>
+        ${rows.length ? compactListHTML(rows, (r) => {
           const qtd = fmtV(r.sales_credit ?? r.sales_count ?? 0);
           const dq = Number(r.disc_qty) || 0;
           const dc = Number(r.disc_cents) || 0;
@@ -3211,33 +3302,30 @@ async function viewComissoes(app) {
           <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${qtd} vendas${dq > 0 ? ` • ${fmtV(dq)} canc. (-${fmtBRL(dc)})` : ''} • ${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
           ${dq > 0 || Number(r.month_cents || 0) > 0 ? `<div class="muted" style="font-size:11px;margin-top:2px">Bruto ${fmtBRL(r.month_cents)}${dq > 0 ? ` • Desconto -${fmtBRL(dc)}` : ''}</div>` : ''}
           </div>`;
-        }, 8)}
+        }, 8) : '<div class="card empty">Nenhuma vendedora encontrada para essa busca.</div>'}
         <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-big" id="copyComm" style="flex:1">Copiar resumo</button><button class="btn btn-big btn-primary" id="pdfComm" style="flex:1">Baixar PDF comissão</button></div>`;
-      bindCompactList(box);
-      $('#copyComm').onclick = async () => {
-        const msg = `*COMISSÕES — ${month}*\nBruto: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • Descontos: -${totDiscTxt} • Líquido: ${totNetTxt}\n` +
-          s.rows.map((r) => {
-            const dq2 = Number(r.disc_qty) || 0;
-            const dc2 = Number(r.disc_cents) || 0;
-            const net2 = r.net_cents != null ? Number(r.net_cents) : Math.max(0, Number(r.month_cents || 0) - dc2);
-            return `• ${r.name} - vendas ${fmtV(r.sales_credit ?? r.sales_count ?? 0)} - canc ${fmtV(dq2)} (-${(dc2 / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) - comissão ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} - receber ${(net2 / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
-          }).join('\n');
-        await navigator.clipboard.writeText(msg).catch(() => {});
-        toast('Resumo copiado!');
-      };
-      $('#pdfComm').onclick = () => openCommissionsPDF(s.rows, month, s.total_month_cents, totDisc, totNet);
-      $$('#cBody [data-pix]').forEach((b) => (b.onclick = async (e) => {
-        if (e && e.stopPropagation) e.stopPropagation();
-        await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
-        toast('Chave PIX copiada!');
-      }));
-      $$('#cBody [data-disc]').forEach((b) => (b.onclick = (e) => {
-        if (e && e.stopPropagation) e.stopPropagation();
-        modalDiscount(null, s.rows, month, Number(b.dataset.disc), load);
-      }));
-      await loadDiscs(month);
-      await loadCancs(month);
-    } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    bindCompactList(box);
+    $('#copyComm').onclick = async () => {
+      const msg = `*COMISSÕES — ${month}*\nBruto: ${(s.total_month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} • Descontos: -${totDiscTxt} • Líquido: ${totNetTxt}\n` +
+        s.rows.map((r) => {
+          const dq2 = Number(r.disc_qty) || 0;
+          const dc2 = Number(r.disc_cents) || 0;
+          const net2 = r.net_cents != null ? Number(r.net_cents) : Math.max(0, Number(r.month_cents || 0) - dc2);
+          return `• ${r.name} - vendas ${fmtV(r.sales_credit ?? r.sales_count ?? 0)} - canc ${fmtV(dq2)} (-${(dc2 / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) - comissão ${(r.month_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} - receber ${(net2 / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+        }).join('\n');
+      await navigator.clipboard.writeText(msg).catch(() => {});
+      toast('Resumo copiado!');
+    };
+    $('#pdfComm').onclick = () => openCommissionsPDF(s.rows, month, s.total_month_cents, totDisc, totNet);
+    $$('#cBody [data-pix]').forEach((b) => (b.onclick = async (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
+      toast('Chave PIX copiada!');
+    }));
+    $$('#cBody [data-disc]').forEach((b) => (b.onclick = (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      modalDiscount(null, s.rows, month, Number(b.dataset.disc), load);
+    }));
   };
   const loadDiscs = async (month) => {
     const el = $('#discBody');
@@ -3245,15 +3333,29 @@ async function viewComissoes(app) {
     el.innerHTML = '<p class="muted">Carregando…</p>';
     try {
       const { discounts } = await api(`/api/commissions/discounts?month=${month}`);
-      const totQ = (discounts || []).reduce((a, d) => a + Number(d.qty || 0), 0);
-      const totC = (discounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
-      el.innerHTML = `
+      cacheDiscounts = discounts || [];
+      renderDiscs();
+    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const renderDiscs = () => {
+    const el = $('#discBody');
+    if (!el) return;
+    const month = $('#cMonth').value || t.slice(0, 7);
+    const q = commNorm(commQ);
+    const list = (cacheDiscounts || []).filter((d) => {
+      if (!matchStore(d.store_name)) return false;
+      if (!q) return true;
+      return commNorm(d.seller_name).includes(q) || commNorm(d.customer_name).includes(q) || commNorm(d.product).includes(q) || commNorm(d.note).includes(q);
+    });
+    const totQ = (cacheDiscounts || []).reduce((a, d) => a + Number(d.qty || 0), 0);
+    const totC = (cacheDiscounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
+    el.innerHTML = `
         <div class="row" style="justify-content:space-between;align-items:center">
-          <span class="muted" style="font-size:13px">Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b></span>
+          <span class="muted" style="font-size:13px">Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b>${(q || commStoreF) && list.length !== (cacheDiscounts || []).length ? ` • filtro: <b>${list.length}</b>` : ''}</span>
           <button class="btn btn-primary" id="discAdd">+ Lançar cancelamento</button>
         </div>
         <div style="height:8px"></div>
-        ${(discounts || []).length ? discounts.map((d) => `
+        ${list.length ? list.map((d) => `
           <div class="row" style="justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:8px 0">
             <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span>
             ${(d.customer_name || d.product) ? `<div class="muted" style="font-size:12px">🧾 ${esc(d.customer_name || '—')} • ${esc(d.product || '—')}${d.sale_date ? ` • vendida ${fmtDateBR(d.sale_date)}` : ''}${d.canceled_at ? ` • cancelada ${fmtDateBR(String(d.canceled_at).slice(0, 10))}` : ''}</div>` : ''}</div>
@@ -3262,19 +3364,18 @@ async function viewComissoes(app) {
               <button class="btn btn-ghost" data-ddel="${d.id}">🗑️</button>
             </div>
           </div>`).join('') : '<div class="empty">Sem cancelamentos neste mês.</div>'}`;
-      $('#discAdd').onclick = () => modalDiscount(null, null, month, null, async () => { await load(); });
-      $$('#discBody [data-dedit]').forEach((b) => (b.onclick = async () => {
-        try {
-          const cur = (discounts || []).find((x) => String(x.id) === String(b.dataset.dedit));
-          modalDiscount(cur, null, month, cur?.seller_id, async () => { await load(); });
-        } catch (err) { toast(err.message, 'err'); }
-      }));
-      $$('#discBody [data-ddel]').forEach((b) => (b.onclick = async () => {
-        if (!confirm('Excluir este cancelamento? O líquido volta a subir.')) return;
-        try { await api(`/api/commissions/discounts/${b.dataset.ddel}`, { method: 'DELETE' }); toast('Excluído!'); await load(); }
-        catch (err) { toast(err.message, 'err'); }
-      }));
-    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    $('#discAdd').onclick = () => modalDiscount(null, null, month, null, async () => { await load(); });
+    $$('#discBody [data-dedit]').forEach((b) => (b.onclick = async () => {
+      try {
+        const cur = (cacheDiscounts || []).find((x) => String(x.id) === String(b.dataset.dedit));
+        modalDiscount(cur, null, month, cur?.seller_id, async () => { await load(); });
+      } catch (err) { toast(err.message, 'err'); }
+    }));
+    $$('#discBody [data-ddel]').forEach((b) => (b.onclick = async () => {
+      if (!confirm('Excluir este cancelamento? O líquido volta a subir.')) return;
+      try { await api(`/api/commissions/discounts/${b.dataset.ddel}`, { method: 'DELETE' }); toast('Excluído!'); await load(); }
+      catch (err) { toast(err.message, 'err'); }
+    }));
   };
   // histórico de vendas canceladas (auditoria) + atalho p/ lançar desconto vinculado
   const loadCancs = async (month) => {
@@ -3286,12 +3387,28 @@ async function viewComissoes(app) {
         api('/api/sales/canceled'),
         api('/api/commissions/discounts').catch(() => ({ discounts: [] })),
       ]);
-      const byCanc = {};
-      for (const d of allDiscs || []) {
-        if (!d.canceled_sale_id) continue;
-        (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
-      }
-      el.innerHTML = (canceled || []).length ? compactListHTML(canceled || [], (c) => {
+      cacheCanceled = canceled || [];
+      cacheAllDiscs = allDiscs || [];
+      renderCancs();
+    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const renderCancs = () => {
+    const el = $('#cancBody');
+    if (!el) return;
+    const month = $('#cMonth').value || t.slice(0, 7);
+    const q = commNorm(commQ);
+    const byCanc = {};
+    for (const d of cacheAllDiscs || []) {
+      if (!d.canceled_sale_id) continue;
+      (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
+    }
+    const list = (cacheCanceled || []).filter((c) => {
+      if (!q) return true;
+      const parts = (c.participants || []).map((p) => p.seller_name).join(' ');
+      return commNorm(c.customer_name).includes(q) || commNorm(c.product).includes(q) || commNorm(parts).includes(q);
+    });
+    el.innerHTML = (cacheCanceled || []).length
+      ? (list.length ? compactListHTML(list, (c) => {
         const parts = (c.participants || []).map((p) => esc(p.seller_name)).join(', ');
         const linkedDiscs = byCanc[c.id] || [];
         const status = linkedDiscs.length
@@ -3301,30 +3418,53 @@ async function viewComissoes(app) {
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap"><b>${esc(c.customer_name)}</b>${status}</div>
           <div class="muted" style="font-size:12.5px;margin-top:2px">🧾 ${esc(c.product)} • ${esc(c.color)} • ${esc(c.channel)}</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Vendida ${fmtDateBR(c.sale_date)} • Cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))} • 👥 ${parts}${c.reason ? ` • ${esc(c.reason)}` : ''}${c.note ? ` • ${esc(c.note)}` : ''}</div>
-          ${linkedDiscs.length ? '' : `<div style="margin-top:6px"><button class="btn" style="font-size:12px;padding:6px 10px" data-claunch="${c.id}">Lançar desconto</button></div>`}
+          <div class="row" style="margin-top:6px;gap:8px">${linkedDiscs.length ? '' : `<button class="btn" style="font-size:12px;padding:6px 10px" data-claunch="${c.id}">Lançar desconto</button>`}<button class="btn btn-ghost" style="font-size:12px;padding:6px 10px" data-cdel="${c.id}" title="Excluir registro em definitivo">🗑️</button></div>
         </div>`;
-      }, 6) : '<div class="empty">Nenhuma venda cancelada.</div>';
+      }, 6) : '<div class="card empty">Nada encontrado para essa busca.</div>')
+      : '<div class="empty">Nenhuma venda cancelada.</div>';
       bindCompactList(el);
       $$('#cancBody [data-claunch]').forEach((b) => (b.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
-        const canc = (canceled || []).find((x) => String(x.id) === String(b.dataset.claunch));
+        const canc = (cacheCanceled || []).find((x) => String(x.id) === String(b.dataset.claunch));
         if (!canc) return;
         const firstSeller = (canc.participants || [])[0];
         modalDiscount(null, null, month, firstSeller ? firstSeller.seller_id : null, async () => { await load(); }, canc);
       }));
-    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+      $$('#cancBody [data-cdel]').forEach((b) => (b.onclick = async (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (!confirm('Excluir este registro de cancelada EM DEFINITIVO?\n\nSome do histórico e da aba Canc. da vendedora.')) return;
+        try { await api(`/api/sales/canceled/${b.dataset.cdel}`, { method: 'DELETE' }); toast('Registro excluído!'); await load(); }
+        catch (err) { toast(err.message, 'err'); }
+      }));
   };
   const loadPays = async () => {
     try {
       const { payouts } = await api('/api/commissions/payouts');
-      $('#payList').innerHTML = payouts.length ? payouts.map((p) => `
+      cachePayouts = payouts || [];
+      renderPays();
+    } catch (e) { $('#payList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const renderPays = () => {
+    const box = $('#payList');
+    if (!box) return;
+    const q = commNorm(commQ);
+    const storeBySeller = {};
+    for (const r of ((cacheSummary && cacheSummary.s.rows) || [])) storeBySeller[r.seller_id] = r.store_name;
+    const list = (cachePayouts || []).filter((p) => {
+      if (commStoreF && storeBySeller[p.seller_id] && !matchStore(storeBySeller[p.seller_id])) return false;
+      if (!q) return true;
+      return commNorm(p.seller_name).includes(q) || commNorm(p.month).includes(q);
+    });
+    box.innerHTML = (cachePayouts || []).length
+      ? (list.length ? list.map((p) => `
         <div class="row" style="align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:8px 0">
           <div><b>${esc(p.seller_name)}</b> <span class="muted" style="font-size:12px">${esc(p.month)}${p.by_name ? ` • por ${esc(p.by_name)}` : ''}</span></div>
           <b class="mono">${fmtBRL(p.amount_cents)}</b>
-        </div>`).join('') : '<div class="empty">Nenhum pagamento registrado.</div>';
-    } catch (e) { $('#payList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+        </div>`).join('') : '<div class="empty">Nada encontrado para essa busca.</div>')
+      : '<div class="empty">Nenhum pagamento registrado.</div>';
   };
   $('#cGo').onclick = load;
+  await loadStoreFilter();
   await load();
   await loadPays();
 }
@@ -3361,6 +3501,14 @@ function openCommissionsPDF(rows, month, totalCents, totDisc, totNet) {
   w.document.close();
 }
 
+function ymToBR(ym) {
+  const m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
+  return m ? `${m[2]}/${m[1]}` : '';
+}
+function brToYM(v) {
+  const m = String(v || '').trim().match(/^(0?[1-9]|1[0-2])\/(\d{4})$/);
+  return m ? `${m[2]}-${String(m[1]).padStart(2, '0')}` : null;
+}
 function discBasePreview(seller) {
   if (!seller) return 2500;
   const isMain = !seller.store_name || seller.store_name === 'Sede';
@@ -3392,7 +3540,7 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
       <label>Nome do cliente</label><input id="dCustomer" maxlength="120" placeholder="Nome do cliente" value="${esc(cur?.customer_name || presetCanc?.customer_name || '')}">
       <label>Produto/modelo</label><input id="dProduct" maxlength="120" placeholder="Ex: bike aro 29" value="${esc(cur?.product || presetCanc?.product || '')}">
       <input id="dMonthDisc" type="hidden" value="${esc(cur?.month_disc || monthDisc || todayISO().slice(0, 7))}">
-      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || '')}">
+      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" inputmode="numeric" placeholder="MM/AAAA (ex: 10/2026)" value="${esc(ymToBR(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || ''))}" ${presetCanc ? 'disabled' : ''}>
       <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : (presetCanc ? String((presetCanc.participants || []).find((p) => String(p.seller_id) === String(presetSellerId ?? presetCanc?.participants?.[0]?.seller_id))?.credit ?? presetCanc?.participants?.[0]?.credit ?? '').replace('.', ',') : ''))}">
       <p class="muted" style="font-size:12px;margin:4px 0" id="dPrev"></p>
       <label>Venda cancelada (vínculo p/ histórico)</label><select id="dCanc"><option value="">Avulso (sem vínculo)</option>${presetCanc ? `<option value="${presetCanc.id}" selected>${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • ${fmtDateBR(presetCanc.sale_date)}</option>` : ''}</select>
@@ -3421,6 +3569,16 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
   $('#dQty').oninput = refreshPrev;
   $('#dSeller').onchange = refreshPrev;
   $('#dManual').onchange = refreshPrev;
+  const dMonthRefEl = $('#dMonthRef');
+  if (dMonthRefEl && !presetCanc) {
+    // máscara leve MM/AAAA enquanto digita (só números + barra)
+    dMonthRefEl.oninput = () => {
+      let d = String(dMonthRefEl.value || '').replace(/\D/g, '').slice(0, 6);
+      if (d.length >= 5) dMonthRefEl.value = d.slice(0, 2) + '/' + d.slice(2);
+      else if (d.length >= 3) dMonthRefEl.value = d.slice(0, 2) + '/' + d.slice(2);
+      else dMonthRefEl.value = d;
+    };
+  }
   refreshPrev();
   // lista de canceladas p/ vincular (só criação avulsa; com preset já vem selecionada)
   if (!cur && !presetCanc) {
@@ -3436,7 +3594,7 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
         if (!c) { if (info) info.textContent = ''; return; }
         if (info) info.textContent = `🧾 ${c.customer_name} • ${c.product} • vendida ${fmtDateBR(c.sale_date)} • cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))}`;
         const mr = $('#dMonthRef');
-        if (mr && !mr.value && c.sale_date) mr.value = String(c.sale_date).slice(0, 7);
+        if (mr && !mr.value && c.sale_date) mr.value = ymToBR(String(c.sale_date).slice(0, 7));
         const q = $('#dQty');
         if (q && !q.value) {
           const part = (c.participants || []).find((p) => String(p.seller_id) === String($('#dSeller')?.value)) || (c.participants || [])[0];
@@ -3462,7 +3620,9 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
     try {
       const seller_id = Number($('#dSeller').value);
       const month_disc = $('#dMonthDisc').value;
-      const month_ref = $('#dMonthRef').value || '';
+      const refRaw = String($('#dMonthRef').value || '').trim();
+      const month_ref = refRaw ? brToYM(refRaw) : '';
+      if (refRaw && !month_ref) return toast('Mês da venda inválido. Use MM/AAAA (ex: 10/2026).', 'err');
       const manual = $('#dManual').checked;
       const valStr = String($('#dVal').value || '').trim().replace(',', '.');
       const body = { seller_id, month_disc, month_ref, qty: String($('#dQty').value).replace(',', '.'), note: $('#dNote').value, customer_name: $('#dCustomer')?.value || '', product: $('#dProduct')?.value || '' };

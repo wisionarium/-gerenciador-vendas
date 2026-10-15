@@ -1317,6 +1317,20 @@ app.get('/api/sales/canceled', requireAuth, requireAdmin, ah(async (req, res) =>
   res.json({ canceled: rows.map((r) => ({ ...r, participants: JSON.parse(r.participants || '[]') })) });
 }));
 
+// excluir registro de cancelada em definitivo (admin, erro de cadastro):
+// some do histórico e da aba Canc. da vendedora. Bloqueia se já houver
+// desconto vinculado (exclua o desconto primeiro).
+app.delete('/api/sales/canceled/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const canc = await db.get('SELECT * FROM canceled_sales WHERE id=?', req.params.id);
+  if (!canc) return res.status(404).json({ error: 'Venda cancelada não encontrada.' });
+  let linked = 0;
+  try { linked = Number((await db.get('SELECT COUNT(*) AS c FROM commission_discounts WHERE canceled_sale_id=?', canc.id)).c) || 0; }
+  catch { linked = 0; }
+  if (linked > 0) return res.status(409).json({ error: 'Esta cancelada tem desconto lançado. Exclua o desconto primeiro.' });
+  await db.run('DELETE FROM canceled_sales WHERE id=?', canc.id);
+  res.json({ ok: true });
+}));
+
 // ---------- MANUTENÇÃO: arquivo 90+ dias (manual, só admin) ----------
 // Arquiva (não apaga): vendas, chamadas e canceladas somem das listas/totais
 // mas ficam consultáveis. Pagamentos (payouts) nunca são tocados.
