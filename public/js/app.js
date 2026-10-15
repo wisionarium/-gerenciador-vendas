@@ -3508,14 +3508,6 @@ function openCommissionsPDF(rows, month, totalCents, totDisc, totNet) {
   w.document.close();
 }
 
-function ymToBR(ym) {
-  const m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
-  return m ? `${m[2]}/${m[1]}` : '';
-}
-function brToYM(v) {
-  const m = String(v || '').trim().match(/^(0?[1-9]|1[0-2])\/(\d{4})$/);
-  return m ? `${m[2]}-${String(m[1]).padStart(2, '0')}` : null;
-}
 function discBasePreview(seller) {
   if (!seller) return 2500;
   const isMain = !seller.store_name || seller.store_name === 'Sede';
@@ -3547,7 +3539,7 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
       <label>Nome do cliente</label><input id="dCustomer" maxlength="120" placeholder="Nome do cliente" value="${esc(cur?.customer_name || presetCanc?.customer_name || '')}">
       <label>Produto/modelo</label><input id="dProduct" maxlength="120" placeholder="Ex: bike aro 29" value="${esc(cur?.product || presetCanc?.product || '')}">
       <input id="dMonthDisc" type="hidden" value="${esc(cur?.month_disc || monthDisc || todayISO().slice(0, 7))}">
-      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" inputmode="numeric" placeholder="MM/AAAA (ex: 10/2026)" value="${esc(ymToBR(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || ''))}" ${presetCanc ? 'disabled' : ''}>
+      <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || '')}" ${presetCanc ? 'disabled' : ''}>
       <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : (presetCanc ? String((presetCanc.participants || []).find((p) => String(p.seller_id) === String(presetSellerId ?? presetCanc?.participants?.[0]?.seller_id))?.credit ?? presetCanc?.participants?.[0]?.credit ?? '').replace('.', ',') : ''))}">
       <p class="muted" style="font-size:12px;margin:4px 0" id="dPrev"></p>
       <label>Venda cancelada (vínculo p/ histórico)</label><select id="dCanc"><option value="">Avulso (sem vínculo)</option>${presetCanc ? `<option value="${presetCanc.id}" selected>${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • ${fmtDateBR(presetCanc.sale_date)}</option>` : ''}</select>
@@ -3576,16 +3568,6 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
   $('#dQty').oninput = refreshPrev;
   $('#dSeller').onchange = refreshPrev;
   $('#dManual').onchange = refreshPrev;
-  const dMonthRefEl = $('#dMonthRef');
-  if (dMonthRefEl && !presetCanc) {
-    // máscara leve MM/AAAA enquanto digita (só números + barra)
-    dMonthRefEl.oninput = () => {
-      let d = String(dMonthRefEl.value || '').replace(/\D/g, '').slice(0, 6);
-      if (d.length >= 5) dMonthRefEl.value = d.slice(0, 2) + '/' + d.slice(2);
-      else if (d.length >= 3) dMonthRefEl.value = d.slice(0, 2) + '/' + d.slice(2);
-      else dMonthRefEl.value = d;
-    };
-  }
   refreshPrev();
   // lista de canceladas p/ vincular (só criação avulsa; com preset já vem selecionada)
   if (!cur && !presetCanc) {
@@ -3601,7 +3583,7 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
         if (!c) { if (info) info.textContent = ''; return; }
         if (info) info.textContent = `🧾 ${c.customer_name} • ${c.product} • vendida ${fmtDateBR(c.sale_date)} • cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))}`;
         const mr = $('#dMonthRef');
-        if (mr && !mr.value && c.sale_date) mr.value = ymToBR(String(c.sale_date).slice(0, 7));
+        if (mr && !mr.value && c.sale_date) mr.value = String(c.sale_date).slice(0, 7);
         const q = $('#dQty');
         if (q && !q.value) {
           const part = (c.participants || []).find((p) => String(p.seller_id) === String($('#dSeller')?.value)) || (c.participants || [])[0];
@@ -3627,9 +3609,7 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
     try {
       const seller_id = Number($('#dSeller').value);
       const month_disc = $('#dMonthDisc').value;
-      const refRaw = String($('#dMonthRef').value || '').trim();
-      const month_ref = refRaw ? brToYM(refRaw) : '';
-      if (refRaw && !month_ref) return toast('Mês da venda inválido. Use MM/AAAA (ex: 10/2026).', 'err');
+      const month_ref = $('#dMonthRef').value || '';
       const manual = $('#dManual').checked;
       const valStr = String($('#dVal').value || '').trim().replace(',', '.');
       const body = { seller_id, month_disc, month_ref, qty: String($('#dQty').value).replace(',', '.'), note: $('#dNote').value, customer_name: $('#dCustomer')?.value || '', product: $('#dProduct')?.value || '' };
