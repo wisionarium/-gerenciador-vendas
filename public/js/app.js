@@ -3172,25 +3172,22 @@ async function viewComissoes(app) {
     <a href="#/admin" class="muted" style="font-size:13px">← Voltar</a>
     <h2 style="margin:6px 0">Comissões 💰</h2>
     <p class="muted" style="font-size:13px;margin:0 0 10px">Online: R$ 25,00 / R$ 12,50 • Presencial: R$ 35,00 / R$ 17,50 • ⭐ modelo especial: valor exclusivo.</p>
-    <div class="mini-pills" id="commSector" style="margin-bottom:10px">
-      <button data-s="" class="on">Todos</button>
-      <button data-s="online">Online</button>
-      <button data-s="presencial">Presencial</button>
-    </div>
-    <div class="card">
-      <label>Mês</label><input type="month" id="cMonth" value="${t.slice(0, 7)}">
-      <div style="height:10px"></div><button class="btn btn-primary" id="cGo">Ver mês</button>
-    </div>
-    <div class="mini-pills" id="commTabs" style="margin:12px 0 10px">
+    <div class="mini-pills" id="commTabs" style="margin:0 0 10px">
       <button data-tab="comm" class="on">Comissões</button>
       <button data-tab="canc">Cancelamentos</button>
       <button data-tab="pay">Pagamentos</button>
     </div>
-    <div class="card"><label>Buscar</label><input id="commQ" placeholder="Vendedora, cliente, produto, PIX…">
-    <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
-      <select id="commStoreF" style="flex:1"><option value="">Todas as lojas</option></select>
-      <button class="btn btn-primary" id="commGo">Filtrar</button>
-    </div></div>
+    <div class="card">
+      <div class="row" style="align-items:end">
+        <div style="flex:2;min-width:0"><label>Vendedora</label><select id="commSellerF" style="width:100%"><option value="">Todas as vendedoras</option></select></div>
+        <div style="flex:1;min-width:130px"><label>Mês</label><div class="row" style="flex-wrap:nowrap;gap:6px;align-items:center"><input type="month" id="cMonth" value="${t.slice(0, 7)}" style="flex:1;min-width:0"><button class="btn btn-primary" id="cGo">Ver</button></div></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1;min-width:0"><label>Loja</label><select id="commStoreF" style="width:100%"><option value="">Todas as lojas</option></select></div>
+        <div style="flex:1;min-width:0"><label>Online / Presencial</label><select id="commSectorS" style="width:100%"><option value="">Todos</option><option value="online">Online</option><option value="presencial">Presencial</option></select></div>
+      </div>
+      <div style="margin-top:10px"><label>Buscar</label><input id="commQ" placeholder="Vendedora, cliente, produto, PIX…"></div>
+    </div>
     <div id="tabComm" style="margin-top:12px"><div class="card"><div id="cBody"><p class="muted">Carregando…</p></div></div></div>
     <div id="tabCanc" style="display:none;margin-top:12px">
       <h3 class="section-title">Cancelamento mensal</h3>
@@ -3208,6 +3205,7 @@ async function viewComissoes(app) {
   let commTab = 'comm';
   let commQ = '';
   let commStoreF = '';
+  let commSeller = '';
   let cacheSummary = null;
   let cacheDiscounts = [];
   let cacheCanceled = [];
@@ -3215,6 +3213,7 @@ async function viewComissoes(app) {
   let cachePayouts = [];
   const commNorm = (s) => normSearch(s);
   const matchStore = (storeName) => !commStoreF || commNorm(storeName || '') === commNorm(commStoreF) || String(storeName || '') === String(commStoreF);
+  const matchSeller = (sellerId) => !commSeller || String(sellerId) === String(commSeller);
   const showTab = (tab) => {
     commTab = tab;
     $$('#commTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
@@ -3232,14 +3231,11 @@ async function viewComissoes(app) {
     renderCancs();
     renderPays();
   };
-  $('#commGo').onclick = () => {
-    commQ = $('#commQ').value.trim();
-    commStoreF = $('#commStoreF').value || '';
-    applyCommFilter();
-  };
   let commDeb = null;
   $('#commQ').oninput = () => { clearTimeout(commDeb); commDeb = setTimeout(() => { commQ = $('#commQ').value.trim(); applyCommFilter(); }, 400); };
   $('#commStoreF').onchange = () => { commStoreF = $('#commStoreF').value || ''; applyCommFilter(); };
+  $('#commSellerF').onchange = () => { commSeller = $('#commSellerF').value || ''; applyCommFilter(); };
+  $('#commSectorS').onchange = () => { commSector = $('#commSectorS').value || ''; load(); };
   const loadStoreFilter = async () => {
     const sel = $('#commStoreF');
     if (!sel) return;
@@ -3254,11 +3250,16 @@ async function viewComissoes(app) {
       sel.innerHTML = `<option value="">Todas as lojas</option>` + names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
     } catch { /* mantém só "Todas as lojas" */ }
   };
-  $('#commSector').onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    commSector = b.dataset.s;
-    $$('#commSector button').forEach((x) => x.classList.toggle('on', x === b));
-    load();
+  const syncSellerFilter = () => {
+    const sel = $('#commSellerF');
+    if (!sel || !cacheSummary) return;
+    const keep = commSeller || sel.value || '';
+    const opts = [...(cacheSummary.s.rows || [])]
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'))
+      .map((r) => `<option value="${r.seller_id}">${esc(r.name)}</option>`).join('');
+    sel.innerHTML = `<option value="">Todas as vendedoras</option>` + opts;
+    sel.value = keep;
+    commSeller = sel.value || '';
   };
   const load = async () => {
     const month = $('#cMonth').value || t.slice(0, 7);
@@ -3271,6 +3272,7 @@ async function viewComissoes(app) {
       const totDiscTxt = (Number(totDisc) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
       const totNetTxt = (Math.max(0, Number(totNet)) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
       cacheSummary = { s, month, totDisc, totDiscTxt, totNet, totNetTxt };
+      syncSellerFilter();
       renderCommRows();
       await loadDiscs(month);
       await loadCancs(month);
@@ -3283,12 +3285,13 @@ async function viewComissoes(app) {
     if (!box) return;
     const q = commNorm(commQ);
     const rows = (s.rows || []).filter((r) => {
+      if (!matchSeller(r.seller_id)) return false;
       if (!matchStore(r.store_name)) return false;
       if (!q) return true;
       return commNorm(r.name).includes(q) || commNorm(r.pix_key).includes(q) || commNorm(r.store_name).includes(q);
     });
     box.innerHTML = `
-        <p class="muted" style="font-size:13px">Bruto: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Descontos: <b class="mono">-${totDiscTxt}</b> • Líquido: <b class="mono">${totNetTxt}</b>${(q || commStoreF) && rows.length !== (s.rows || []).length ? ` • filtro: <b>${rows.length}</b> de <b>${(s.rows || []).length}</b>` : ''}</p>
+        <p class="muted" style="font-size:13px">Bruto: <b class="mono">${fmtBRL(s.total_month_cents)}</b> • Descontos: <b class="mono">-${totDiscTxt}</b> • Líquido: <b class="mono">${totNetTxt}</b>${(q || commStoreF || commSeller) && rows.length !== (s.rows || []).length ? ` • filtro: <b>${rows.length}</b> de <b>${(s.rows || []).length}</b>` : ''}</p>
         ${rows.length ? compactListHTML(rows, (r) => {
           const qtd = fmtV(r.sales_credit ?? r.sales_count ?? 0);
           const dq = Number(r.disc_qty) || 0;
@@ -3343,6 +3346,7 @@ async function viewComissoes(app) {
     const month = $('#cMonth').value || t.slice(0, 7);
     const q = commNorm(commQ);
     const list = (cacheDiscounts || []).filter((d) => {
+      if (!matchSeller(d.seller_id)) return false;
       if (!matchStore(d.store_name)) return false;
       if (!q) return true;
       return commNorm(d.seller_name).includes(q) || commNorm(d.customer_name).includes(q) || commNorm(d.product).includes(q) || commNorm(d.note).includes(q);
@@ -3351,7 +3355,7 @@ async function viewComissoes(app) {
     const totC = (cacheDiscounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
     el.innerHTML = `
         <div class="row" style="justify-content:space-between;align-items:center">
-          <span class="muted" style="font-size:13px">Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b>${(q || commStoreF) && list.length !== (cacheDiscounts || []).length ? ` • filtro: <b>${list.length}</b>` : ''}</span>
+          <span class="muted" style="font-size:13px">Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b>${(q || commStoreF || commSeller) && list.length !== (cacheDiscounts || []).length ? ` • filtro: <b>${list.length}</b>` : ''}</span>
           <button class="btn btn-primary" id="discAdd">+ Lançar cancelamento</button>
         </div>
         <div style="height:8px"></div>
@@ -3403,6 +3407,7 @@ async function viewComissoes(app) {
       (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
     }
     const list = (cacheCanceled || []).filter((c) => {
+      if (commSeller && !(c.participants || []).some((p) => String(p.seller_id) === String(commSeller))) return false;
       if (!q) return true;
       const parts = (c.participants || []).map((p) => p.seller_name).join(' ');
       return commNorm(c.customer_name).includes(q) || commNorm(c.product).includes(q) || commNorm(parts).includes(q);
@@ -3451,6 +3456,7 @@ async function viewComissoes(app) {
     const storeBySeller = {};
     for (const r of ((cacheSummary && cacheSummary.s.rows) || [])) storeBySeller[r.seller_id] = r.store_name;
     const list = (cachePayouts || []).filter((p) => {
+      if (!matchSeller(p.seller_id)) return false;
       if (commStoreF && storeBySeller[p.seller_id] && !matchStore(storeBySeller[p.seller_id])) return false;
       if (!q) return true;
       return commNorm(p.seller_name).includes(q) || commNorm(p.month).includes(q);
