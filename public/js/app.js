@@ -3175,29 +3175,37 @@ async function viewComissoes(app) {
     <div class="mini-pills" id="commTabs" style="margin:0 0 10px">
       <button data-tab="comm" class="on">Comissões</button>
       <button data-tab="canc">Cancelamentos</button>
-      <button data-tab="pay">Pagamentos</button>
     </div>
     <div class="card">
       <div class="row" style="align-items:end">
         <div style="flex:2;min-width:0"><label>Vendedora</label><select id="commSellerF" style="width:100%"><option value="">Todas as vendedoras</option></select></div>
         <div style="flex:1;min-width:130px"><label>Mês</label><div class="row" style="flex-wrap:nowrap;gap:6px;align-items:center"><input type="month" id="cMonth" value="${t.slice(0, 7)}" style="flex:1;min-width:0"><button class="btn btn-primary" id="cGo">Ver</button></div></div>
       </div>
-      <div class="row" style="margin-top:10px">
+      <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:end">
         <div style="flex:1;min-width:0"><label>Loja</label><select id="commStoreF" style="width:100%"><option value="">Todas as lojas</option></select></div>
         <div style="flex:1;min-width:0"><label>Online / Presencial</label><select id="commSectorS" style="width:100%"><option value="">Todos</option><option value="online">Online</option><option value="presencial">Presencial</option></select></div>
+        <div style="flex:none"><label>&nbsp;</label><button class="btn btn-primary" id="commGo">Filtrar</button></div>
       </div>
       <div style="margin-top:10px"><label>Buscar</label><input id="commQ" placeholder="Vendedora, cliente, produto, PIX…"></div>
     </div>
     <div id="tabComm" style="margin-top:12px"><div class="card"><div id="cBody"><p class="muted">Carregando…</p></div></div></div>
     <div id="tabCanc" style="display:none;margin-top:12px">
-      <h3 class="section-title">Cancelamento mensal</h3>
+      <div class="card" style="text-align:center;padding:20px 12px">
+        <b style="font-size:15px">Gerar cancelamento</b>
+        <p class="muted" style="font-size:12px;margin:4px 0 12px">Lance o desconto da venda cancelada na comissão do mês.</p>
+        <div id="cancAlert"></div>
+        <button class="btn btn-primary btn-big" id="discAdd">Gerar cancelamento</button>
+      </div>
+      <h3 class="section-title">Descontos lançados no mês</h3>
       <div class="card"><div id="discBody"><p class="muted">Carregando…</p></div></div>
       <h3 class="section-title">Vendas canceladas (histórico)</h3>
-      <div class="card"><div id="cancBody"><p class="muted">Carregando…</p></div></div>
-    </div>
-    <div id="tabPay" style="display:none;margin-top:12px">
-      <h3 class="section-title">Pagamentos</h3>
-      <div class="card"><div id="payList"><p class="muted">Carregando…</p></div></div>
+      <div class="card">
+        <div class="mini-pills" id="cancScope" style="margin-bottom:8px">
+          <button data-w="month" class="on">Deste mês</button>
+          <button data-w="all">Todas</button>
+        </div>
+        <div id="cancBody"><p class="muted">Carregando…</p></div>
+      </div>
     </div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
   let commSector = '';
@@ -3206,11 +3214,11 @@ async function viewComissoes(app) {
   let commQ = '';
   let commStoreF = '';
   let commSeller = '';
+  let cancScope = 'month';
   let cacheSummary = null;
   let cacheDiscounts = [];
   let cacheCanceled = [];
   let cacheAllDiscs = [];
-  let cachePayouts = [];
   const commNorm = (s) => normSearch(s);
   const matchStore = (storeName) => !commStoreF || commNorm(storeName || '') === commNorm(commStoreF) || String(storeName || '') === String(commStoreF);
   const matchSeller = (sellerId) => !commSeller || String(sellerId) === String(commSeller);
@@ -3219,7 +3227,6 @@ async function viewComissoes(app) {
     $$('#commTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
     $('#tabComm').style.display = tab === 'comm' ? '' : 'none';
     $('#tabCanc').style.display = tab === 'canc' ? '' : 'none';
-    $('#tabPay').style.display = tab === 'pay' ? '' : 'none';
   };
   $('#commTabs').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -3229,7 +3236,18 @@ async function viewComissoes(app) {
     renderCommRows();
     renderDiscs();
     renderCancs();
-    renderPays();
+  };
+  $('#commGo').onclick = () => {
+    commQ = $('#commQ').value.trim();
+    commStoreF = $('#commStoreF').value || '';
+    commSeller = $('#commSellerF').value || '';
+    applyCommFilter();
+  };
+  $('#cancScope').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    cancScope = b.dataset.w;
+    $$('#cancScope button').forEach((x) => x.classList.toggle('on', x === b));
+    renderCancs();
   };
   let commDeb = null;
   $('#commQ').oninput = () => { clearTimeout(commDeb); commDeb = setTimeout(() => { commQ = $('#commQ').value.trim(); applyCommFilter(); }, 400); };
@@ -3340,6 +3358,11 @@ async function viewComissoes(app) {
       renderDiscs();
     } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
+  const inSelectedMonth = (c, month) => {
+    const cat = String(c.canceled_at || '').slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(cat)) return cat === month;
+    return String(c.sale_date || '').slice(0, 7) === month;
+  };
   const renderDiscs = () => {
     const el = $('#discBody');
     if (!el) return;
@@ -3351,15 +3374,19 @@ async function viewComissoes(app) {
       if (!q) return true;
       return commNorm(d.seller_name).includes(q) || commNorm(d.customer_name).includes(q) || commNorm(d.product).includes(q) || commNorm(d.note).includes(q);
     });
-    const totQ = (cacheDiscounts || []).reduce((a, d) => a + Number(d.qty || 0), 0);
-    const totC = (cacheDiscounts || []).reduce((a, d) => a + Number(d.amount_cents || 0), 0);
-    el.innerHTML = `
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <span class="muted" style="font-size:13px">Qtd: <b>${fmtV(totQ)}</b> • Valor: <b class="mono">-${fmtBRL(totC)}</b>${(q || commStoreF || commSeller) && list.length !== (cacheDiscounts || []).length ? ` • filtro: <b>${list.length}</b>` : ''}</span>
-          <button class="btn btn-primary" id="discAdd">+ Lançar cancelamento</button>
-        </div>
-        <div style="height:8px"></div>
-        ${list.length ? list.map((d) => `
+    const byCanc = {};
+    for (const d of cacheAllDiscs || []) {
+      if (!d.canceled_sale_id) continue;
+      (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
+    }
+    const pend = (cacheCanceled || []).filter((c) => !(byCanc[c.id] || []).length && inSelectedMonth(c, month));
+    const alertBox = $('#cancAlert');
+    if (alertBox) {
+      alertBox.innerHTML = pend.length
+        ? `<p class="muted" style="font-size:12px;margin:0 0 10px"><b>${pend.length}</b> cancelada(s) aguardando desconto (ver abaixo).</p>`
+        : '';
+    }
+    el.innerHTML = list.length ? list.map((d) => `
           <div class="row" style="justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:8px 0">
             <div><b>${esc(d.seller_name)}</b> <span class="muted" style="font-size:12px">${fmtV(d.qty)} canc. • ref ${esc(d.month_ref || '—')}${d.note ? ` • ${esc(d.note)}` : ''}</span>
             ${(d.customer_name || d.product) ? `<div class="muted" style="font-size:12px">🧾 ${esc(d.customer_name || '—')} • ${esc(d.product || '—')}${d.sale_date ? ` • vendida ${fmtDateBR(d.sale_date)}` : ''}${d.canceled_at ? ` • cancelada ${fmtDateBR(String(d.canceled_at).slice(0, 10))}` : ''}</div>` : ''}</div>
@@ -3367,8 +3394,9 @@ async function viewComissoes(app) {
               <button class="btn" data-dedit="${d.id}">Editar</button>
               <button class="btn btn-ghost" data-ddel="${d.id}">🗑️</button>
             </div>
-          </div>`).join('') : '<div class="empty">Sem cancelamentos neste mês.</div>'}`;
-    $('#discAdd').onclick = () => modalDiscount(null, null, month, null, async () => { await load(); });
+          </div>`).join('') : '<div class="empty">Nenhum desconto lançado neste mês.</div>';
+    const addBtn = $('#discAdd');
+    if (addBtn) addBtn.onclick = () => modalDiscount(null, null, month, null, async () => { await load(); });
     $$('#discBody [data-dedit]').forEach((b) => (b.onclick = async () => {
       try {
         const cur = (cacheDiscounts || []).find((x) => String(x.id) === String(b.dataset.dedit));
@@ -3407,6 +3435,7 @@ async function viewComissoes(app) {
       (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
     }
     const list = (cacheCanceled || []).filter((c) => {
+      if (cancScope === 'month' && !inSelectedMonth(c, month)) return false;
       if (commSeller && !(c.participants || []).some((p) => String(p.seller_id) === String(commSeller))) return false;
       if (!q) return true;
       const parts = (c.participants || []).map((p) => p.seller_name).join(' ');
@@ -3442,37 +3471,9 @@ async function viewComissoes(app) {
         catch (err) { toast(err.message, 'err'); }
       }));
   };
-  const loadPays = async () => {
-    try {
-      const { payouts } = await api('/api/commissions/payouts');
-      cachePayouts = payouts || [];
-      renderPays();
-    } catch (e) { $('#payList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-  };
-  const renderPays = () => {
-    const box = $('#payList');
-    if (!box) return;
-    const q = commNorm(commQ);
-    const storeBySeller = {};
-    for (const r of ((cacheSummary && cacheSummary.s.rows) || [])) storeBySeller[r.seller_id] = r.store_name;
-    const list = (cachePayouts || []).filter((p) => {
-      if (!matchSeller(p.seller_id)) return false;
-      if (commStoreF && storeBySeller[p.seller_id] && !matchStore(storeBySeller[p.seller_id])) return false;
-      if (!q) return true;
-      return commNorm(p.seller_name).includes(q) || commNorm(p.month).includes(q);
-    });
-    box.innerHTML = (cachePayouts || []).length
-      ? (list.length ? list.map((p) => `
-        <div class="row" style="align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:8px 0">
-          <div><b>${esc(p.seller_name)}</b> <span class="muted" style="font-size:12px">${esc(p.month)}${p.by_name ? ` • por ${esc(p.by_name)}` : ''}</span></div>
-          <b class="mono">${fmtBRL(p.amount_cents)}</b>
-        </div>`).join('') : '<div class="empty">Nada encontrado para essa busca.</div>')
-      : '<div class="empty">Nenhum pagamento registrado.</div>';
-  };
   $('#cGo').onclick = load;
   await loadStoreFilter();
   await load();
-  await loadPays();
 }
 
 function openCommissionsPDF(rows, month, totalCents, totDisc, totNet) {
