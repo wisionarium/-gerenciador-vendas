@@ -1964,6 +1964,14 @@ function bindCompactList(box) {
 
 let pontoTab = 'dia';
 // ---------- PONTO (admin): abas Dia / Extras / Escala Dom / Feriados / QR-Loja ----------
+// permissão de editar horários do ponto: admin (matriz) sempre; gerente só com a
+// permissão da loja ligada (Equipe → Lojas filiais). Vendedora/funcionário nunca.
+function canEditPonto() {
+  const u = store.user;
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+  return !!(u.store_perms && u.store_perms.edit_ponto);
+}
 async function viewPonto(app) {
   const t = todayISO();
   app.innerHTML = `
@@ -2190,6 +2198,7 @@ async function tabPontoLoja(body) {
 let pontoKind = '';
 async function tabPontoDia(body, t) {
   const isManager = store.user?.role === 'manager';
+  const canEdit = canEditPonto();
   let stores = [];
   // gerente não tem o seletor de loja (travado na dele) — e /api/stores é só-admin
   if (!isManager) {
@@ -2207,6 +2216,7 @@ async function tabPontoDia(body, t) {
         <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
         <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
       </div>
+      ${isManager && !canEdit ? '<p class="muted" style="font-size:12px;margin:8px 0 0">🔒 Edição de horários bloqueada para esta loja — somente visualização. Peça liberação ao admin (matriz).</p>' : ''}
       <div style="margin-top:10px"><input id="pSearch" placeholder="🔍 Buscar por nome…" autocomplete="off" style="width:100%"></div>
       <div id="pDay" style="margin-top:12px"><p class="muted">Carregando…</p></div>
     </div>`;
@@ -2231,13 +2241,13 @@ async function tabPontoDia(body, t) {
         <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
         <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}${swapped}
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
-        <span style="text-align:right">${extra}<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button></span>
+        <span style="text-align:right">${extra}${canEdit ? `<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button>` : ''}</span>
       </div></div>`;
   };
   const absentHTML = (r) => `
     <div class="sale-card" data-ponto-card="${r.seller_id}" style="cursor:pointer" title="Ver mês completo"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
       <span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
-      <button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>
+      ${canEdit ? `<button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>` : ''}
     </div></div>`;
   const renderDayLists = () => {
     const box = $('#pDay');
@@ -3073,6 +3083,7 @@ function splitEntryExit(inStr, outStr) {
 }
 
 function modalManualPonto(sellerId, sellerName, date, reload) {
+  if (!canEditPonto()) return toast('Edição de horários bloqueada para a sua loja. Peça liberação ao admin (matriz).', 'err');
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Lançar ponto — ${esc(sellerName)}</h3>
@@ -3129,6 +3140,7 @@ function modalManualPonto(sellerId, sellerName, date, reload) {
 }
 
 function modalFixPonto(p, reload) {
+  if (!canEditPonto()) return toast('Edição de horários bloqueada para a sua loja. Peça liberação ao admin (matriz).', 'err');
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
     <h3 style="margin:0">Corrigir ponto #${p.id}</h3>
@@ -3814,7 +3826,7 @@ async function viewTeam(app) {
     <div style="height:8px"></div>
     <button class="btn btn-ghost" id="fClear">Limpar filtros</button>
   </div></div>
-  <div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div><div id="companiesBox" style="margin-top:16px"></div>`;
+  <div id="teamBody"><div class="card"><p class="muted">Carregando…</p></div></div><div id="storePermsBox" style="margin-top:16px"></div><div id="companiesBox" style="margin-top:16px"></div>`;
   let teamPeople = [];
   let teamQ = '';
   let teamF = { role: '', store: '', active: '', company: '', dayoff: '', scale: '' };
@@ -3877,8 +3889,49 @@ async function viewTeam(app) {
     renderTeam();
   };
   await load();
+  await loadStorePerms();
   await loadCompanies();
   await loadPhrases();
+}
+
+// Lojas filiais: permissões (só admin). Hoje: editar horários de entrada/saída
+// no Ponto (lançar/corrigir/zerar) — sempre só da própria loja. Desligado = a
+// filial só visualiza; o admin (matriz) sempre pode.
+async function loadStorePerms() {
+  const box = $('#storePermsBox');
+  if (!box) return;
+  box.innerHTML = `<h3 class="section-title">Lojas filiais (permissões)</h3><div class="card"><p class="muted">Carregando…</p></div>`;
+  const render = (stores) => {
+    const branches = (stores || []).filter((s) => !s.is_main && s.active);
+    box.innerHTML = `<h3 class="section-title">Lojas filiais (permissões)</h3>
+      <div class="card">
+        <p class="muted" style="font-size:13px;margin-top:0">Ligue para a filial poder <b>lançar e corrigir os horários de entrada/saída</b> no Ponto (só das pessoas da própria loja). Desligado = a filial só visualiza. O admin (matriz) sempre pode editar.</p>
+        ${branches.length ? branches.map((s, i) => `
+        <div class="row" style="justify-content:space-between;align-items:center;gap:10px;${i ? 'border-top:1px solid var(--line);' : ''}padding:10px 0">
+          <div style="flex:1;min-width:0"><b>${esc(s.name)}</b><br>
+            <span class="muted" style="font-size:12px">${s.perms?.edit_ponto ? '✅ Pode editar horários do ponto' : '🔒 Bloqueada — só visualiza o ponto'}</span>
+          </div>
+          <button class="btn ${s.perms?.edit_ponto ? 'btn-ghost' : 'btn-primary'}" data-sp-toggle="${s.id}" data-on="${s.perms?.edit_ponto ? 1 : 0}" style="flex:none">${s.perms?.edit_ponto ? 'Desligar' : 'Ligar permissão'}</button>
+        </div>`).join('') : '<div class="empty">Nenhuma loja filial cadastrada (a matriz não entra nesta lista).</div>'}
+      </div>`;
+  };
+  const refresh = async () => {
+    const { stores } = await api('/api/store-perms');
+    render(stores);
+  };
+  box.onclick = async (e) => {
+    const b = e.target.closest('[data-sp-toggle]');
+    if (!b) return;
+    const on = b.dataset.on === '1';
+    b.disabled = true;
+    try {
+      await api(`/api/store-perms/${b.dataset.spToggle}`, { method: 'PUT', body: JSON.stringify({ perm: 'edit_ponto', allowed: !on }) });
+      toast(!on ? 'Filial liberada para editar horários do ponto!' : 'Filial agora só visualiza o ponto.');
+      await refresh();
+    } catch (err) { toast(err.message, 'err'); b.disabled = false; }
+  };
+  try { await refresh(); }
+  catch (e) { box.innerHTML = `<h3 class="section-title">Lojas filiais (permissões)</h3><div class="card empty">${esc(e.message)}</div>`; }
 }
 
 // Empresas (cadastro manual p/ documentos) — fim da tela de Equipe, só admin.

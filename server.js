@@ -137,6 +137,26 @@ const toPublicUser = (u) => ({
   dayoff_dow: u.dayoff_dow == null ? null : Number(u.dayoff_dow),
   sunday_scale: ['A', 'B', 'all'].includes(u.sunday_scale) ? u.sunday_scale : 'off',
 });
+// permissões por loja (filiais). Hoje só 'edit_ponto': editar horários de
+// entrada/saída no Ponto (lançar/corrigir/zerar). Sem linha = bloqueado.
+// O admin (matriz) sempre pode; a trava vale só para o gerente da loja.
+const STORE_PERMS = ['edit_ponto'];
+async function storePermAllowed(storeId, perm) {
+  if (storeId == null) return false;
+  try {
+    const r = await db.get('SELECT allowed FROM store_perms WHERE store_id=? AND perm=?', Number(storeId), perm);
+    return !!(r && Number(r.allowed));
+  } catch { return false; }
+}
+// resposta pública + permissões da loja (o app esconde/desbloqueia com base nisso)
+async function toPublicUserPerms(u) {
+  return {
+    ...toPublicUser(u),
+    store_perms: {
+      edit_ponto: u.role === 'admin' ? true : u.role === 'manager' ? await storePermAllowed(u.store_id, 'edit_ponto') : false,
+    },
+  };
+}
 const validSector = (s) => ['online', 'presencial'].includes(s);
 // folga semanal: 0=Dom..6=Sáb ou vazio; domingos: off/A/B/all ou vazio
 const validDayoff = (v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 6);
@@ -241,11 +261,11 @@ app.post('/api/auth/login', ah(async (req, res) => {
   if (!user.active) return res.status(403).json({ error: 'Usuária desativada. Fale com o administrador.' });
   const ok = bcrypt.compareSync(String(password), user.password_hash);
   if (!ok) return res.status(401).json({ error: 'Credenciais inválidas.' });
-  return res.json({ token: signToken(user), user: toPublicUser(user) });
+  return res.json({ token: signToken(user), user: await toPublicUserPerms(user) });
 }));
 
 app.get('/api/me', requireAuth, ah(async (req, res) => {
-  res.json({ user: { ...toPublicUser(req.user), pix_key: req.user.pix_key || null } });
+  res.json({ user: { ...(await toPublicUserPerms(req.user)), pix_key: req.user.pix_key || null } });
 }));
 
 // chave PIX da própria pessoa (vendedora e funcionário): texto livre até 120 caracteres; vazio remove
@@ -256,7 +276,7 @@ app.put('/api/me/pix', requireAuth, ah(async (req, res) => {
   if (clean.length > 120) return res.status(400).json({ error: 'Chave PIX muito longa (máx. 120 caracteres).' });
   await db.run('UPDATE users SET pix_key=? WHERE id=?', clean || null, req.user.id);
   const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', req.user.id);
-  res.json({ user: { ...toPublicUser(u), pix_key: (u && u.pix_key) || null } });
+  res.json({ user: { ...(await toPublicUserPerms(u)), pix_key: (u && u.pix_key) || null } });
 }));
 
 // foto de perfil (data URL pequena, redimensionada no app)
@@ -272,7 +292,7 @@ app.put('/api/me/avatar', requireAuth, ah(async (req, res) => {
   await db.run('UPDATE users SET avatar_url=? WHERE id=?', avatar || null, sid);
   const u = await db.get('SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.id=?', sid);
   if (!u) return res.status(404).json({ error: 'Usuária não encontrada.' });
-  res.json({ user: toPublicUser(u) });
+  res.json({ user: await toPublicUserPerms(u) });
 }));
 
 // ---------- PUSH (inscrição do aparelho + cron) ----------
@@ -583,12 +603,43 @@ app.delete('/api/stores/:id', requireAuth, requireAdmin, ah(async (req, res) => 
     return res.status(409).json({ error: `Esta loja tem histórico (${parts.join(', ')}). Não é possível excluir.`, usage });
   }
   await db.run('DELETE FROM stores WHERE id=?', st.id);
+  try { await db.run('DELETE FROM store_perms WHERE store_id=?', st.id); } catch {}
   // se era a matriz, promove a mais antiga
   try {
     const nMain = Number((await db.get('SELECT COUNT(*) AS c FROM stores WHERE is_main=1')).c) || 0;
     if (nMain === 0) await db.run('UPDATE stores SET is_main=1 WHERE id=(SELECT MIN(id) FROM stores)');
   } catch {}
   res.json({ ok: true, removed: { id: st.id, name: st.name } });
+}));
+
+// ---------- PERMISSÕES POR LOJA (filiais; só admin) ----------
+// Hoje: edit_ponto = a filial pode editar horários de entrada/saída no Ponto
+// (lançar, corrigir e zerar dia) — sempre só da própria loja.
+// Desligado (padrão) = a filial só visualiza; o admin (matriz) sempre pode.
+app.get('/api/store-perms', requireAuth, requireAdmin, ah(async (req, res) => {
+  const stores = await db.all('SELECT id, name, is_main, active FROM stores ORDER BY is_main DESC, name');
+  const rows = await db.all('SELECT store_id, perm, allowed FROM store_perms').catch(() => []);
+  const map = {};
+  for (const r of rows) (map[r.store_id] = map[r.store_id] || {})[r.perm] = !!Number(r.allowed);
+  res.json({
+    stores: stores.map((s) => ({
+      id: s.id, name: s.name, is_main: !!s.is_main, active: !!s.active,
+      perms: { edit_ponto: !!(map[s.id] && map[s.id].edit_ponto) },
+    })),
+  });
+}));
+
+app.put('/api/store-perms/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const store = await getStore(req.params.id);
+  if (!store) return res.status(404).json({ error: 'Loja não encontrada.' });
+  const { perm, allowed } = req.body || {};
+  if (!STORE_PERMS.includes(perm)) return res.status(400).json({ error: 'Permissão inválida.' });
+  await db.run(
+    `INSERT INTO store_perms (store_id, perm, allowed, updated_at) VALUES (?,?,?,datetime('now'))
+     ON CONFLICT(store_id, perm) DO UPDATE SET allowed=excluded.allowed, updated_at=datetime('now')`,
+    store.id, perm, allowed ? 1 : 0
+  );
+  res.json({ store_id: store.id, perm, allowed: !!allowed });
 }));
 
 app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
@@ -2734,6 +2785,8 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (!p) return res.status(404).json({ error: 'Registro não encontrado.' });
   if (req.user.role === 'manager' && Number(p.seller_store) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  if (req.user.role === 'manager' && !(await storePermAllowed(req.user.store_id, 'edit_ponto')))
+    return res.status(403).json({ error: 'Edição de horários bloqueada para a sua loja. Peça liberação ao administrador (matriz).' });
   const { check_in_hhmm, check_out_hhmm } = req.body || {};
   const t = normalizePunchTimes(p.date, check_in_hhmm, check_out_hhmm);
   if (t.error) return res.status(400).json({ error: t.error });
@@ -2752,6 +2805,8 @@ app.delete('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) =>
   if (!p) return res.status(404).json({ error: 'Registro não encontrado.' });
   if (req.user.role === 'manager' && Number(p.seller_store) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  if (req.user.role === 'manager' && !(await storePermAllowed(req.user.store_id, 'edit_ponto')))
+    return res.status(403).json({ error: 'Edição de horários bloqueada para a sua loja. Peça liberação ao administrador (matriz).' });
   await db.run('DELETE FROM punches WHERE id=?', p.id);
   res.json({ ok: true, removed: { id: p.id, seller_id: p.seller_id, seller_name: p.seller_name || '', date: p.date } });
 }));
@@ -2763,6 +2818,8 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
   if (!seller) return res.status(400).json({ error: 'Pessoa inválida.' });
   if (req.user.role === 'manager' && Number(seller.store_id) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
+  if (req.user.role === 'manager' && !(await storePermAllowed(req.user.store_id, 'edit_ponto')))
+    return res.status(403).json({ error: 'Edição de horários bloqueada para a sua loja. Peça liberação ao administrador (matriz).' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const punchStoreId = scope.storeId != null ? scope.storeId : (seller.store_id || await sedeId());

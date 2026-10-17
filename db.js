@@ -42,6 +42,16 @@ const SCHEMA = [
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // permissões por loja (filiais): hoje só 'edit_ponto' (lançar/corrigir/zerar
+  // horários de entrada e saída no Ponto). Sem linha = bloqueado; o admin
+  // (matriz) sempre pode — a trava vale só para o gerente da loja.
+  `CREATE TABLE IF NOT EXISTS store_perms (
+    store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    perm TEXT NOT NULL,
+    allowed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (store_id, perm)
+  )`,
   `CREATE TABLE IF NOT EXISTS call_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
