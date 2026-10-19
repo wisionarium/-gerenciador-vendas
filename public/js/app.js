@@ -3554,8 +3554,6 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
       <label>Mês da venda (ref. p/ registro)</label><input id="dMonthRef" type="month" value="${esc(cur?.month_ref || (presetCanc?.sale_date || '').slice(0, 7) || '')}" ${presetCanc ? 'disabled' : ''}>
       <label>Qtd cancelada *</label><input id="dQty" inputmode="decimal" required placeholder="Ex: 2,5" value="${esc(cur ? String(cur.qty).replace('.', ',') : (presetCanc ? String((presetCanc.participants || []).find((p) => String(p.seller_id) === String(presetSellerId ?? presetCanc?.participants?.[0]?.seller_id))?.credit ?? presetCanc?.participants?.[0]?.credit ?? '').replace('.', ',') : ''))}">
       <p class="muted" style="font-size:12px;margin:4px 0" id="dPrev"></p>
-      <label>Venda cancelada (vínculo p/ histórico)</label><select id="dCanc"><option value="">Avulso (sem vínculo)</option>${presetCanc ? `<option value="${presetCanc.id}" selected>${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • ${fmtDateBR(presetCanc.sale_date)}</option>` : ''}</select>
-      <p class="muted" style="font-size:12px;margin:4px 0" id="dCancInfo">${presetCanc ? `🧾 ${esc(presetCanc.customer_name)} • ${esc(presetCanc.product)} • vendida ${fmtDateBR(presetCanc.sale_date)} • cancelada ${fmtDateBR(String(presetCanc.canceled_at || '').slice(0, 10))}` : (cur?.customer_name || cur?.product ? `🧾 ${esc(cur.customer_name || '—')} • ${esc(cur.product || '—')}${cur.sale_date ? ` • vendida ${fmtDateBR(cur.sale_date)}` : ''}` : '')}</p>
       <label><span style="font-weight:normal;font-size:12px"><input type="checkbox" id="dManual" style="width:auto"> editar valor manual</span></label>
       <label>Valor a descontar (R$) *</label><input id="dVal" inputmode="decimal" placeholder="Calculado sozinho" value="${esc(cur ? (Number(cur.amount_cents) / 100).toFixed(2).replace('.', ',') : '')}">
       <label>Motivo/obs</label><input id="dNote" maxlength="140" placeholder="Ex: cliente desistiu bike mês 4" value="${esc(cur?.note || '')}">
@@ -3581,33 +3579,6 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
   $('#dSeller').onchange = refreshPrev;
   $('#dManual').onchange = refreshPrev;
   refreshPrev();
-  // lista de canceladas p/ vincular (só criação avulsa; com preset já vem selecionada)
-  if (!cur && !presetCanc) {
-    api('/api/sales/canceled').then(({ canceled }) => {
-      const el = $('#dCanc');
-      if (!el || !canceled) return;
-      const sid = $('#dSeller')?.value;
-      const mine = (canceled || []).filter((c) => !sid || (c.participants || []).some((p) => String(p.seller_id) === String(sid))).slice(0, 100);
-      el.innerHTML = `<option value="">Avulso (sem vínculo)</option>` + mine.map((c) => `<option value="${c.id}">${esc(c.customer_name)} • ${esc(c.product)} • ${fmtDateBR(c.sale_date)}</option>`).join('');
-      el.onchange = () => {
-        const c = (canceled || []).find((x) => String(x.id) === String(el.value));
-        const info = $('#dCancInfo');
-        if (!c) { if (info) info.textContent = ''; return; }
-        if (info) info.textContent = `🧾 ${c.customer_name} • ${c.product} • vendida ${fmtDateBR(c.sale_date)} • cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))}`;
-        const mr = $('#dMonthRef');
-        if (mr && !mr.value && c.sale_date) mr.value = String(c.sale_date).slice(0, 7);
-        const q = $('#dQty');
-        if (q && !q.value) {
-          const part = (c.participants || []).find((p) => String(p.seller_id) === String($('#dSeller')?.value)) || (c.participants || [])[0];
-          if (part) { q.value = String(part.credit).replace('.', ','); refreshPrev(); }
-        }
-        const dc = $('#dCustomer');
-        if (dc && !dc.value) dc.value = c.customer_name || '';
-        const dp = $('#dProduct');
-        if (dp && !dp.value) dp.value = c.product || '';
-      };
-    }).catch(() => {});
-  }
   if (needSellerList) {
     api('/api/commissions/summary?month=' + encodeURIComponent(cur?.month_disc || monthDisc || todayISO().slice(0, 7))).then((s) => {
       const el = $('#dSeller');
@@ -3625,8 +3596,8 @@ function modalDiscount(cur, sellers, monthDisc, presetSellerId, reload, presetCa
       const manual = $('#dManual').checked;
       const valStr = String($('#dVal').value || '').trim().replace(',', '.');
       const body = { seller_id, month_disc, month_ref, qty: String($('#dQty').value).replace(',', '.'), note: $('#dNote').value, customer_name: $('#dCustomer')?.value || '', product: $('#dProduct')?.value || '' };
-      const cancVal = $('#dCanc')?.value;
-      if (cancVal) body.canceled_sale_id = Number(cancVal);
+      // aberto pelo histórico de vendas canceladas: mantém o vínculo automático
+      if (!cur && presetCanc) body.canceled_sale_id = Number(presetCanc.id);
       if (manual && valStr !== '') body.amount_cents = Math.round(Number(valStr) * 100);
       if (cur) await api(`/api/commissions/discounts/${cur.id}`, { method: 'PUT', body: JSON.stringify(body) });
       else await api('/api/commissions/discounts', { method: 'POST', body: JSON.stringify(body) });
