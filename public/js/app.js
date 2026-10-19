@@ -148,6 +148,10 @@ const PERIODS = {
 
 let adminPeriod = { key: 'mes', ...PERIODS.mes() };
 
+// período próprio da tela Vendas (não mexe no período do painel)
+let salesPeriod = { key: 'mes', ...PERIODS.mes() };
+let salesPrevPeriod = null;
+
 let adminSeller = '';
 
 let adminSector = '';
@@ -1869,18 +1873,27 @@ function modalCallsAdmin() {
 }
 
 async function viewAllSales(app) {
-  const { from, to } = adminPeriod;
   const isManager = store.user?.role === 'manager';
   let stores = [];
   try { stores = (await api('/api/stores')).stores; } catch {}
   app.innerHTML = `<h2 style="margin:4px 0">Vendas${isManager ? ` <span class="muted" style="font-size:13px">• ${esc(store.user.store_name || '')}</span>` : ''}</h2>
-    <div class="card"><label>Buscar</label><input id="q" placeholder="Cliente, produto, cor…">
-    <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
-      <select id="fSellerSales" style="flex:1"><option value="">Todas as vendedoras</option></select>
-      ${isManager ? '' : `<select id="fStoreSales" style="flex:1"><option value="">Todas as lojas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`}
-      <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
-      <button class="btn btn-primary" id="go">Filtrar</button>
-    </div></div>
+    <div class="card">
+      <div class="row" style="flex-wrap:wrap;align-items:end;gap:8px">
+        <div style="flex:1;min-width:120px"><label>Buscar</label><input id="q" placeholder="Cliente, produto, cor…"></div>
+        <div style="flex:0 0 142px"><label>Data</label><input type="date" id="saleDate" max="${todayISO()}" value="${salesPeriod.key === 'date' ? esc(salesPeriod.from || '') : ''}"></div>
+      </div>
+      <div style="margin-top:10px">${periodPills(salesPeriod.key)}</div>
+      <div id="saleCustomRow" style="display:${salesPeriod.key === 'custom' ? 'block' : 'none'};margin-top:10px">
+        <div class="row"><div style="flex:1"><label>De</label><input type="date" id="saleFrom" value="${salesPeriod.key === 'custom' ? esc(salesPeriod.from || '') : ''}"></div>
+        <div style="flex:1"><label>Até</label><input type="date" id="saleTo" value="${salesPeriod.key === 'custom' ? esc(salesPeriod.to || '') : ''}"></div></div>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:nowrap;align-items:center">
+        <select id="fSellerSales" style="flex:1"><option value="">Todas as vendedoras</option></select>
+        ${isManager ? '' : `<select id="fStoreSales" style="flex:1"><option value="">Todas as lojas</option>${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`}
+        <select id="ch" style="flex:0 1 200px"><option value="">Todos os canais</option><option>WhatsApp</option><option>CRM</option><option>Presencial</option></select>
+        <button class="btn btn-primary" id="go">Filtrar</button>
+      </div>
+    </div>
     <div id="saleTotal" class="muted" style="margin:12px 4px 0;font-size:13px"></div>
     <div id="list" style="margin-top:12px"><div class="card"><p class="muted">Carregando…</p></div></div>`;
   try {
@@ -1890,7 +1903,9 @@ async function viewAllSales(app) {
   const load = async () => {
     const sid = $('#fSellerSales').value || '';
     const stid = $('#fStoreSales')?.value || '';
-    const qs = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sid ? { seller_id: sid } : {}), ...(stid ? { store_id: stid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
+    const pFrom = salesPeriod.from || '';
+    const pTo = salesPeriod.to || '';
+    const qs = new URLSearchParams({ ...(pFrom ? { from: pFrom } : {}), ...(pTo ? { to: pTo } : {}), ...(sid ? { seller_id: sid } : {}), ...(stid ? { store_id: stid } : {}), ...($('#ch').value ? { channel: $('#ch').value } : {}), ...($('#q').value ? { q: $('#q').value } : {}) });
     const { sales } = await api(`/api/sales?${qs}`);
     const totalEl = $('#saleTotal');
     if (totalEl) {
@@ -1926,6 +1941,55 @@ async function viewAllSales(app) {
   $('#ch').onchange = load;
   const fsSales = $('#fStoreSales');
   if (fsSales) fsSales.onchange = load;
+  // datas: dia específico, atalhos (Hoje/Ontem/Semana/Mês) ou De/Até
+  const syncPeriodUI = () => {
+    $$('#periodPills button').forEach((b) => b.classList.toggle('active', b.dataset.k === salesPeriod.key));
+    const cr = $('#saleCustomRow');
+    if (cr) cr.style.display = salesPeriod.key === 'custom' ? 'block' : 'none';
+  };
+  $('#periodPills').onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const k = b.dataset.k;
+    salesPrevPeriod = null;
+    const d = $('#saleDate');
+    if (d) d.value = '';
+    const f = $('#saleFrom'), t = $('#saleTo');
+    if (k === 'custom') {
+      if (f) f.value = salesPeriod.from || '';
+      if (t) t.value = salesPeriod.to || '';
+      salesPeriod = { key: 'custom', from: (f && f.value) || '', to: (t && t.value) || '' };
+    } else {
+      salesPeriod = { key: k, ...PERIODS[k]() };
+    }
+    syncPeriodUI();
+    load();
+  };
+  $('#saleDate').onchange = () => {
+    const d = $('#saleDate').value;
+    if (d) {
+      if (salesPeriod.key !== 'date') salesPrevPeriod = salesPeriod;
+      salesPeriod = { key: 'date', from: d, to: d };
+      const f = $('#saleFrom'), t = $('#saleTo');
+      if (f) f.value = '';
+      if (t) t.value = '';
+    } else {
+      salesPeriod = salesPrevPeriod || { key: 'mes', ...PERIODS.mes() };
+      salesPrevPeriod = null;
+    }
+    syncPeriodUI();
+    load();
+  };
+  ['#saleFrom', '#saleTo'].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.onchange = () => {
+      salesPeriod = { key: 'custom', from: $('#saleFrom').value, to: $('#saleTo').value };
+      const d = $('#saleDate');
+      if (d) d.value = '';
+      syncPeriodUI();
+      load();
+    };
+  });
   await load();
 }
 
