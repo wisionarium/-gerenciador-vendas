@@ -3394,7 +3394,7 @@ async function viewComissoes(app) {
           return `
           <div class="sale-card" style="padding:10px 12px"><div class="row" style="justify-content:space-between;align-items:flex-start">
             <span><b>${esc(r.name)}</b> ${sectorTag(r.sector)}${r.store_name ? ` ${storeTag(r.store_name)}` : ''}${r.active ? '' : ' <span class="muted" style="font-size:12px">(inativa)</span>'}</span>
-            <span style="text-align:right;flex:none;margin-left:8px"><span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(net)}</span><br><button class="btn" style="font-size:11px;padding:2px 8px;margin-top:4px" data-disc="${r.seller_id}">lançar cancelamento</button></span>
+            <span style="text-align:right;flex:none;margin-left:8px"><span class="mono" style="font-size:13px;font-weight:800">${fmtBRL(net)}</span><br><button class="btn" style="font-size:11px;padding:2px 8px;margin-top:4px" data-pdfsel="${r.seller_id}">📄 PDF</button><br><button class="btn" style="font-size:11px;padding:2px 8px;margin-top:4px" data-disc="${r.seller_id}">lançar cancelamento</button></span>
           </div>
           <div class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${qtd} vendas${dq > 0 ? ` • ${fmtV(dq)} canc. (-${fmtBRL(dc)})` : ''} • ${r.pix_key ? `<b class="mono">${esc(r.pix_key)}</b> <button class="btn" style="font-size:11px;padding:2px 8px" data-pix="${esc(r.pix_key)}">copiar</button>` : 'sem chave PIX'}</div>
           ${dq > 0 || Number(r.month_cents || 0) > 0 ? `<div class="muted" style="font-size:11px;margin-top:2px">Bruto ${fmtBRL(r.month_cents)}${dq > 0 ? ` • Desconto -${fmtBRL(dc)}` : ''}</div>` : ''}
@@ -3418,6 +3418,11 @@ async function viewComissoes(app) {
       if (e && e.stopPropagation) e.stopPropagation();
       await navigator.clipboard.writeText(b.dataset.pix || '').catch(() => {});
       toast('Chave PIX copiada!');
+    }));
+    $$('#cBody [data-pdfsel]').forEach((b) => (b.onclick = (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      const row = (s.rows || []).find((x) => String(x.seller_id) === String(b.dataset.pdfsel));
+      if (row) openSellerCommissionPDF(row, month);
     }));
     $$('#cBody [data-disc]').forEach((b) => (b.onclick = (e) => {
       if (e && e.stopPropagation) e.stopPropagation();
@@ -3550,6 +3555,95 @@ async function viewComissoes(app) {
   $('#cGo').onclick = load;
   await loadStoreFilter();
   await load();
+}
+
+// PDF individual: vendas do mês + resumo de comissão de uma pessoa
+async function openSellerCommissionPDF(row, month) {
+  const monthLabel = (() => {
+    const m = String(month || '').match(/^(\d{4})-(\d{2})$/);
+    if (!m) return String(month || '');
+    const nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+    return `${nomes[Number(m[2]) - 1]} de ${m[1]}`;
+  })();
+  const brl = (c) => ((Number(c) || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const win = window.open('', '_blank');
+  if (!win) { toast('Permita pop-up para baixar o PDF.', 'err'); return; }
+  win.document.write('<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Gerando…</title></head><body style="font-family:Arial,sans-serif;padding:24px">Gerando PDF…</body></html>');
+  win.document.close();
+  try {
+    const [{ sales }, { discounts }] = await Promise.all([
+      api(`/api/commissions/sales?month=${month}&seller_id=${row.seller_id}`),
+      api(`/api/commissions/discounts?month=${month}&seller_id=${row.seller_id}`).catch(() => ({ discounts: [] })),
+    ]);
+    // o endpoint já entrega cada venda com o valor exato da comissão (amount_cents), em ordem de data
+    const list = sales || [];
+    const creditOf = (s) => Number(s.amount_cents || 0);
+    const totalCredits = list.reduce((a, s) => a + creditOf(s), 0);
+    const gross = Number(row.month_cents) || 0;
+    const discCents = Number(row.disc_cents) || 0;
+    const net = row.net_cents != null ? Number(row.net_cents) : Math.max(0, gross - discCents);
+    const paid = Number(row.paid_month_cents) || 0;
+    const toReceive = Math.max(0, net - paid);
+    const pendingAll = Number(row.pending_cents) || 0;
+    const discQty = Number(row.disc_qty) || 0;
+    const saleRows = list.map((s) => `<tr>
+      <td style="white-space:nowrap">${esc(fmtDateBR(s.sale_date))}</td>
+      <td>${esc(s.customer_name || '—')}${s.is_bonus ? ' ⭐' : ''}</td>
+      <td>${esc(s.product || '—')}</td>
+      <td>${esc(s.color || '—')}</td>
+      <td>${esc(s.channel || '—')}</td>
+      <td style="text-align:right;white-space:nowrap">${esc(brl(creditOf(s)))}</td>
+    </tr>`).join('');
+    const discRows = (discounts || []).map((d) => {
+      const dt = String(d.canceled_at || d.sale_date || d.created_at || '').slice(0, 10);
+      return `<tr>
+        <td style="white-space:nowrap">${dt ? esc(fmtDateBR(dt)) : '—'}</td>
+        <td>${esc(d.customer_name || '—')}</td>
+        <td>${esc(d.product || '—')}</td>
+        <td style="text-align:center">${esc(fmtV(d.qty))}</td>
+        <td style="text-align:right;white-space:nowrap">-${esc(brl(d.amount_cents))}</td>
+      </tr>`;
+    }).join('');
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comissão — ${esc(row.name)} — ${esc(monthLabel)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:26px;max-width:820px;margin:0 auto}
+      h1{font-size:18px;margin:0}
+      h2{font-size:12px;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.05em;color:#333}
+      .sub{font-size:13px;margin-top:8px;line-height:1.6}
+      table{width:100%;border-collapse:collapse;font-size:11px}
+      th,td{border:1px solid #999;padding:6px 7px}
+      th{background:#f0f0f0;text-align:left}
+      tfoot td{font-weight:700}
+      .box{border:1px solid #999;padding:12px;margin-top:6px;font-size:12px}
+      .box .l{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
+      .box .tot{border-top:1px solid #999;margin-top:6px;padding-top:8px;font-weight:700;font-size:13px}
+      .foot{margin-top:20px;font-size:10px;color:#666}
+    </style></head><body>
+    <h1>COMISSÃO INDIVIDUAL — ${esc(monthLabel)}</h1>
+    <div class="sub"><b>${esc(row.name)}</b> • ${esc(row.store_name || 'Sede')} • ${row.sector === 'presencial' ? 'Presencial' : 'Online'}<br>PIX: ${row.pix_key ? `<b>${esc(row.pix_key)}</b>` : 'não cadastrado'}</div>
+    <h2>Vendas do mês</h2>
+    <table><thead><tr><th>Data</th><th>Cliente</th><th>Produto</th><th>Cor</th><th>Canal</th><th style="text-align:right">Comissão</th></tr></thead>
+    <tbody>${saleRows || '<tr><td colspan="6">Nenhuma venda registrada no mês.</td></tr>'}</tbody>
+    <tfoot><tr><td colspan="5">${list.length} venda(s)</td><td style="text-align:right">${esc(brl(totalCredits))}</td></tr></tfoot></table>
+    <h2>Resumo</h2>
+    <div class="box">
+      <div class="l"><span>Comissão bruta do mês</span><b>${esc(brl(gross))}</b></div>
+      ${discQty > 0 ? `<div class="l"><span>Cancelamentos (${esc(fmtV(discQty))})</span><b>-${esc(brl(discCents))}</b></div>` : ''}
+      <div class="l"><span>Líquido do mês</span><b>${esc(brl(net))}</b></div>
+      <div class="l"><span>Já pago no mês</span><b>${esc(brl(paid))}</b></div>
+      <div class="l tot"><span>A receber do mês</span><b>${esc(brl(toReceive))}</b></div>
+    </div>
+    <div style="margin-top:10px;font-size:12px;display:flex;justify-content:space-between;gap:12px;border:1px solid #999;padding:10px 12px;background:#fafafa"><span>Pendente total de todos os meses</span><b>${esc(brl(pendingAll))}</b></div>
+    ${(discounts || []).length ? `<h2>Cancelamentos lançados</h2><table><thead><tr><th>Data</th><th>Cliente</th><th>Produto</th><th style="text-align:center">Qtd</th><th style="text-align:right">Valor</th></tr></thead><tbody>${discRows}</tbody></table>` : ''}
+    <div class="foot">Emitido em ${esc(new Date().toLocaleString('pt-BR'))} • SellDay</div>
+    <script>window.onload=()=>setTimeout(()=>window.print(),350)<\/script></body></html>`;
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  } catch (e) {
+    try { win.close(); } catch {}
+    toast(e.message, 'err');
+  }
 }
 
 function openCommissionsPDF(rows, month, totalCents, totDisc, totNet) {

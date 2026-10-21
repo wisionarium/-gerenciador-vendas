@@ -1592,6 +1592,26 @@ app.get('/api/commissions/summary', requireAuth, requireAdmin, ah(async (req, re
   res.json({ month, sector: validSector(sector) ? sector : 'all', rows, total_month_cents: tot('month_cents'), total_disc_cents: tot('disc_cents'), total_net_cents: tot('net_cents'), total_pending_cents: tot('pending_cents') });
 }));
 
+// vendas do mês de uma pessoa COM o valor exato da comissão (PDF individual)
+// (o credit da venda é a quantidade 1/0,5; o R$ fica em commissions.amount_cents)
+app.get('/api/commissions/sales', requireAuth, requireAdmin, ah(async (req, res) => {
+  const { month, seller_id } = req.query;
+  const m = (month && /^\d{4}-\d{2}$/.test(month)) ? month : todayISO().slice(0, 7);
+  const seller = await db.get("SELECT id, name FROM users WHERE id=? AND role='seller'", Number(seller_id));
+  if (!seller) return res.status(400).json({ error: 'Vendedora inválida.' });
+  const rows = await db.all(
+    `SELECT c.amount_cents, c.sale_id, s.customer_name, s.product, s.color, s.channel, s.sale_date, s.is_bonus
+     FROM commissions c JOIN sales s ON s.id=c.sale_id
+     WHERE c.seller_id=? AND c.month=? ORDER BY s.sale_date, s.id`,
+    seller.id, m
+  );
+  res.json({
+    month: m, seller,
+    sales: rows.map((r) => ({ ...r, amount_cents: Number(r.amount_cents) || 0 })),
+    total_cents: rows.reduce((a, r) => a + (Number(r.amount_cents) || 0), 0),
+  });
+}));
+
 // histórico de pagamentos (admin)
 app.get('/api/commissions/payouts', requireAuth, requireAdmin, ah(async (req, res) => {
   const { month, seller_id } = req.query;
