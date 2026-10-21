@@ -2899,7 +2899,6 @@ function gerarEspelhoDoc(row, month, ctx) {
   const rowH = 7.2;
   const resumo = [
     ['Dias trabalhados', String(row.days || 0)],
-    ['Total trabalhado', row.worked_label || '-'],
     ['Extras', '+' + (row.extra_label || '0h 0min')],
     ['Atrasos', '-' + (row.late_label || '0h 0min')],
     ['Saldo do mes', row.balance_label || row.extra_label || '0h 0min'],
