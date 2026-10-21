@@ -2852,48 +2852,86 @@ function gerarEspelhoDoc(row, month, ctx) {
   ctx = ctx || {};
   const company = row.company_name || 'Sem empresa';
   const cnpjLine = row.company_cnpj ? ` - CNPJ ${row.company_cnpj}` : '';
-  const [y, m] = month.split('-');
-    const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    const W = 297;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
-    doc.text(pdfText(`${row.name} - ${m}/${y}`), 14, 15);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
-    doc.text(pdfText(`${funcaoOf(row)} - ${company}${row.custom_schedule ? ' - * carga especial' : ''}${cnpjLine} - Emitido em ${new Date().toLocaleString('pt-BR')}`), 14, 20);
-    doc.setTextColor(0); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-    doc.text(pdfText(`Dias: ${row.days || 0} - Trabalhado: ${row.worked_label || '-'} - Extras: +${row.extra_label} - Atrasos: -${row.late_label || '0h 0min'} - Saldo: ${row.balance_label || row.extra_label}`), 14, 27);
-    const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', troca: 'Troca', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
-    const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    doc.autoTable({
-      head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao',
-        { content: 'Saldo', styles: { halign: 'right' } }, 'Status']],
-      body: days.map((d) => [
+  const monthLabel = (() => {
+    const mm = String(month || '').match(/^(\d{4})-(\d{2})$/);
+    if (!mm) return String(month || '');
+    const nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+    return `${nomes[Number(mm[2]) - 1]} de ${mm[1]}`;
+  })();
+  const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const W = 297;
+  // cabeçalho enxuto: título, nome e uma linha discreta com função/empresa
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
+  doc.text(pdfText(`HORAS EXTRAS — ${monthLabel}`), 14, 16);
+  doc.setFontSize(12);
+  doc.text(pdfText(row.name), 14, 23.5);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
+  doc.text(pdfText(`${funcaoOf(row)} - ${company}${cnpjLine}${row.custom_schedule ? ' - * carga especial' : ''}`), 14, 28.5);
+  doc.setTextColor(0);
+  const statusLabel = { trabalhado: 'Trabalhou', incompleto: 'Incompleto', falta: 'Ausente', folga: 'Ausente', troca: 'Troca', feriado: 'Feriado', futuro: 'Futuro', 'outra-loja': 'Outra loja' };
+  const days = (row.days_list || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  doc.autoTable({
+    head: [['Data', 'Dia', 'Entrada', 'Saida', 'Trabalhado', 'Padrao',
+      { content: 'Saldo', styles: { halign: 'right' } }, 'Status']],
+    // dias futuros: só a data; o resto em branco (não foram trabalhados)
+    body: days.map((d) => (d.status === 'futuro'
+      ? [pdfText(fmtDateBR(d.date)), '', '', '', '', '', '', '']
+      : [
         pdfText(fmtDateBR(d.date)), pdfText(weekdayShortBR(d.date)),
         pdfText(d.in_hhmm || '-'), pdfText(d.out_hhmm || '-'),
         pdfText(d.worked_label || '-'), pdfText(d.std_label || '-'),
         pdfText(d.balance_label || d.extra_label || '-'),
         pdfText((statusLabel[d.status] || d.status || '-') + (d.auto_closed ? ' *' : '') + (d.is_holiday && d.holiday_label ? ` (${d.holiday_label})` : '')),
-      ]),
-      startY: 31,
-      styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.8 },
-      headStyles: { fillColor: [11, 59, 44], textColor: 255, fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [243, 244, 246] },
-      columnStyles: { 6: { halign: 'right', fontStyle: 'bold' } },
-      didDrawPage: (d) => {
-        doc.setFontSize(8); doc.setTextColor(130);
-        doc.text(`Pagina ${d.pageNumber}`, W - 14, 200, { align: 'right' });
-        doc.setTextColor(0);
-      },
-    });
-    let yy = doc.lastAutoTable.finalY + 12;
-    if (yy > 185) { doc.addPage('landscape'); yy = 15; }
-    doc.setFontSize(9);
-    doc.text(pdfText('Metodologia: saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Troca semanal automatica 1-para-1: sem desconto nem extra. Documento simplificado (CNPJ sem validacao).'), 14, yy, { maxWidth: W - 28 });
-    yy += 14;
-    doc.text(pdfText('Funcionario'), 30, yy);
-    doc.text(pdfText('Responsavel'), W - 90, yy);
-    doc.line(14, yy - 6, 120, yy - 6);
-    doc.line(W - 120, yy - 6, W - 14, yy - 6);
-    return doc;
+      ])),
+    startY: 33,
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.8 },
+    headStyles: { fillColor: [11, 59, 44], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [243, 244, 246] },
+    columnStyles: { 6: { halign: 'right', fontStyle: 'bold' } },
+    didDrawPage: (d) => {
+      doc.setFontSize(8); doc.setTextColor(130);
+      doc.text(`Pagina ${d.pageNumber}`, W - 14, 200, { align: 'right' });
+      doc.setTextColor(0);
+    },
+  });
+  // resumo no final, no mesmo estilo do PDF de comissão
+  const boxW = 118;
+  const rowH = 7.2;
+  const resumo = [
+    ['Dias trabalhados', String(row.days || 0)],
+    ['Total trabalhado', row.worked_label || '-'],
+    ['Extras', '+' + (row.extra_label || '0h 0min')],
+    ['Atrasos', '-' + (row.late_label || '0h 0min')],
+    ['Saldo do mes', row.balance_label || row.extra_label || '0h 0min'],
+  ];
+  let by = doc.lastAutoTable.finalY + 10;
+  const boxH = resumo.length * rowH + 8;
+  if (by + boxH + 26 > 196) { doc.addPage('landscape'); by = 16; }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+  doc.text('RESUMO', 14, by);
+  by += 4;
+  doc.setDrawColor(150); doc.setLineWidth(0.2);
+  doc.rect(14, by, boxW, boxH);
+  doc.setFontSize(9.5);
+  resumo.forEach(([label, value], i) => {
+    const last = i === resumo.length - 1;
+    const ly = by + 8 + i * rowH;
+    if (last) doc.line(14, ly - 5, 14 + boxW, ly - 5);
+    doc.setFont('helvetica', last ? 'bold' : 'normal');
+    doc.text(pdfText(label), 18, ly);
+    doc.text(pdfText(value), 14 + boxW - 4, ly, { align: 'right' });
+  });
+  // nota curta + emissão no rodapé (sem assinaturas)
+  let fy = by + boxH + 9;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(120);
+  const metodo = doc.splitTextToSize(pdfText('Saldo do dia = trabalhado - padrao, minuto a minuto, sem tolerancia (atraso abate do extra). * = saida lancada sozinha no teto do expediente. Troca semanal automatica 1-para-1: sem desconto nem extra. Documento simplificado (CNPJ sem validacao).'), W - 28);
+  if (fy + metodo.length * 3.6 + 10 > 198) { doc.addPage('landscape'); fy = 16; }
+  doc.text(metodo, 14, fy);
+  fy += metodo.length * 3.6 + 5;
+  doc.setFontSize(8);
+  doc.text(pdfText(`Emitido em ${new Date().toLocaleString('pt-BR')} - SellDay`), 14, fy);
+  doc.setTextColor(0);
+  return doc;
 }
 
 // Espelho individual em PDF (arquivo p/ baixar)
