@@ -3621,7 +3621,6 @@ async function openSellerCommissionPDF(row, month) {
     const net = row.net_cents != null ? Number(row.net_cents) : Math.max(0, gross - discCents);
     const paid = Number(row.paid_month_cents) || 0;
     const toReceive = Math.max(0, net - paid);
-    const pendingAll = Number(row.pending_cents) || 0;
     const discQty = Number(row.disc_qty) || 0;
     const saleRows = list.map((s) => `<tr>
       <td style="white-space:nowrap">${esc(fmtDateBR(s.sale_date))}</td>
@@ -3670,7 +3669,6 @@ async function openSellerCommissionPDF(row, month) {
       <div class="l"><span>Já pago no mês</span><b>${esc(brl(paid))}</b></div>
       <div class="l tot"><span>A receber do mês</span><b>${esc(brl(toReceive))}</b></div>
     </div>
-    <div style="margin-top:10px;font-size:12px;display:flex;justify-content:space-between;gap:12px;border:1px solid #999;padding:10px 12px;background:#fafafa"><span>Pendente total de todos os meses</span><b>${esc(brl(pendingAll))}</b></div>
     ${(discounts || []).length ? `<h2>Cancelamentos lançados</h2><table><thead><tr><th>Data</th><th>Cliente</th><th>Produto</th><th style="text-align:center">Qtd</th><th style="text-align:right">Valor</th></tr></thead><tbody>${discRows}</tbody></table>` : ''}
     <div class="foot">Emitido em ${esc(new Date().toLocaleString('pt-BR'))} • SellDay</div>
     <script>window.onload=()=>setTimeout(()=>window.print(),350)<\/script></body></html>`;
