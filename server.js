@@ -1360,12 +1360,32 @@ app.post('/api/sales/:id/cancel', requireAuth, requireManager, ah(async (req, re
 }));
 
 // histórico de vendas canceladas (admin, auditoria)
+// inclui as canceladas arquivadas (90+ dias, só leitura) e aceita ?month=YYYY-MM
+// (filtra pelo mês do cancelamento; sem data de cancelamento, usa o mês da venda)
 app.get('/api/sales/canceled', requireAuth, requireAdmin, ah(async (req, res) => {
-  const rows = await db.all(
+  const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : '';
+  const where = month ? " AND substr(COALESCE(c.canceled_at, c.sale_date),1,7)=?" : '';
+  const params = month ? [month] : [];
+  const parse = (r) => {
+    let participants = [];
+    try { participants = JSON.parse(r.participants || '[]'); } catch { participants = []; }
+    return { ...r, participants };
+  };
+  const live = (await db.all(
     `SELECT c.*, u.name AS canceled_by_name FROM canceled_sales c
-     LEFT JOIN users u ON u.id=c.canceled_by ORDER BY c.id DESC LIMIT 200`
-  );
-  res.json({ canceled: rows.map((r) => ({ ...r, participants: JSON.parse(r.participants || '[]') })) });
+     LEFT JOIN users u ON u.id=c.canceled_by WHERE 1=1${where} ORDER BY c.id DESC LIMIT 500`, ...params
+  )).map((r) => ({ ...parse(r), archived: 0, key: 'l' + r.id }));
+  let arch = [];
+  try {
+    arch = (await db.all(
+      `SELECT c.*, u.name AS canceled_by_name FROM archived_canceled c
+       LEFT JOIN users u ON u.id=c.canceled_by WHERE 1=1${where} ORDER BY c.id DESC LIMIT 500`, ...params
+    )).map((r) => ({ ...parse(r), archived: 1, key: 'a' + r.id }));
+  } catch { arch = []; }
+  const canceled = [...live, ...arch]
+    .sort((a, b) => String(b.canceled_at || b.sale_date || '').localeCompare(String(a.canceled_at || a.sale_date || '')))
+    .slice(0, 500);
+  res.json({ canceled, month: month || null });
 }));
 
 // excluir registro de cancelada em definitivo (admin, erro de cadastro):

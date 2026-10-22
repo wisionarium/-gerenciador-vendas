@@ -1325,8 +1325,9 @@ async function viewHistory(app) {
           ${d.note ? `<div class="muted" style="font-size:12px">${esc(d.note)}</div>` : ''}
         </div>`).join('');
       const pendCards = (canceled || []).filter((c) => {
-        const ref = String(c.sale_date || '').slice(0, 7);
-        return true;
+        // respeita o mês escolhido (mês do cancelamento; sem data, o mês da venda)
+        const ref = String(c.canceled_at || c.sale_date || '').slice(0, 7);
+        return ref === month;
       }).slice(0, 50).map((c) => {
         const mine = (c.participants || []).filter((p) => p.seller_id === me.id).reduce((a, p) => a + Number(p.credit), 0);
         const hasDisc = (discounts || []).some((d) => Number(d.canceled_sale_id) === Number(c.id));
@@ -3313,11 +3314,12 @@ async function viewComissoes(app) {
       <div class="card"><div id="discBody"><p class="muted">Carregando…</p></div></div>
       <h3 class="section-title">Vendas canceladas (histórico)</h3>
       <div class="card">
-        <div class="mini-pills" id="cancScope" style="margin-bottom:8px">
-          <button data-w="month" class="on">Deste mês</button>
-          <button data-w="all">Todas</button>
+        <div class="row" style="align-items:end;gap:8px;flex-wrap:nowrap">
+          <div style="flex:1;min-width:0"><label style="margin-top:0">Mês do cancelamento</label><input type="month" id="cancMonth" style="width:100%"></div>
+          <button class="btn" id="cancMonthGo">Ver</button>
+          <button class="btn btn-ghost" id="cancAll" title="Mostrar todos os meses">Todos</button>
         </div>
-        <div id="cancBody"><p class="muted">Carregando…</p></div>
+        <div id="cancBody" style="margin-top:10px"><p class="muted">Carregando…</p></div>
       </div>
     </div>
     <div class="foot">Desenvolvido pela Wisionarium</div>`;
@@ -3327,7 +3329,7 @@ async function viewComissoes(app) {
   let commQ = '';
   let commStoreF = '';
   let commSeller = '';
-  let cancScope = 'month';
+  let cancMonth = '';
   let cacheSummary = null;
   let cacheDiscounts = [];
   let cacheCanceled = [];
@@ -3356,12 +3358,9 @@ async function viewComissoes(app) {
     commSeller = $('#commSellerF').value || '';
     applyCommFilter();
   };
-  $('#cancScope').onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    cancScope = b.dataset.w;
-    $$('#cancScope button').forEach((x) => x.classList.toggle('on', x === b));
-    renderCancs();
-  };
+  $('#cancMonthGo').onclick = () => { cancMonth = $('#cancMonth').value || ''; renderCancs(); };
+  $('#cancMonth').onchange = () => { cancMonth = $('#cancMonth').value || ''; renderCancs(); };
+  $('#cancAll').onclick = () => { cancMonth = ''; $('#cancMonth').value = ''; renderCancs(); };
   let commDeb = null;
   $('#commQ').oninput = () => { clearTimeout(commDeb); commDeb = setTimeout(() => { commQ = $('#commQ').value.trim(); applyCommFilter(); }, 400); };
   $('#commStoreF').onchange = () => { commStoreF = $('#commStoreF').value || ''; applyCommFilter(); };
@@ -3497,7 +3496,7 @@ async function viewComissoes(app) {
       if (!d.canceled_sale_id) continue;
       (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
     }
-    const pend = (cacheCanceled || []).filter((c) => !(byCanc[c.id] || []).length && inSelectedMonth(c, month));
+    const pend = (cacheCanceled || []).filter((c) => !c.archived && !(byCanc[c.id] || []).length && inSelectedMonth(c, month));
     const alertBox = $('#cancAlert');
     if (alertBox) {
       alertBox.innerHTML = pend.length
@@ -3553,41 +3552,45 @@ async function viewComissoes(app) {
       (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
     }
     const list = (cacheCanceled || []).filter((c) => {
-      if (cancScope === 'month' && !inSelectedMonth(c, month)) return false;
+      if (cancMonth && !inSelectedMonth(c, cancMonth)) return false;
       if (commSeller && !(c.participants || []).some((p) => String(p.seller_id) === String(commSeller))) return false;
       if (!q) return true;
       const parts = (c.participants || []).map((p) => p.seller_name).join(' ');
       return commNorm(c.customer_name).includes(q) || commNorm(c.product).includes(q) || commNorm(parts).includes(q);
     });
-    el.innerHTML = (cacheCanceled || []).length
-      ? (list.length ? compactListHTML(list, (c) => {
-        const parts = (c.participants || []).map((p) => esc(p.seller_name)).join(', ');
-        const linkedDiscs = byCanc[c.id] || [];
-        const status = linkedDiscs.length
+    const vazio = (cacheCanceled || []).length
+      ? (commQ ? 'Nada encontrado para essa busca.' : (cancMonth ? 'Nenhuma venda cancelada neste mês.' : 'Nenhuma venda cancelada.'))
+      : 'Nenhuma venda cancelada.';
+    el.innerHTML = list.length ? compactListHTML(list, (c) => {
+      const parts = (c.participants || []).map((p) => esc(p.seller_name)).join(', ');
+      // arquivadas (90+ dias) são só leitura: sem vínculo de desconto nem ações
+      const linkedDiscs = c.archived ? [] : (byCanc[c.id] || []);
+      const status = c.archived
+        ? `<span class="chip" style="font-size:10px" title="Registro com mais de 90 dias (somente leitura)">arquivada</span>`
+        : linkedDiscs.length
           ? `<span class="chip wa">descontado</span>`
           : `<span class="chip lime">sem desconto lançado</span>`;
-        return `<div class="sale-card" style="padding:10px 12px">
-          <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap"><b>${esc(c.customer_name)}</b>${status}</div>
-          <div class="muted" style="font-size:12.5px;margin-top:2px">🧾 ${esc(c.product)} • ${esc(c.color)} • ${esc(c.channel)}</div>
-          <div class="muted" style="font-size:12px;margin-top:2px">Vendida ${fmtDateBR(c.sale_date)} • Cancelada ${fmtDateBR(String(c.canceled_at || '').slice(0, 10))} • 👥 ${parts}${c.reason ? ` • ${esc(c.reason)}` : ''}${c.note ? ` • ${esc(c.note)}` : ''}</div>
-          <div class="row" style="margin-top:6px;gap:8px">${linkedDiscs.length ? '' : `<button class="btn" style="font-size:12px;padding:6px 10px" data-claunch="${c.id}">Lançar desconto</button>`}<button class="btn btn-ghost" style="font-size:12px;padding:6px 10px" data-cdel="${c.id}" title="Excluir registro em definitivo">🗑️</button></div>
-        </div>`;
-      }, 6) : '<div class="card empty">Nada encontrado para essa busca.</div>')
-      : '<div class="empty">Nenhuma venda cancelada.</div>';
-      bindCompactList(el);
-      $$('#cancBody [data-claunch]').forEach((b) => (b.onclick = (e) => {
-        if (e && e.stopPropagation) e.stopPropagation();
-        const canc = (cacheCanceled || []).find((x) => String(x.id) === String(b.dataset.claunch));
-        if (!canc) return;
-        const firstSeller = (canc.participants || [])[0];
-        modalDiscount(null, null, month, firstSeller ? firstSeller.seller_id : null, async () => { await load(); }, canc);
-      }));
-      $$('#cancBody [data-cdel]').forEach((b) => (b.onclick = async (e) => {
-        if (e && e.stopPropagation) e.stopPropagation();
-        if (!confirm('Excluir este registro de cancelada EM DEFINITIVO?\n\nSome do histórico e da aba Canc. da vendedora.')) return;
-        try { await api(`/api/sales/canceled/${b.dataset.cdel}`, { method: 'DELETE' }); toast('Registro excluído!'); await load(); }
-        catch (err) { toast(err.message, 'err'); }
-      }));
+      return `<div class="sale-card" style="padding:10px 12px">
+        <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap"><b>${esc(c.customer_name)}</b>${status}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:2px">🧾 ${esc(c.product)} • ${esc(c.color)} • ${esc(c.channel)}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Vendida ${fmtDateBR(c.sale_date)} • Cancelada ${c.canceled_at ? fmtDateBR(String(c.canceled_at).slice(0, 10)) : '—'} • 👥 ${parts}${c.reason ? ` • ${esc(c.reason)}` : ''}${c.note ? ` • ${esc(c.note)}` : ''}</div>
+        ${c.archived ? '' : `<div class="row" style="margin-top:6px;gap:8px">${linkedDiscs.length ? '' : `<button class="btn" style="font-size:12px;padding:6px 10px" data-claunch="${c.id}">Lançar desconto</button>`}<button class="btn btn-ghost" style="font-size:12px;padding:6px 10px" data-cdel="${c.id}" title="Excluir registro em definitivo">🗑️</button></div>`}
+      </div>`;
+    }, 6) : `<div class="card empty">${vazio}</div>`;
+    bindCompactList(el);
+    $$('#cancBody [data-claunch]').forEach((b) => (b.onclick = (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      const canc = (cacheCanceled || []).find((x) => String(x.id) === String(b.dataset.claunch) && !x.archived);
+      if (!canc) return;
+      const firstSeller = (canc.participants || [])[0];
+      modalDiscount(null, null, month, firstSeller ? firstSeller.seller_id : null, async () => { await load(); }, canc);
+    }));
+    $$('#cancBody [data-cdel]').forEach((b) => (b.onclick = async (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      if (!confirm('Excluir este registro de cancelada EM DEFINITIVO?\n\nSome do histórico e da aba Canc. da vendedora.')) return;
+      try { await api(`/api/sales/canceled/${b.dataset.cdel}`, { method: 'DELETE' }); toast('Registro excluído!'); await load(); }
+      catch (err) { toast(err.message, 'err'); }
+    }));
   };
   $('#cGo').onclick = load;
   await loadStoreFilter();
