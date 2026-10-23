@@ -268,9 +268,9 @@ app.get('/api/me', requireAuth, ah(async (req, res) => {
   res.json({ user: { ...(await toPublicUserPerms(req.user)), pix_key: req.user.pix_key || null } });
 }));
 
-// chave PIX da própria pessoa (vendedora e funcionário): texto livre até 120 caracteres; vazio remove
+// chave PIX da própria pessoa (vendedora, funcionário e motorista): texto livre até 120 caracteres; vazio remove
 app.put('/api/me/pix', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Recurso da equipe.' });
   const { pix_key } = req.body || {};
   const clean = String(pix_key ?? '').trim();
   if (clean.length > 120) return res.status(400).json({ error: 'Chave PIX muito longa (máx. 120 caracteres).' });
@@ -284,7 +284,7 @@ app.put('/api/me/avatar', requireAuth, ah(async (req, res) => {
   const { avatar, seller_id } = req.body || {};
   let sid = req.user.id;
   if (seller_id && req.user.role === 'admin') sid = Number(seller_id);
-  else if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Sem permissão.' });
+  else if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Sem permissão.' });
   if (avatar) {
     if (typeof avatar !== 'string' || !avatar.startsWith('data:image/') || avatar.length > 200000)
       return res.status(400).json({ error: 'Imagem inválida. Use uma foto JPG/PNG comum.' });
@@ -652,7 +652,7 @@ app.get('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
 app.post('/api/users', requireAuth, requireAdmin, ah(async (req, res) => {
   const { name, email, password, role, sector, store_id, job_title, company_id, dayoff_dow, sunday_scale } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password) return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
-  if (!['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
+  if (!['admin', 'manager', 'seller', 'staff', 'driver'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
   if (!validDayoff(dayoff_dow)) return res.status(400).json({ error: 'Folga semanal inválida.' });
   if (!validSundayScale(sunday_scale)) return res.status(400).json({ error: 'Escala de domingo inválida.' });
@@ -692,7 +692,7 @@ app.put('/api/users/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const target = await db.get('SELECT * FROM users WHERE id=?', req.params.id);
   if (!target) return res.status(404).json({ error: 'Usuária não encontrada.' });
   if (!name?.trim() || !email?.trim()) return res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
-  if (role && !['admin', 'manager', 'seller', 'staff'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
+  if (role && !['admin', 'manager', 'seller', 'staff', 'driver'].includes(role)) return res.status(400).json({ error: 'Perfil inválido.' });
   if (sector != null && sector !== '' && !validSector(sector)) return res.status(400).json({ error: 'Setor inválido (online ou presencial).' });
   if (!validDayoff(dayoff_dow)) return res.status(400).json({ error: 'Folga semanal inválida.' });
   if (!validSundayScale(sunday_scale)) return res.status(400).json({ error: 'Escala de domingo inválida.' });
@@ -821,7 +821,7 @@ app.get('/api/users/:id/schedule', requireAuth, ah(async (req, res) => {
   if (!target) return res.status(404).json({ error: 'Pessoa não encontrada.' });
   if (req.user.role === 'manager' && Number(target.store_id) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
-  if ((req.user.role === 'seller' || req.user.role === 'staff') && Number(target.id) !== Number(req.user.id))
+  if ((req.user.role === 'seller' || req.user.role === 'staff' || req.user.role === 'driver') && Number(target.id) !== Number(req.user.id))
     return res.status(403).json({ error: 'Sem permissão.' });
   res.json({
     schedule: await scheduleFor(target.id), defaults: STD_DEFAULTS,
@@ -907,7 +907,7 @@ function mergedTheme(darkId, lightId) {
 }
 
 app.get('/api/settings/theme', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Sem permissão.' });
   const row = await db.get('SELECT * FROM seller_settings WHERE seller_id=?', req.user.id);
   const dark = (row && (row.theme_dark || (row.preset ? 'verde' : null))) || 'verde';
   const light = (row && (row.theme_light || (row.preset ? 'classico' : null))) || 'classico';
@@ -915,7 +915,7 @@ app.get('/api/settings/theme', requireAuth, ah(async (req, res) => {
 }));
 
 app.put('/api/settings/theme', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Sem permissão.' });
   const { dark, light } = req.body || {};
   if (!THEME_DARKS[dark]) return res.status(400).json({ error: 'Cor escura inválida.' });
   if (!THEME_LIGHTS[light]) return res.status(400).json({ error: 'Cor clara inválida.' });
@@ -1039,7 +1039,7 @@ app.post('/api/phrases/daily', requireAuth, ah(async (req, res) => {
   (async () => {
     try {
       if (await alreadyNotified(today, 'frase_escrita', 0)) return;
-      const team = await db.all("SELECT id FROM users WHERE role IN ('seller','staff','manager') AND active=1 AND id<>?", req.user.id).catch(() => []);
+      const team = await db.all("SELECT id FROM users WHERE role IN ('seller','staff','driver','manager') AND active=1 AND id<>?", req.user.id).catch(() => []);
       const preview = clean.length > 90 ? clean.slice(0, 90) + '…' : clean;
       const idx = pickTemplate(FRASE_ESCRITA_TEMPLATES, req.user.id, today);
       await sendPushToUsers(team.map((t) => t.id), {
@@ -1786,10 +1786,10 @@ app.delete('/api/commissions/discounts/:id', requireAuth, requireAdmin, ah(async
   res.json({ ok: true });
 }));
 
-// histórico de cancelamentos da própria pessoa (vendedora/funcionária):
+// histórico de cancelamentos da própria pessoa (vendedora/funcionária/motorista):
 // descontos lançados p/ ela + vendas canceladas em que participou (inclui arquivo 90d)
 app.get('/api/me/cancellations', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff')
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver')
     return res.status(403).json({ error: 'Recurso da equipe.' });
   const { month } = req.query;
   const me = Number(req.user.id);
@@ -1934,10 +1934,21 @@ function punchCalc(p, isHoliday, sched, person) {
     extra = Math.max(0, balance);
     late = Math.min(0, balance);
   }
+  let in_hhmm = p.check_in_at ? hhmmFromISO(p.check_in_at) : null;
+  let out_hhmm = p.check_out_at ? hhmmFromISO(p.check_out_at) : null;
+  if (p.check_out_at && out_hhmm) {
+    const msOut = Date.parse(p.check_out_at);
+    const msIn = p.check_in_at ? Date.parse(p.check_in_at) : NaN;
+    if (!isNaN(msOut) && !isNaN(msIn)) {
+      const dOut = new Date(msOut - 3 * 3600e3).toISOString().slice(0, 10);
+      const dIn = new Date(msIn - 3 * 3600e3).toISOString().slice(0, 10);
+      if (dOut > dIn) out_hhmm += ' (+1)';
+    }
+  }
   return {
     ...p,
-    in_hhmm: p.check_in_at ? hhmmFromISO(p.check_in_at) : null,
-    out_hhmm: p.check_out_at ? hhmmFromISO(p.check_out_at) : null,
+    in_hhmm,
+    out_hhmm,
     std_min: std,
     std_label: fmtDur(std),
     rest_day: rule.rest,
@@ -2045,9 +2056,9 @@ app.get('/api/stores/qr', requireAuth, requireManager, ah(async (req, res) => {
   res.json({ stores: out });
 }));
 
-// bater ponto (vendedora e funcionário): QR da loja + GPS; tipo automático (entrada → saída)
+// bater ponto (vendedora, funcionário e motorista): QR da loja + GPS; tipo automático (entrada → saída)
 app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Recurso da equipe.' });
   const { qr_code, lat, lng, accuracy } = req.body || {};
   const code = String(qr_code || '').trim().toUpperCase();
   // QR identifica a loja (Sede, Magé, Guapimirim)
@@ -2076,7 +2087,43 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   const today = todaySP();
   const now = new Date().toISOString();
   const mySched = await scheduleFor(req.user.id);
-  await autoClosePunches(); // rede de segurança: fecha esquecidos de dias passados
+  await autoClosePunches(); // rede de segurança: fecha esquecidos de dias passados (motoristas são imunes)
+
+  // FLUXO ESPECIAL PARA MOTORISTA (viagens flexíveis, sem corte automático e aceita virar a noite)
+  if (req.user.role === 'driver') {
+    let openPunch = await db.get(
+      'SELECT * FROM punches WHERE seller_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY date DESC, id DESC LIMIT 1',
+      req.user.id
+    );
+    if (openPunch) {
+      // Registrar SAÍDA da viagem
+      const sinceIn = Date.parse(now) - Date.parse(openPunch.check_in_at);
+      if (sinceIn < 3 * 60000)
+        return res.status(409).json({ error: 'Entrada registrada agora mesmo. Aguarde alguns minutos antes da saída.' });
+      if (sinceIn < 30 * 60000 && !(req.body || {}).confirm_exit) {
+        const mins = Math.max(1, Math.round(sinceIn / 60000));
+        const inH = hhmmFromISO(openPunch.check_in_at);
+        return res.status(409).json({ error: `Você bateu a ENTRADA às ${inH} (há ${mins}min). Se escaneou sem querer, cancele. Para registrar a SAÍDA da viagem mesmo assim, confirme.`, need_confirm: true, in_hhmm: inH });
+      }
+      await db.run('UPDATE punches SET check_out_at=?, check_out_lat=?, check_out_lng=?, check_out_acc=?, updated_at=datetime(\'now\') WHERE id=?',
+        now, nLat, nLng, acc, openPunch.id);
+      const updated = await db.get('SELECT * FROM punches WHERE id=?', openPunch.id);
+      const hol = await holidayFor(updated.date, updated.store_id ?? store.id);
+      return res.json({ type: 'out', punch: punchCalc(updated, !!hol, mySched, req.user), distance_m: Math.round(dist) });
+    }
+
+    // Não tem ponto aberto: registrar nova ENTRADA de viagem
+    const closedToday = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=? AND check_out_at IS NOT NULL', req.user.id, today);
+    if (closedToday) {
+      return res.status(409).json({ error: 'Jornada de hoje já finalizada (entrada e saída registradas).' });
+    }
+    await db.run('INSERT INTO punches (seller_id, store_id, date, check_in_at, check_in_lat, check_in_lng, check_in_acc) VALUES (?,?,?,?,?,?,?)',
+      req.user.id, store.id, today, now, nLat, nLng, acc);
+    const pNew = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+    const hol = await holidayFor(today, store.id);
+    return res.status(201).json({ type: 'in', store: store.name, punch: punchCalc(pNew, !!hol, mySched, req.user), distance_m: Math.round(dist) });
+  }
+
   let p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
   if (!p) {
     // primeira batida: até 12:59 vira entrada; a partir de 13h vira saída
@@ -2116,18 +2163,27 @@ app.post('/api/ponto/bater', requireAuth, ah(async (req, res) => {
   return res.status(409).json({ error: 'Dia já encerrado (entrada e saída registradas).' });
 }));
 
-// ponto de hoje (vendedora e funcionário)
+// ponto de hoje (vendedora, funcionário e motorista)
 app.get('/api/ponto/hoje', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Recurso da equipe.' });
   const today = todaySP();
-  const p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
-  const hol = await holidayFor(today, (p && p.store_id) ?? req.user.store_id);
-  res.json({ date: today, punch: p ? punchCalc(p, !!hol, await scheduleFor(req.user.id), req.user) : null, is_holiday: !!hol });
+  let p = null;
+  if (req.user.role === 'driver') {
+    p = await db.get('SELECT * FROM punches WHERE seller_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY date DESC, id DESC LIMIT 1', req.user.id);
+    if (!p) {
+      p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+    }
+  } else {
+    p = await db.get('SELECT * FROM punches WHERE seller_id=? AND date=?', req.user.id, today);
+  }
+  const targetDate = (p && p.date) || today;
+  const hol = await holidayFor(targetDate, (p && p.store_id) ?? req.user.store_id);
+  res.json({ date: targetDate, punch: p ? punchCalc(p, !!hol, await scheduleFor(req.user.id), req.user) : null, is_holiday: !!hol });
 }));
 
-// meu mês de ponto (vendedora e funcionário): batidas dia a dia + extras
+// meu mês de ponto (vendedora, funcionário e motorista): batidas dia a dia + extras
 app.get('/api/ponto/eu', requireAuth, ah(async (req, res) => {
-  if (req.user.role !== 'seller' && req.user.role !== 'staff') return res.status(403).json({ error: 'Recurso da equipe.' });
+  if (req.user.role !== 'seller' && req.user.role !== 'staff' && req.user.role !== 'driver') return res.status(403).json({ error: 'Recurso da equipe.' });
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : todaySP().slice(0, 7);
   const mySched = await scheduleFor(req.user.id);
   await autoClosePunches(); // rede de segurança antes de listar o mês
@@ -2160,8 +2216,8 @@ app.get('/api/ponto/dia', requireAuth, requireManager, ah(async (req, res) => {
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
-  // kind: vendedoras (seller) | funcionários (staff) | todos
-  const kindFilter = kind === 'staff' ? ` AND u.role='staff'` : kind === 'seller' ? ` AND u.role='seller'` : ` AND u.role IN ('seller','staff')`;
+  // kind: vendedoras (seller) | funcionários (staff) | motoristas (driver) | todos
+  const kindFilter = kind === 'staff' ? ` AND u.role='staff'` : kind === 'seller' ? ` AND u.role='seller'` : kind === 'driver' ? ` AND u.role='driver'` : ` AND u.role IN ('seller','staff','driver')`;
   let sellers = await db.all(
     `SELECT u.*, s.name AS store_name FROM users u LEFT JOIN stores s ON s.id=u.store_id WHERE u.active=1${kindFilter}${scope.storeId != null ? ' AND u.store_id=?' : ''} ORDER BY u.name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
@@ -2474,10 +2530,19 @@ async function monthExtra(sellerId, month) {
 // 12h dom, 13h feriado, ou fim da carga especial). Teto punitivo: hora além do
 // padrão é perdida. Marca auto_closed=1 (o admin pode corrigir depois).
 // Roda no agendador da 00:05 + de segurança nas telas de ponto.
+// Motoristas (role='driver') são isentos de auto-close (viagens com virada de noite).
 async function autoClosePunches() {
   const today = todaySP();
   let open = [];
-  try { open = await db.all('SELECT * FROM punches WHERE date < ? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY date', today); }
+  try {
+    open = await db.all(
+      `SELECT p.* FROM punches p
+       JOIN users u ON u.id = p.seller_id
+       WHERE p.date < ? AND p.check_in_at IS NOT NULL AND p.check_out_at IS NULL AND u.role <> 'driver'
+       ORDER BY p.date`,
+      today
+    );
+  }
   catch (e) { console.log('[ponto] auto-close pulado:', e.message); return { closed: 0 }; }
   if (!open.length) return { closed: 0 };
   const ids = [...new Set(open.map((p) => p.seller_id))];
@@ -2565,7 +2630,7 @@ app.get('/api/ponto/escalas', requireAuth, requireManager, ah(async (req, res) =
   const scope = scopedStoreId(req, req.query.store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const people = await db.all(
-    `SELECT id, name, role, sector, store_id, dayoff_dow, sunday_scale FROM users WHERE active=1 AND role IN ('seller','staff')${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY name`,
+    `SELECT id, name, role, sector, store_id, dayoff_dow, sunday_scale FROM users WHERE active=1 AND role IN ('seller','staff','driver')${scope.storeId != null ? ' AND store_id=?' : ''} ORDER BY name`,
     ...(scope.storeId != null ? [scope.storeId] : [])
   );
   res.json({
@@ -2584,7 +2649,8 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Mês inválido.' });
   const scope = scopedStoreId(req, req.query.store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
-  const kindFilter = kind === 'staff' ? ` AND u.role='staff'` : kind === 'seller' ? ` AND u.role='seller'` : ` AND u.role IN ('seller','staff')`;
+  // kind: vendedoras (seller) | funcionários (staff) | motoristas (driver) | todos
+  const kindFilter = kind === 'staff' ? ` AND u.role='staff'` : kind === 'seller' ? ` AND u.role='seller'` : kind === 'driver' ? ` AND u.role='driver'` : ` AND u.role IN ('seller','staff','driver')`;
   const selCo = `u.*, s.name AS store_name, c.name AS company_name, c.cnpj AS company_cnpj`;
   const joinCo = `FROM users u LEFT JOIN stores s ON s.id=u.store_id LEFT JOIN companies c ON c.id=u.company_id`;
   let sellers = await db.all(
@@ -2752,7 +2818,7 @@ app.get('/api/ponto/resumo', requireAuth, requireManager, ah(async (req, res) =>
 // baixa de horas extras (admin/gerente): registra horas pagas/compensadas no mês (em minutos)
 app.post('/api/ponto/extra-payouts', requireAuth, requireManager, ah(async (req, res) => {
   const { seller_id, month, minutes } = req.body || {};
-  const person = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff') AND active=1", Number(seller_id));
+  const person = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff','driver') AND active=1", Number(seller_id));
   if (!person) return res.status(400).json({ error: 'Pessoa inválida.' });
   if (req.user.role === 'manager' && Number(person.store_id) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
@@ -2772,7 +2838,7 @@ app.post('/api/ponto/extra-payouts', requireAuth, requireManager, ah(async (req,
 // week_start deve ser a segunda-feira da semana (YYYY-MM-DD).
 app.post('/api/ponto/swap-week', requireAuth, requireManager, ah(async (req, res) => {
   const { seller_id, week_start, mode } = req.body || {};
-  const person = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff') AND active=1", Number(seller_id));
+  const person = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff','driver') AND active=1", Number(seller_id));
   if (!person) return res.status(400).json({ error: 'Pessoa inválida.' });
   if (req.user.role === 'manager' && Number(person.store_id) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
@@ -2800,7 +2866,7 @@ function firstPunchType(spMinutes) {
 // normaliza horários manuais (igual ao app): entrada só até 12:59; horário
 // >=13h sem saída vira saída (para registrar a saída de quem esqueceu a
 // entrada). Retorna {inISO, outISO, moved} ou {error}.
-function normalizePunchTimes(dateISO, check_in_hhmm, check_out_hhmm) {
+function normalizePunchTimes(dateISO, check_in_hhmm, check_out_hhmm, isDriver = false) {
   const okHHMM = (s) => s === '' || s == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
   if (!okHHMM(check_in_hhmm) || !okHHMM(check_out_hhmm)) return { error: 'Horário inválido (use HH:MM).' };
   let ci = (check_in_hhmm || '').trim() || null;
@@ -2808,19 +2874,28 @@ function normalizePunchTimes(dateISO, check_in_hhmm, check_out_hhmm) {
   if (!ci && !co) return { error: 'Informe ao menos a entrada ou a saída.' };
   const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
   let moved = false;
-  if (ci && toMin(ci) >= 13 * 60 && !co) { co = ci; ci = null; moved = true; }
-  if (ci && toMin(ci) >= 13 * 60) return { error: 'Entrada só até 12:59 — após 13h é saída.' };
-  const toISO = (hhmm) => new Date(`${dateISO}T${hhmm}:00-03:00`).toISOString();
-  const inISO = ci ? toISO(ci) : null;
-  const outISO = co ? toISO(co) : null;
-  if (inISO && outISO && Date.parse(outISO) <= Date.parse(inISO)) return { error: 'Saída deve ser depois da entrada.' };
+  if (!isDriver) {
+    if (ci && toMin(ci) >= 13 * 60 && !co) { co = ci; ci = null; moved = true; }
+    if (ci && toMin(ci) >= 13 * 60) return { error: 'Entrada só até 12:59 — após 13h é saída.' };
+  }
+  const toISO = (dISO, hhmm) => new Date(`${dISO}T${hhmm}:00-03:00`).toISOString();
+  const inISO = ci ? toISO(dateISO, ci) : null;
+  let outISO = co ? toISO(dateISO, co) : null;
+  if (inISO && outISO && Date.parse(outISO) <= Date.parse(inISO)) {
+    if (isDriver) {
+      const nextD = new Date(new Date(dateISO + 'T12:00:00Z').getTime() + 86400000).toISOString().slice(0, 10);
+      outISO = toISO(nextD, co);
+    } else {
+      return { error: 'Saída deve ser depois da entrada.' };
+    }
+  }
   return { inISO, outISO, moved };
 }
 
 // correção manual (admin/gerente): HH:MM no horário de SP
 app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   const p = await db.get(
-    'SELECT pu.*, u.store_id AS seller_store FROM punches pu JOIN users u ON u.id=pu.seller_id WHERE pu.id=?', req.params.id
+    'SELECT pu.*, u.store_id AS seller_store, u.role AS seller_role FROM punches pu JOIN users u ON u.id=pu.seller_id WHERE pu.id=?', req.params.id
   );
   if (!p) return res.status(404).json({ error: 'Registro não encontrado.' });
   if (req.user.role === 'manager' && Number(p.seller_store) !== Number(req.user.store_id))
@@ -2828,7 +2903,8 @@ app.put('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) => {
   if (req.user.role === 'manager' && !(await storePermAllowed(req.user.store_id, 'edit_ponto')))
     return res.status(403).json({ error: 'Edição de horários bloqueada para a sua loja. Peça liberação ao administrador (matriz).' });
   const { check_in_hhmm, check_out_hhmm } = req.body || {};
-  const t = normalizePunchTimes(p.date, check_in_hhmm, check_out_hhmm);
+  const isDriver = p.seller_role === 'driver';
+  const t = normalizePunchTimes(p.date, check_in_hhmm, check_out_hhmm, isDriver);
   if (t.error) return res.status(400).json({ error: t.error });
   await db.run('UPDATE punches SET check_in_at=?, check_out_at=?, auto_closed=0, updated_at=datetime(\'now\') WHERE id=?', t.inISO, t.outISO, p.id);
   const hol = await holidayFor(p.date, p.store_id ?? p.seller_store);
@@ -2854,7 +2930,7 @@ app.delete('/api/ponto/:id', requireAuth, requireManager, ah(async (req, res) =>
 // lançamento manual / contingência (admin/gerente): cria ou ajusta o dia sem QR/GPS
 app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) => {
   const { seller_id, date, check_in_hhmm, check_out_hhmm, store_id } = req.body || {};
-  const seller = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff')", Number(seller_id));
+  const seller = await db.get("SELECT * FROM users WHERE id=? AND role IN ('seller','staff','driver')", Number(seller_id));
   if (!seller) return res.status(400).json({ error: 'Pessoa inválida.' });
   if (req.user.role === 'manager' && Number(seller.store_id) !== Number(req.user.store_id))
     return res.status(403).json({ error: 'Acesso restrito à sua loja.' });
@@ -2865,7 +2941,8 @@ app.post('/api/ponto/manual', requireAuth, requireManager, ah(async (req, res) =
   const punchStoreId = scope.storeId != null ? scope.storeId : (seller.store_id || await sedeId());
   const d = date || todaySP();
   if (!isValidDate(d)) return res.status(400).json({ error: 'Data inválida.' });
-  const t = normalizePunchTimes(d, check_in_hhmm, check_out_hhmm);
+  const isDriver = seller.role === 'driver';
+  const t = normalizePunchTimes(d, check_in_hhmm, check_out_hhmm, isDriver);
   if (t.error) return res.status(400).json({ error: t.error });
   await db.run(
     `INSERT INTO punches (seller_id, store_id, date, check_in_at, check_out_at) VALUES (?,?,?,?,?)
@@ -2945,7 +3022,7 @@ async function summarize(from, to, sellerId, storeId) {
 
 app.get('/api/stats/summary', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, sector, store_id } = req.query;
-  if (req.user.role === 'staff') return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role === 'staff' || req.user.role === 'driver') return res.status(403).json({ error: 'Sem permissão.' });
   const scope = scopedStoreId(req, store_id);
   if (scope.error) return res.status(403).json({ error: scope.error });
   const storeId = scope.storeId;
@@ -3047,7 +3124,7 @@ app.get('/api/stats/ranking', requireAuth, requireManager, ah(async (req, res) =
 
 app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
   const targetId = Number(req.params.id);
-  if (req.user.role === 'staff') return res.status(403).json({ error: 'Sem permissão.' });
+  if (req.user.role === 'staff' || req.user.role === 'driver') return res.status(403).json({ error: 'Sem permissão.' });
   if (req.user.role === 'manager') {
     const t = await db.get("SELECT * FROM users WHERE id=? AND role='seller'", targetId);
     if (!t || Number(t.store_id) !== Number(req.user.store_id))

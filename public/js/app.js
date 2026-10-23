@@ -179,7 +179,7 @@ function setNav() {
   const badge = $('#userBadge');
   const logout = $('#logoutBtn');
   if (!u) { nav.style.display = 'none'; badge.textContent = ''; logout.style.display = 'none'; return; }
-  const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'manager' ? `Gerente • ${u.store_name || ''}` : u.role === 'staff' ? `Equipe • ${u.store_name || ''}` : 'Vendedora';
+  const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'manager' ? `Gerente • ${u.store_name || ''}` : u.role === 'driver' ? `Motorista • ${u.store_name || ''}` : u.role === 'staff' ? `Equipe • ${u.store_name || ''}` : 'Vendedora';
   badge.textContent = `${u.name} • ${roleLabel}`;
   logout.style.display = '';
   nav.style.display = '';
@@ -198,7 +198,7 @@ function setNav() {
       ${fab}
       <a href="#/admin/relatorio" title="Relatório">${ICONS.chart}</a>
       <a href="#/admin/ponto" title="Ponto">${ICONS.clock}</a>`;
-  } else if (u.role === 'staff') {
+  } else if (u.role === 'staff' || u.role === 'driver') {
     nav.innerHTML = `
       <a href="#/funcionario" title="Início">${ICONS.home}</a>
       ${fab}
@@ -244,20 +244,20 @@ async function route() {
   const app = $('#app');
   const u = store.user;
   if (!u && h !== '#/login') { go('#/login'); return; }
-  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : u.role === 'staff' ? '#/funcionario' : '#/admin'); return; }
+  if (u && h === '#/login') { go(u.role === 'seller' ? '#/vendedora' : (u.role === 'staff' || u.role === 'driver') ? '#/funcionario' : '#/admin'); return; }
 
   try {
     if (h === '#/login' || h === '') return viewLogin(app);
     if (h === '#/funcionario') {
-      if (u.role !== 'staff' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora' : '#/login'); return; }
+      if (u.role !== 'staff' && u.role !== 'driver' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora' : '#/login'); return; }
       return viewStaff(app);
     }
     if (h === '#/funcionario/config') {
-      if (u.role !== 'staff') { go(u.role === 'seller' ? '#/vendedora/config' : '#/login'); return; }
+      if (u.role !== 'staff' && u.role !== 'driver') { go(u.role === 'seller' ? '#/vendedora/config' : '#/login'); return; }
       return viewConfig(app, '#/funcionario');
     }
     if (h === '#/funcionario/historico') {
-      if (u.role !== 'staff' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora/historico' : '#/login'); return; }
+      if (u.role !== 'staff' && u.role !== 'driver' && u.role !== 'admin') { go(u.role === 'seller' ? '#/vendedora/historico' : '#/login'); return; }
       return viewStaffHistory(app);
     }
     if (h.startsWith('#/vendedora')) {
@@ -270,7 +270,7 @@ async function route() {
       return viewSeller(app);
     }
     if (h.startsWith('#/admin')) {
-      if (u.role !== 'admin' && u.role !== 'manager') { go(u.role === 'staff' ? '#/funcionario' : '#/vendedora'); return; }
+      if (u.role !== 'admin' && u.role !== 'manager') { go((u.role === 'staff' || u.role === 'driver') ? '#/funcionario' : '#/vendedora'); return; }
       // gerente: tudo da loja, menos Equipe, Comissões e Arquivo
       if (u.role === 'manager' && (h === '#/admin/vendedoras' || h === '#/admin/comissoes' || h === '#/admin/arquivo')) { go('#/admin'); return; }
       if (h === '#/admin/vendas') return viewAllSales(app);
@@ -322,7 +322,7 @@ function viewLogin(app) {
       });
       store.token = token; store.user = user;
       // força re-render mesmo se o hash já for o destino (troca de conta na mesma rota)
-      const dest = user.role === 'seller' ? '#/vendedora' : user.role === 'staff' ? '#/funcionario' : '#/admin';
+      const dest = user.role === 'seller' ? '#/vendedora' : (user.role === 'staff' || user.role === 'driver') ? '#/funcionario' : '#/admin';
       if (location.hash === dest) route();
       else go(dest);
     } catch (err) { toast(err.message, 'err'); }
@@ -727,14 +727,14 @@ function applyThemeVars(t) {
 }
 try {
   const su = store.user;
-  if (su && (su.role === 'seller' || su.role === 'staff')) {
+  if (su && (su.role === 'seller' || su.role === 'staff' || su.role === 'driver')) {
     const cached = JSON.parse(localStorage.getItem('ec_theme_' + su.id) || 'null');
     if (cached) applyThemeVars(cached);
   }
 } catch { /* sem tema em cache */ }
 async function refreshTheme() {
   try {
-    if (store.user?.role !== 'seller' && store.user?.role !== 'staff') return;
+    if (store.user?.role !== 'seller' && store.user?.role !== 'staff' && store.user?.role !== 'driver') return;
     const { theme } = await api('/api/settings/theme');
     if (theme) {
       applyThemeVars(theme);
@@ -2280,6 +2280,7 @@ async function tabPontoDia(body, t) {
         <button data-k="" class="${!pontoKind ? 'on' : ''}">Todos</button>
         <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
         <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
+        <button data-k="driver" class="${pontoKind === 'driver' ? 'on' : ''}">Motoristas</button>
       </div>
       ${isManager && !canEdit ? '<p class="muted" style="font-size:12px;margin:8px 0 0">🔒 Edição de horários bloqueada para esta loja — somente visualização. Peça liberação ao admin (matriz).</p>' : ''}
       <div style="margin-top:10px"><input id="pSearch" placeholder="🔍 Buscar por nome…" autocomplete="off" style="width:100%"></div>
@@ -2303,7 +2304,7 @@ async function tabPontoDia(body, t) {
     const wd = weekdayShortBR(currentDate);
     return `
       <div class="sale-card" data-ponto-card="${r.seller_id}" style="cursor:pointer" title="Ver mês completo"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
+        <span class="row" style="align-items:center;gap:8px;flex-wrap:nowrap">${ava}<span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'driver' ? '<span class="chip" style="font-size:10px;padding:1px 8px;background:#e0f2fe;color:#0369a1">Motorista</span>' : r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}${r.custom_schedule ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Carga horária especial (ver Equipe)">⏱ especial</span>' : ''}${elsewhere}<br>
         <span class="chip" style="font-size:10px;padding:1px 8px" title="${esc(fmtDateBRWeek(currentDate))}">${esc(wd)}</span>${r.punch.auto_closed ? ' <span class="chip" style="font-size:10px;padding:1px 8px" title="Saída lançada sozinha no fim do expediente (ponto esquecido)">🤖 auto</span>' : ''}${swapped}
         <span class="mono" style="font-size:15px;font-weight:800">${r.punch.in_hhmm || '—'} → ${r.punch.out_hhmm || '—'}</span></span></span>
         <span style="text-align:right">${extra}${canEdit ? `<br><button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" data-fix="${r.punch.id}">corrigir</button>` : ''}</span>
@@ -2311,7 +2312,7 @@ async function tabPontoDia(body, t) {
   };
   const absentHTML = (r) => `
     <div class="sale-card" data-ponto-card="${r.seller_id}" style="cursor:pointer" title="Ver mês completo"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:nowrap">
-      <span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
+      <span><b data-ponto-user="${r.seller_id}" style="cursor:pointer" title="Ver mês completo">${esc(r.name)}</b> ${r.role === 'driver' ? '<span class="chip" style="font-size:10px;padding:1px 8px;background:#e0f2fe;color:#0369a1">Motorista</span>' : r.role === 'staff' ? '<span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : sectorTag(r.sector)}</span>
       ${canEdit ? `<button class="btn" data-lancar="${r.seller_id}">Lançar ponto</button>` : ''}
     </div></div>`;
   const renderDayLists = () => {
@@ -2411,6 +2412,7 @@ async function tabPontoExtras(body, t) {
         <button data-k="" class="${!pontoKind ? 'on' : ''}">Todos</button>
         <button data-k="seller" class="${pontoKind === 'seller' ? 'on' : ''}">Vendedoras</button>
         <button data-k="staff" class="${pontoKind === 'staff' ? 'on' : ''}">Funcionários</button>
+        <button data-k="driver" class="${pontoKind === 'driver' ? 'on' : ''}">Motoristas</button>
       </div>
       <div style="margin-top:10px"><input id="exSearch" placeholder="🔍 Buscar por nome…" autocomplete="off"></div>
       <div id="pMonthBody" style="margin-top:12px"><p class="muted">Carregando…</p></div>
@@ -2645,7 +2647,7 @@ function modalPagarExtra(row, month, reload) {
 // PDF simples de horas extras (totais por pessoa) via impressão do sistema
 function printExtrasPDF(month, r) {
   const [y, m] = month.split('-');
-  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.pix_key || '—')}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
+  const rows = r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${x.role === 'driver' ? 'Motorista' : x.role === 'staff' ? 'Funcionário' : x.sector === 'presencial' ? 'Presencial' : 'Online'}</td><td>${esc(x.pix_key || '—')}</td><td style="text-align:right"><b>${x.extra_label}</b></td></tr>`).join('');
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Horas Extras — ${m}/${y}</title><style>
     body{font-family:sans-serif;padding:40px;color:#111} h1{font-size:22px;margin:0} p{color:#555;font-size:13px}
@@ -2668,7 +2670,7 @@ function sortAZ(rows) {
 }
 // função/cargo p/ documentos (só aqui; no app continuam perfil e setor)
 function funcaoOf(x) {
-  return (x && x.job_title) || (x && x.role === 'staff' ? 'Funcionário' : 'Vendedor');
+  return (x && x.job_title) || (x && x.role === 'driver' ? 'Motorista' : x && x.role === 'staff' ? 'Funcionário' : 'Vendedor');
 }
 // estilo padrao das planilhas p/ o contador (cabecalho, bordas, zebra, congelar topo, filtros)
 function styleSheet(ws, opt) {
@@ -3981,7 +3983,7 @@ async function viewTeam(app) {
   </div>
   <div id="teamFilters" style="display:none"><div class="card">
     <div class="row" style="flex-wrap:wrap">
-      <div style="flex:1;min-width:140px"><label>Perfil</label><select id="fRole"><option value="">Todos</option><option value="seller">Vendedora</option><option value="manager">Gerente</option><option value="staff">Funcionário</option></select></div>
+      <div style="flex:1;min-width:140px"><label>Perfil</label><select id="fRole"><option value="">Todos</option><option value="seller">Vendedora</option><option value="manager">Gerente</option><option value="staff">Funcionário</option><option value="driver">Motorista</option></select></div>
       <div style="flex:1;min-width:140px"><label>Loja</label><select id="fStore"><option value="">Todas</option></select></div>
       <div style="flex:1;min-width:140px"><label>Status</label><select id="fActive"><option value="">Todas</option><option value="1">Ativa</option><option value="0">Inativa</option></select></div>
     </div>
@@ -4005,10 +4007,13 @@ async function viewTeam(app) {
     else if (sc === 'all') parts.push('Dom todos');
     return parts.length ? `<br><span class="chip" style="font-size:10px;padding:1px 8px" title="Folga semanal e escala de domingos">${esc(parts.join(' • '))}</span>` : '';
   };
-  const teamRow = (s) => `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b><br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
+  const teamRow = (s) => {
+    const roleChip = s.role === 'driver' ? ' <span class="chip" style="font-size:10px;padding:1px 8px;background:#e0f2fe;color:#0369a1">Motorista</span>' : s.role === 'staff' ? ' <span class="chip" style="font-size:10px;padding:1px 8px">Funcionário</span>' : s.role === 'manager' ? ' <span class="chip" style="font-size:10px;padding:1px 8px">Gerente</span>' : '';
+    return `<tr><td><div class="row" style="align-items:center;gap:8px;flex-wrap:nowrap"><span class="ava sm">${s.avatar_url ? `<img src="${s.avatar_url}" alt="">` : esc((s.name || '?')[0].toUpperCase())}</span><span><b>${esc(s.name)}</b>${roleChip}<br><span class="muted" style="font-size:12px">${esc(s.email)}</span></span></div></td>
     <td>${storeTag(s.store_name)}${scaleTag(s)}</td>
     <td>${s.active ? '✅ Ativa' : '⏸️ Inativa'}</td>
     <td><button class="btn" data-edit="${s.id}">Editar</button></td></tr>`;
+  };
   const teamHead = '<table><thead><tr><th>Nome</th><th>Loja</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
   const renderTeam = () => {
     const q = normSearch(teamQ.trim());
@@ -4250,7 +4255,7 @@ async function modalUser(u, reload) {
   const isSeller = !u || u.role === 'seller';
   $('#modalRoot').innerHTML = `
   <div class="modal-bg" id="mbg"><div class="modal">
-    <h3 style="margin:0">${u ? (u.role === 'manager' ? 'Editar gerente' : u.role === 'staff' ? 'Editar funcionário' : 'Editar vendedora') : 'Nova pessoa'}</h3>
+    <h3 style="margin:0">${u ? (u.role === 'manager' ? 'Editar gerente' : u.role === 'staff' ? 'Editar funcionário' : u.role === 'driver' ? 'Editar motorista' : 'Editar vendedora') : 'Nova pessoa'}</h3>
     <form id="fUser">
       <label>Nome *</label><input id="uName" required value="${esc(u?.name || '')}">
       <label>E-mail *</label><input id="uEmail" type="email" required value="${esc(u?.email || '')}">
@@ -4258,7 +4263,7 @@ async function modalUser(u, reload) {
       <div class="row" style="margin-top:6px"><button type="button" id="uGenPass" class="btn" style="font-size:12px;padding:6px 10px">🎲 Gerar temporária</button><button type="button" id="uCopyPass" class="btn btn-ghost" style="font-size:12px;padding:6px 10px">📋 Copiar</button></div>
       ${u ? '<p class="muted" style="font-size:12px">Por segurança a senha atual fica escondida e não pode ser recuperada (é salva criptografada). Deixe em branco para manter, ou gere/digite uma nova e use o 👁️ para conferir antes de salvar. Avise a funcionária da nova senha.</p>' : ''}
       <label>Perfil *</label>
-      <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option><option value="staff" ${u?.role === 'staff' ? 'selected' : ''}>Funcionário (só ponto)</option></select>
+      <select id="uRole"><option value="seller" ${isSeller ? 'selected' : ''}>Vendedora</option><option value="manager" ${u?.role === 'manager' ? 'selected' : ''}>Gerente de loja</option><option value="staff" ${u?.role === 'staff' ? 'selected' : ''}>Funcionário (só ponto)</option><option value="driver" ${u?.role === 'driver' ? 'selected' : ''}>Motorista (viagens / flexível)</option></select>
       <div id="sellerFields" style="display:${isSeller ? 'block' : 'none'}">
         <label>Setor *</label>
         <select id="uSector"><option value="online" ${(u?.sector || 'online') === 'online' ? 'selected' : ''}>Online</option><option value="presencial" ${u?.sector === 'presencial' ? 'selected' : ''}>Presencial</option></select>
@@ -4268,7 +4273,7 @@ async function modalUser(u, reload) {
       <label>Empresa (p/ documentos)</label>
       <select id="uCompany"><option value="">Sem empresa</option>${companies.map((c) => `<option value="${c.id}" ${Number(u?.company_id) === Number(c.id) ? 'selected' : ''}>${esc(c.name)}${c.cnpj ? ` • ${esc(c.cnpj)}` : ''}</option>`).join('')}</select>
       ${companies.length ? '' : '<p class="muted" style="font-size:12px">Cadastre em Equipe → Empresas.</p>'}
-      <div id="jobFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
+      <div id="jobFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' || u.role === 'driver' ? 'block' : 'none'}">
         <label>Função p/ documento (ex: Vendedor, Mecânico)</label>
         <input id="uJob" maxlength="60" placeholder="Vazio = Vendedor / Funcionário" value="${esc(u?.job_title || '')}">
       </div>
@@ -4286,7 +4291,8 @@ async function modalUser(u, reload) {
       <p class="muted" style="font-size:12px" id="scaleHint"></p>
       <p class="muted" id="mgrHint" style="font-size:12px;${u?.role === 'manager' ? '' : 'display:none'}">Gerente enxerga e gerencia apenas a própria loja.</p>
       <p class="muted" id="staffHint" style="font-size:12px;${u?.role === 'staff' ? '' : 'display:none'}">Funcionário só bate ponto e vê os próprios horários.</p>
-      <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' ? 'block' : 'none'}">
+      <p class="muted" id="driverHint" style="font-size:12px;${u?.role === 'driver' ? '' : 'display:none'}">Motorista bate ponto com horários flexíveis de viagem e sem fechamento automático à meia-noite.</p>
+      <div id="schedFields" style="display:${!u || u.role === 'seller' || u.role === 'staff' || u.role === 'driver' ? 'block' : 'none'}">
         <h4 class="section-title" style="font-size:14px">Carga horária especial (opcional)</h4>
         <p class="muted" style="font-size:12px">Vazio = padrão (seg–sex 10h • sáb 9h • dom 4h • feriado 5h). Ex: quem faz 8h–17h seg–sex = 09:00. Sair mais cedo nunca gera hora negativa.</p>
         <div class="row" style="flex-wrap:nowrap">
@@ -4340,8 +4346,9 @@ async function modalUser(u, reload) {
     $('#sellerFields').style.display = role === 'seller' ? 'block' : 'none';
     $('#mgrHint').style.display = role === 'manager' ? 'block' : 'none';
     $('#staffHint').style.display = role === 'staff' ? 'block' : 'none';
-    $('#jobFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
-    $('#schedFields').style.display = (role === 'seller' || role === 'staff') ? 'block' : 'none';
+    $('#driverHint').style.display = role === 'driver' ? 'block' : 'none';
+    $('#jobFields').style.display = (role === 'seller' || role === 'staff' || role === 'driver') ? 'block' : 'none';
+    $('#schedFields').style.display = (role === 'seller' || role === 'staff' || role === 'driver') ? 'block' : 'none';
   };
   // prévia da escala de domingos (ajuda a escolher A/B)
   const paintScaleHint = () => {
@@ -4394,7 +4401,7 @@ async function modalUser(u, reload) {
         sector: role === 'seller' ? $('#uSector').value : 'online',
         store_id: Number($('#uStore').value),
         company_id: $('#uCompany').value === '' ? null : Number($('#uCompany').value),
-        ...((role === 'seller' || role === 'staff') ? { job_title: $('#uJob').value.trim() } : {}),
+        ...((role === 'seller' || role === 'staff' || role === 'driver') ? { job_title: $('#uJob').value.trim() } : {}),
         dayoff_dow: $('#uDayoff').value === '' ? null : Number($('#uDayoff').value),
         sunday_scale: $('#uScale').value,
         ...( $('#uPass').value ? { password: $('#uPass').value } : {}),
@@ -4406,7 +4413,7 @@ async function modalUser(u, reload) {
         uid = created.user.id;
       }
       // carga horária especial (só quem bate ponto)
-      if ((role === 'seller' || role === 'staff') && uid) {
+      if ((role === 'seller' || role === 'staff' || role === 'driver') && uid) {
         const sched = {
           weekday_min: hhmmToMin($('#uStdW').value),
           saturday_min: hhmmToMin($('#uStdSa').value),
@@ -4613,6 +4620,6 @@ if ('serviceWorker' in navigator) {
     } catch { store.token = null; store.user = null; }
   }
   refreshTheme();
-  if (!location.hash) go(!store.user ? '#/login' : store.user.role === 'seller' ? '#/vendedora' : store.user.role === 'staff' ? '#/funcionario' : '#/admin');
+  if (!location.hash) go(!store.user ? '#/login' : store.user.role === 'seller' ? '#/vendedora' : (store.user.role === 'staff' || store.user.role === 'driver') ? '#/funcionario' : '#/admin');
   route();
 })();

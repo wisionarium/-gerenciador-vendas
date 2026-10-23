@@ -17,7 +17,7 @@ const SCHEMA = [
     name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin','manager','seller')) DEFAULT 'seller',
+    role TEXT NOT NULL CHECK (role IN ('admin','manager','seller','staff','driver')) DEFAULT 'seller',
     sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
     store_id INTEGER,
     job_title TEXT,
@@ -602,11 +602,11 @@ async function migrateTableChecks() {
     try { return await fn(); }
     finally { if (!isRemote) { try { await run('PRAGMA foreign_keys=ON'); } catch {} } }
   };
-  // users: perfis 'manager' e 'staff' (rebuild preservando dados)
+  // users: perfis 'manager', 'staff' e 'driver' (rebuild preservando dados)
   const rebuildUsersTable = async () => {
     // saneamento prévio: NULLs que violariam o NOT NULL da tabela nova
     try { await run('UPDATE users SET active=1 WHERE active IS NULL'); } catch {}
-    try { await run("UPDATE users SET role='seller' WHERE role IS NULL OR role NOT IN ('admin','seller','manager','staff')"); } catch {}
+    try { await run("UPDATE users SET role='seller' WHERE role IS NULL OR role NOT IN ('admin','seller','manager','staff','driver')"); } catch {}
     await noFK(async () => {
       try { await run('DROP TABLE IF EXISTS users_new'); } catch {}
       await run(`CREATE TABLE users_new (
@@ -614,7 +614,7 @@ async function migrateTableChecks() {
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN ('admin','manager','seller','staff')) DEFAULT 'seller',
+      role TEXT NOT NULL CHECK (role IN ('admin','manager','seller','staff','driver')) DEFAULT 'seller',
       sector TEXT NOT NULL DEFAULT 'online' CHECK (sector IN ('online','presencial')),
       store_id INTEGER,
       avatar_url TEXT,
@@ -647,6 +647,19 @@ async function migrateTableChecks() {
     );
     if (st === 'applied') console.log('[db] Migração: perfil funcionário aplicada.');
   } catch (e) { console.log('[db] Migração funcionário pulada:', e.message); }
+  try {
+    const st = await once('users-driver-role',
+      async () => !(await tableSQL('users')).includes('driver'),
+      rebuildUsersTable
+    );
+    if (st === 'applied') {
+      console.log('[db] Migração: perfil motorista aplicada.');
+      try {
+        await run("UPDATE users SET role='driver' WHERE role='staff' AND LOWER(job_title) LIKE '%motorista%'");
+        console.log('[db] Migração: usuários com cargo motorista atualizados para perfil motorista.');
+      } catch {}
+    }
+  } catch (e) { console.log('[db] Migração motorista pulada:', e.message); }
   // sales: aceita canal 'Presencial'
   try {
     const st = await once('sales-presencial-channel',
