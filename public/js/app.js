@@ -393,6 +393,31 @@ function saleCard(s, delBtn = '') {
   </div>`;
 }
 
+// card do histórico no painel da vendedora (vendas + canceladas do mês)
+function sellerHistoryCard(x, sellerId) {
+  const canceled = x.kind === 'canceled';
+  const parts = Array.isArray(x.participants) ? x.participants : [];
+  const mine = parts
+    .filter((p) => Number(p.seller_id) === Number(sellerId))
+    .reduce((a, p) => a + Number(p.credit || 0), 0);
+  const others = parts.filter((p) => Number(p.seller_id) !== Number(sellerId));
+  const credits = [
+    `<b class="mono" style="color:var(--brand)">+${fmtV(mine)}</b>`,
+    ...others.map((p) => `${esc(p.seller_name)} – ${fmtV(p.credit)}`),
+  ].join(' • ');
+  const tags = canceled
+    ? '<span class="chip cancel">CANCELADO</span>'
+    : `<span class="hist-store">${x.store_name && x.store_name !== 'Sede' ? storeTag(x.store_name) : ''}<span class="chip ${chanChip(x.channel)}">${esc(x.channel)}</span>${x.is_bonus && x.bonus_cents != null ? ` <span class="chip" title="Bônus exclusivo">🎁 ${fmtBRL(x.bonus_cents)}</span>` : ''}</span>`;
+  return `
+  <div class="sale-card hist-card${canceled ? ' is-canceled' : ''}">
+    <div class="hist-head">
+      <b>${esc(x.customer_name)}${x.is_bonus ? ' ⭐' : ''}</b>
+      <span class="hist-tags">${tags}</span>
+    </div>
+    <div class="hist-sub">${esc(x.product)} • ${esc(x.color)} • ${fmtDateBR(x.sale_date)} • ${credits}</div>
+  </div>`;
+}
+
 // linha estilo "transação" p/ últimas vendas da vendedora
 function txRow(s, meId) {
   const mine = (s.participants || []).filter((p) => p.seller_id === meId).reduce((a, p) => a + Number(p.credit), 0);
@@ -1325,9 +1350,8 @@ async function viewHistory(app) {
           ${d.note ? `<div class="muted" style="font-size:12px">${esc(d.note)}</div>` : ''}
         </div>`).join('');
       const pendCards = (canceled || []).filter((c) => {
-        // respeita o mês escolhido (mês do cancelamento; sem data, o mês da venda)
-        const ref = String(c.canceled_at || c.sale_date || '').slice(0, 7);
-        return ref === month;
+        // respeita o mês da venda cancelada (não a data em que o cancelamento foi lançado)
+        return String(c.sale_date || '').slice(0, 7) === month;
       }).slice(0, 50).map((c) => {
         const mine = (c.participants || []).filter((p) => p.seller_id === me.id).reduce((a, p) => a + Number(p.credit), 0);
         const hasDisc = (discounts || []).some((d) => Number(d.canceled_sale_id) === Number(c.id));
@@ -3317,7 +3341,7 @@ async function viewComissoes(app) {
       <h3 class="section-title">Vendas canceladas (histórico)</h3>
       <div class="card">
         <div class="row" style="align-items:end;gap:8px;flex-wrap:nowrap">
-          <div style="flex:1;min-width:0"><label style="margin-top:0">Mês do cancelamento</label><input type="month" id="cancMonth" style="width:100%"></div>
+          <div style="flex:1;min-width:0"><label style="margin-top:0">Mês da venda</label><input type="month" id="cancMonth" style="width:100%"></div>
           <button class="btn" id="cancMonthGo">Ver</button>
           <button class="btn btn-ghost" id="cancAll" title="Mostrar todos os meses">Todos</button>
         </div>
@@ -3477,11 +3501,14 @@ async function viewComissoes(app) {
       renderDiscs();
     } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
-  const inSelectedMonth = (c, month) => {
+  // mês em que o cancelamento foi lançado (usado no aviso de "aguardando desconto")
+  const inCancelMonth = (c, month) => {
     const cat = String(c.canceled_at || '').slice(0, 7);
     if (/^\d{4}-\d{2}$/.test(cat)) return cat === month;
     return String(c.sale_date || '').slice(0, 7) === month;
   };
+  // mês da venda cancelada (usado no filtro do histórico)
+  const inSaleMonth = (c, month) => String(c.sale_date || '').slice(0, 7) === month;
   const renderDiscs = () => {
     const el = $('#discBody');
     if (!el) return;
@@ -3498,7 +3525,7 @@ async function viewComissoes(app) {
       if (!d.canceled_sale_id) continue;
       (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
     }
-    const pend = (cacheCanceled || []).filter((c) => !c.archived && !(byCanc[c.id] || []).length && inSelectedMonth(c, month));
+    const pend = (cacheCanceled || []).filter((c) => !c.archived && !(byCanc[c.id] || []).length && inCancelMonth(c, month));
     const alertBox = $('#cancAlert');
     if (alertBox) {
       alertBox.innerHTML = pend.length
@@ -3554,7 +3581,7 @@ async function viewComissoes(app) {
       (byCanc[d.canceled_sale_id] = byCanc[d.canceled_sale_id] || []).push(d);
     }
     const list = (cacheCanceled || []).filter((c) => {
-      if (cancMonth && !inSelectedMonth(c, cancMonth)) return false;
+      if (cancMonth && !inSaleMonth(c, cancMonth)) return false;
       if (commSeller && !(c.participants || []).some((p) => String(p.seller_id) === String(commSeller))) return false;
       if (!q) return true;
       const parts = (c.participants || []).map((p) => p.seller_name).join(' ');
@@ -3856,9 +3883,15 @@ async function viewSellerDetail(app, id) {
         <tr><td>Conversão</td><td class="mono">${fmtPct(d.current.conversion)}</td><td class="mono">${fmtPct(d.compare.conversion)}</td><td>${d.deltas.conversion == null ? '—' : fmtPct(d.deltas.conversion)}</td></tr>`}
       </tbody></table>
     </div>
+    <div class="section-head" style="flex-wrap:wrap;gap:8px">
+      <h3 class="section-title">Histórico de vendas</h3>
+      <span class="chip cancel-count" title="Cancelamentos do mês em que a vendedora participou">${d.canceledCount || 0} cancelamento${(d.canceledCount || 0) === 1 ? '' : 's'} no mês</span>
+    </div>
+    <div id="sellerHistory">${(d.history || []).length ? compactListHTML(d.history, (x) => sellerHistoryCard(x, d.seller.id), 8) : '<div class="card empty">Nenhuma venda neste mês.</div>'}</div>
     <h3 class="section-title">Evolução diária (vendas)</h3>
     <div class="card">${d.daily.length ? d.daily.map((x) => `<div class="bar-row"><span>${fmtDateBR(x.date).slice(0, 5)}</span><div class="bar"><div style="width:${(x.sales / max) * 100}%"></div></div><b class="mono">${fmtV(x.sales)}</b></div>`).join('') : '<div class="empty">Sem vendas no período.</div>'}</div>
   `;
+  bindCompactList($('#sellerHistory'));
 }
 
 let reportSector = '';

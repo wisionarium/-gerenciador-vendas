@@ -1147,6 +1147,28 @@ async function saleWithParticipants(sale) {
   return { ...sale, store_name: store_name || 'Sede', participants: parts };
 }
 
+// mesma saída de saleWithParticipants, mas busca as participantes em uma única query
+// (usado no histórico do painel da vendedora, que pode ter várias vendas no mês)
+async function salesWithParticipants(rows) {
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const placeholders = ids.map(() => '?').join(',');
+  let parts = [];
+  try {
+    parts = await db.all(
+      `SELECT sp.*, u.name AS seller_name FROM sale_participants sp
+       JOIN users u ON u.id=sp.seller_id WHERE sp.sale_id IN (${placeholders})`,
+      ...ids
+    );
+  } catch { parts = []; }
+  const bySale = new Map();
+  for (const p of parts) {
+    if (!bySale.has(p.sale_id)) bySale.set(p.sale_id, []);
+    bySale.get(p.sale_id).push(p);
+  }
+  return rows.map((r) => ({ ...r, store_name: r.store_name || 'Sede', participants: bySale.get(r.id) || [] }));
+}
+
 app.get('/api/sales', requireAuth, ah(async (req, res) => {
   const { from, to, seller_id, channel, product, q, store_id } = req.query;
   const scope = scopedStoreId(req, store_id);
@@ -1361,10 +1383,10 @@ app.post('/api/sales/:id/cancel', requireAuth, requireManager, ah(async (req, re
 
 // histórico de vendas canceladas (admin, auditoria)
 // inclui as canceladas arquivadas (90+ dias, só leitura) e aceita ?month=YYYY-MM
-// (filtra pelo mês do cancelamento; sem data de cancelamento, usa o mês da venda)
+// (filtra pelo mês da venda cancelada)
 app.get('/api/sales/canceled', requireAuth, requireAdmin, ah(async (req, res) => {
   const month = (req.query.month && /^\d{4}-\d{2}$/.test(req.query.month)) ? req.query.month : '';
-  const where = month ? " AND substr(COALESCE(c.canceled_at, c.sale_date),1,7)=?" : '';
+  const where = month ? " AND substr(c.sale_date,1,7)=?" : '';
   const params = month ? [month] : [];
   const parse = (r) => {
     let participants = [];
@@ -1810,11 +1832,12 @@ app.get('/api/me/cancellations', requireAuth, ah(async (req, res) => {
   let canceled = [];
   try {
     const rows = await db.all('SELECT * FROM canceled_sales ORDER BY id DESC LIMIT 500');
-    canceled = rows.map(parse).filter(mine);
+    // o filtro `mine` precisa receber o participants ainda como JSON string
+    canceled = rows.filter(mine).map(parse);
     try {
       const arch = await db.all('SELECT * FROM archived_canceled ORDER BY id DESC LIMIT 500');
-      for (const r of arch.map(parse)) {
-        if (mine(r) && !canceled.some((c) => c.sale_id === r.sale_id && c.sale_date === r.sale_date)) canceled.push(r);
+      for (const r of arch.filter(mine).map(parse)) {
+        if (!canceled.some((c) => c.sale_id === r.sale_id && c.sale_date === r.sale_date)) canceled.push(r);
       }
     } catch {}
     canceled = canceled.slice(0, 200);
@@ -3164,6 +3187,50 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
       return { store_id: st.id, store_name: st.name, sales: stt.salesCredit, records: stt.records };
     }))).filter((r) => r.records > 0);
   } catch {}
+  // histórico do mês (vendas + canceladas) para o painel da vendedora.
+  // Canceladas entram pelo mês da venda (sale_date), não pela data do cancelamento.
+  const hConds = ['sp.seller_id=?'];
+  const hParams = [targetId];
+  if (from) { hConds.push('s.sale_date >= ?'); hParams.push(from); }
+  if (to) { hConds.push('s.sale_date <= ?'); hParams.push(to); }
+  const hRows = await db.all(
+    `SELECT s.*, st.name AS store_name FROM sales s
+     JOIN sale_participants sp ON sp.sale_id=s.id
+     LEFT JOIN stores st ON st.id=s.store_id
+     WHERE ${hConds.join(' AND ')}
+     ORDER BY s.sale_date DESC, s.id DESC LIMIT 300`, ...hParams
+  );
+  const historySales = (await salesWithParticipants(hRows)).map((s) => ({ ...s, kind: 'sale' }));
+  const cConds = [];
+  const cParams = [];
+  if (from) { cConds.push('sale_date >= ?'); cParams.push(from); }
+  if (to) { cConds.push('sale_date <= ?'); cParams.push(to); }
+  const cWhere = cConds.length ? 'WHERE ' + cConds.join(' AND ') : '';
+  const canceledRaw = [];
+  for (const table of ['canceled_sales', 'archived_canceled']) {
+    let rows = [];
+    try {
+      rows = await db.all(`SELECT * FROM ${table} ${cWhere} ORDER BY sale_date DESC, id DESC LIMIT 300`, ...cParams);
+    } catch { rows = []; }
+    for (const r of rows) {
+      let parts = [];
+      try { parts = JSON.parse(r.participants || '[]'); } catch { parts = []; }
+      if (!parts.some((p) => Number(p.seller_id) === targetId)) continue;
+      canceledRaw.push({ ...r, participants: parts, archived: table === 'archived_canceled' ? 1 : 0 });
+    }
+  }
+  const seenCanc = new Set();
+  const historyCanceled = canceledRaw.filter((r) => {
+    const k = `${r.sale_id}|${r.sale_date}`;
+    if (seenCanc.has(k)) return false;
+    seenCanc.add(k);
+    return true;
+  }).map((c) => ({ ...c, kind: 'canceled' }));
+  const history = [...historySales, ...historyCanceled].sort((a, b) => {
+    const byDate = String(b.sale_date || '').localeCompare(String(a.sale_date || ''));
+    if (byDate) return byDate;
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
   res.json({
     seller: toPublicUser(seller),
     current,
@@ -3178,6 +3245,8 @@ app.get('/api/stats/seller/:id', requireAuth, ah(async (req, res) => {
       presencial: pct(current.presencial, compare.presencial),
     } : null,
     daily, dailyCalls,
+    history,
+    canceledCount: historyCanceled.length,
   });
 }));
 
